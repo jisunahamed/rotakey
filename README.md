@@ -110,10 +110,12 @@ Caddy obtains and renews the certificate automatically. PostgreSQL and Redis hav
 In **Providers → Add provider**:
 
 1. Enter the provider's OpenAI-compatible base URL and authentication header.
-2. Map an upstream model ID to a globally unique public alias such as `groq/llama-3.3-70b`.
-3. Paste one or many credentials as `label|secret`, one per line.
-4. Set any combination of RPS, RPM, RPD, TPS, TPM, TPD, and TPR. Blank fields are unlimited.
+2. Add one or more upstream model IDs and give each a globally unique public alias such as `groq/llama-3.3-70b`.
+3. Enter API keys in separate fields. Use **Add another API key** for more keys, and optionally mark one key as **Primary**.
+4. Set any combination of RPS, RPM, RPD, TPS, TPM, TPD, and TPR. Blank fields are unlimited. An API key's shared limits are consumed by every model under that provider; optional model-specific limits add a narrower limit for that model.
 5. Review, create, and run the connection test.
+
+The provider slug is an internal identifier. Rotakey generates it from the provider name and keeps it out of the setup form.
 
 HTTPS is required by default. HTTP and private-network destinations need the explicit private-network switch. Loopback, private, link-local, multicast, and metadata destinations remain blocked unless that switch is enabled.
 
@@ -151,8 +153,9 @@ result = client.chat.completions.create(
 ## Routing and limits
 
 - The public alias selects exactly one provider route; there is no cross-provider model fallback.
-- Eligible credentials are visited with a Redis-backed round-robin cursor.
-- Shared credential limits and extra model-specific limits must all reserve atomically.
+- Without a primary API key, eligible keys are visited with a Redis-backed round-robin cursor.
+- If a healthy primary key is configured, Rotakey uses its available capacity first and falls back to the other keys when needed.
+- A key's shared limits span every model route under the provider. Shared limits and any extra model-specific limits must all reserve atomically.
 - Request and token windows use fixed UTC-aligned second, minute, and day boundaries.
 - Input estimate plus the requested output ceiling is reserved before the upstream call. Missing output ceilings use the model default.
 - Non-streaming usage is reconciled to actual upstream usage. Streaming without final usage retains the conservative reservation.

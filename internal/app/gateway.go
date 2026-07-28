@@ -400,8 +400,7 @@ func (s *Server) selectCredential(
 			return nil, reservation{}, 0, err
 		}
 		minRetry := time.Duration(math.MaxInt64)
-		for offset := 0; offset < len(credentials); offset++ {
-			index := (int(cursor-1) + offset) % len(credentials)
+		for _, index := range credentialSelectionOrder(credentials, cursor) {
 			candidate := &credentials[index]
 			if skipped[candidate.ID] || !candidate.Enabled || candidate.Status == "quarantined" {
 				continue
@@ -448,6 +447,36 @@ func (s *Server) selectCredential(
 		case <-timer.C:
 		}
 	}
+}
+
+func credentialSelectionOrder(credentials []credentialRuntime, cursor int64) []int {
+	if len(credentials) == 0 {
+		return nil
+	}
+	primary := -1
+	fallbacks := make([]int, 0, len(credentials))
+	for index, credential := range credentials {
+		if credential.IsPrimary && primary == -1 {
+			primary = index
+			continue
+		}
+		fallbacks = append(fallbacks, index)
+	}
+	order := make([]int, 0, len(credentials))
+	if primary >= 0 {
+		order = append(order, primary)
+	}
+	if len(fallbacks) == 0 {
+		return order
+	}
+	start := int((cursor - 1) % int64(len(fallbacks)))
+	if start < 0 {
+		start = 0
+	}
+	for offset := 0; offset < len(fallbacks); offset++ {
+		order = append(order, fallbacks[(start+offset)%len(fallbacks)])
+	}
+	return order
 }
 
 func (s *Server) markCredentialFailure(ctx context.Context, credentialID string, status int, retryAfter time.Duration) {

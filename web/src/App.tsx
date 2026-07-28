@@ -565,7 +565,9 @@ function CapacityRail({ route }: { route: Overview["routes"][number] }) {
           >
             <div className="credential-segment__label">
               <strong>{segment.label}</strong>
-              {segment.cursor && <span>next</span>}
+              {(segment.primary || segment.cursor) && (
+                <span>{[segment.primary ? "primary" : "", segment.cursor ? "next" : ""].filter(Boolean).join(" · ")}</span>
+              )}
             </div>
             <small>
               {segment.request_headroom
@@ -599,8 +601,9 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
     setError("");
     try {
       const result = await api<{ providers: Provider[] }>("/api/admin/providers");
-      setProviders(result.providers);
-      setSelectedID((current) => current || result.providers[0]?.id || "");
+      const normalized = normalizeProviders(result.providers);
+      setProviders(normalized);
+      setSelectedID((current) => current || normalized[0]?.id || "");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Providers could not be loaded.");
     } finally {
@@ -654,7 +657,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
             <section className="resource-inspector">
               <div className="inspector-header">
                 <div>
-                  <p className="eyebrow">{selected.slug}</p>
+                  <p className="eyebrow">OpenAI-compatible upstream</p>
                   <h2>{selected.name}</h2>
                   <code>{selected.base_url}</code>
                 </div>
@@ -670,8 +673,8 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
               </div>
               <ResourceSection
                 title="Model routes"
-                description="Aliases visible through the unified /v1 API."
-                action={<Button variant="quiet" onClick={() => setPanel({ type: "model", provider: selected })}><Plus size={14} /> Route</Button>}
+                description="Add multiple upstream models here; each gets its own public alias."
+                action={<Button variant="quiet" onClick={() => setPanel({ type: "model", provider: selected })}><Plus size={14} /> Model</Button>}
               >
                 {selected.models.length === 0 ? (
                   <p className="inline-empty">No route can receive traffic yet.</p>
@@ -690,8 +693,8 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
               </ResourceSection>
               <ResourceSection
                 title="Credential pool"
-                description="Round-robin skips credentials that cannot reserve every active limit."
-                action={<Button variant="quiet" onClick={() => setPanel({ type: "credential", provider: selected })}><Plus size={14} /> Credentials</Button>}
+                description="A primary key is tried first. Without one, healthy keys use balanced round-robin."
+                action={<Button variant="quiet" onClick={() => setPanel({ type: "credential", provider: selected })}><Plus size={14} /> API key</Button>}
               >
                 {selected.credentials.length === 0 ? (
                   <p className="inline-empty">No key is available for this provider.</p>
@@ -700,7 +703,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                     {selected.credentials.map((credential) => (
                       <button key={credential.id} className="dense-row" onClick={() => setPanel({ type: "credential", provider: selected, credential })}>
                         <StatusDot state={credential.status} />
-                        <span><strong>{credential.label}</strong><small>•••• {credential.secret_suffix}</small></span>
+                        <span><strong>{credential.label}</strong><small>{credential.is_primary ? "PRIMARY · " : ""}•••• {credential.secret_suffix}</small></span>
                         <LimitSummary policy={credential.limits} />
                         <ChevronRight size={14} />
                       </button>
@@ -762,14 +765,14 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [provider, setProvider] = useState({
-    name: "", slug: "", base_url: "", auth_header: "Authorization", auth_scheme: "Bearer",
+    name: "", base_url: "", auth_header: "Authorization", auth_scheme: "Bearer",
     timeout_seconds: 120, enabled: true, allow_private_network: false, extra_headers: {}
   });
   const [model, setModel] = useState({
     public_alias: "", upstream_model: "", supports_chat: true, supports_responses: false,
     default_max_output_tokens: 1024, tokenizer: "heuristic", capture_bodies: false, enabled: true
   });
-  const [credentialLines, setCredentialLines] = useState("");
+  const [credentialDrafts, setCredentialDrafts] = useState<CredentialDraft[]>(() => [newCredentialDraft()]);
   const [limits, setLimits] = useState<RatePolicy>(emptyPolicy);
   const steps = ["Provider", "Model route", "Credentials", "Review"];
 
@@ -777,11 +780,16 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
     setBusy(true);
     setError("");
     try {
+      const incomplete = credentialDrafts.some((credential) => Boolean(credential.label.trim()) !== Boolean(credential.secret.trim()));
+      if (incomplete) {
+        setError("Every API key entry needs both a label and an API key.");
+        return;
+      }
+      const credentials = credentialInputs(credentialDrafts, limits);
       const created = await api<{ id: string }>("/api/admin/providers", { method: "POST", json: provider });
       if (model.public_alias.trim() && model.upstream_model.trim()) {
         await api(`/api/admin/providers/${created.id}/models`, { method: "POST", json: model });
       }
-      const credentials = parseCredentialLines(credentialLines, limits);
       if (credentials.length) {
         await api(`/api/admin/providers/${created.id}/credentials`, { method: "POST", json: { credentials } });
       }
@@ -810,18 +818,15 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
       {step === 1 && <ModelFields value={model} onChange={setModel} />}
       {step === 2 && (
         <>
-          <label className="field">
-            <span>Credentials <small>One per line: label|secret</small></span>
-            <textarea rows={7} placeholder={"primary|sk-...\nsecondary|sk-..."} value={credentialLines} onChange={(event) => setCredentialLines(event.target.value)} />
-          </label>
-          <fieldset><legend>Shared limits for imported credentials</legend><RateFields value={limits} onChange={setLimits} /></fieldset>
+          <CredentialEntries value={credentialDrafts} onChange={setCredentialDrafts} />
+          <fieldset><legend>Shared limits for these API keys</legend><p className="fieldset-note">Usage from every model under this provider consumes the same key limit. Blank means no limit.</p><RateFields value={limits} onChange={setLimits} /></fieldset>
         </>
       )}
       {step === 3 && (
         <div className="review-list">
           <div><span>Provider</span><strong>{provider.name || "Missing"}</strong><code>{provider.base_url || "Missing base URL"}</code></div>
           <div><span>Public model</span><strong>{model.public_alias || "No initial route"}</strong><code>{model.upstream_model || "Add later"}</code></div>
-          <div><span>Credentials</span><strong>{parseCredentialLines(credentialLines, limits).length}</strong><small>Secrets will be encrypted before storage.</small></div>
+          <div><span>API keys</span><strong>{credentialInputs(credentialDrafts, limits).length}</strong><small>Primary is optional. Secrets are encrypted before storage.</small></div>
         </div>
       )}
       <div className="sheet-actions">
@@ -838,17 +843,14 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
 }
 
 type ProviderDraft = {
-  name: string; slug: string; base_url: string; auth_header: string; auth_scheme: string;
+  name: string; base_url: string; auth_header: string; auth_scheme: string;
   timeout_seconds: number; enabled: boolean; allow_private_network: boolean; extra_headers: Record<string, string>;
 };
 
 function ProviderFields({ value, onChange }: { value: ProviderDraft; onChange: (value: ProviderDraft) => void }) {
   return (
     <div className="form-stack">
-      <div className="field-pair">
-        <label className="field"><span>Name</span><input required placeholder="Groq production" value={value.name} onChange={(e) => onChange({ ...value, name: e.target.value, slug: value.slug || slugify(e.target.value) })} /></label>
-        <label className="field"><span>Slug</span><input required placeholder="groq-prod" value={value.slug} onChange={(e) => onChange({ ...value, slug: slugify(e.target.value) })} /></label>
-      </div>
+      <label className="field"><span>Name <small>An internal identifier is generated automatically</small></span><input required placeholder="Groq production" value={value.name} onChange={(e) => onChange({ ...value, name: e.target.value })} /></label>
       <label className="field"><span>OpenAI-compatible base URL <small>Include /v1 when the provider requires it</small></span><input type="url" required placeholder="https://api.provider.com/v1" value={value.base_url} onChange={(e) => onChange({ ...value, base_url: e.target.value })} /></label>
       <div className="field-pair">
         <label className="field"><span>Authentication header</span><input value={value.auth_header} onChange={(e) => onChange({ ...value, auth_header: e.target.value })} /></label>
@@ -863,7 +865,7 @@ function ProviderFields({ value, onChange }: { value: ProviderDraft; onChange: (
 
 function ProviderForm({ provider, onClose, onComplete, notify }: { provider: Provider; onClose: () => void; onComplete: (message: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
   const [draft, setDraft] = useState<ProviderDraft>({
-    name: provider.name, slug: provider.slug, base_url: provider.base_url,
+    name: provider.name, base_url: provider.base_url,
     auth_header: provider.auth_header, auth_scheme: provider.auth_scheme,
     timeout_seconds: provider.timeout_seconds, enabled: provider.enabled,
     allow_private_network: provider.allow_private_network, extra_headers: provider.extra_headers
@@ -940,7 +942,7 @@ function ModelForm({ provider, model, onClose, onComplete, notify }: { provider:
 function CredentialForm({ provider, credential, onClose, onComplete, notify }: { provider: Provider; credential?: Credential; onClose: () => void; onComplete: (message: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
   const [label, setLabel] = useState(credential?.label ?? "");
   const [secret, setSecret] = useState("");
-  const [bulk, setBulk] = useState("");
+  const [isPrimary, setIsPrimary] = useState(credential?.is_primary ?? false);
   const [enabled, setEnabled] = useState(credential?.enabled ?? true);
   const [limits, setLimits] = useState<RatePolicy>(credential?.limits ?? emptyPolicy());
   const [selectedModel, setSelectedModel] = useState(provider.models[0]?.id ?? "");
@@ -955,14 +957,12 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
     setBusy(true);
     try {
       if (credential) {
-        await api(`/api/admin/credentials/${credential.id}`, { method: "PUT", json: { label, secret, enabled, limits } });
-        onComplete("Credential and shared limits updated.");
+        await api(`/api/admin/credentials/${credential.id}`, { method: "PUT", json: { label, secret, is_primary: isPrimary, enabled, limits } });
+        onComplete("API key and shared limits updated.");
       } else {
-        const credentials = bulk.trim()
-          ? parseCredentialLines(bulk, limits)
-          : [{ label, secret, enabled, limits }];
+        const credentials = [{ label, secret, is_primary: isPrimary, enabled, limits }];
         await api(`/api/admin/providers/${provider.id}/credentials`, { method: "POST", json: { credentials } });
-        onComplete(`${credentials.length} credential${credentials.length === 1 ? "" : "s"} added.`);
+        onComplete("API key added.");
       }
     } catch (caught) {
       notify(errorMessage(caught), "danger");
@@ -972,25 +972,18 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
   };
 
   return (
-    <Sheet title={credential ? `Edit ${credential.label}` : "Add credentials"} eyebrow={provider.name} onClose={onClose} wide>
-      {!credential && (
-        <label className="field">
-          <span>Bulk import <small>Optional. One label|secret pair per line.</small></span>
-          <textarea rows={5} value={bulk} onChange={(e) => setBulk(e.target.value)} placeholder={"primary|sk-...\nsecondary|sk-..."} />
-        </label>
-      )}
-      {(!bulk || credential) && (
-        <div className="field-pair">
-          <label className="field"><span>Label</span><input required value={label} onChange={(e) => setLabel(e.target.value)} /></label>
-          <label className="field"><span>{credential ? "Replacement secret" : "Secret"} <small>{credential ? "Leave blank to keep current" : ""}</small></span><input type="password" required={!credential} autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} /></label>
-        </div>
-      )}
-      <Toggle checked={enabled} onChange={setEnabled} label="Enable credential" description="Re-enabling also clears quarantine and circuit-breaker state." />
-      <fieldset><legend>Shared credential limits</legend><p className="fieldset-note">Every model using this key consumes these limits. Blank means no limit.</p><RateFields value={limits} onChange={setLimits} /></fieldset>
+    <Sheet title={credential ? `Edit ${credential.label}` : "Add API key"} eyebrow={provider.name} onClose={onClose} wide>
+      <div className="field-pair">
+        <label className="field"><span>Label</span><input required placeholder="Production key" value={label} onChange={(e) => setLabel(e.target.value)} /></label>
+        <label className="field"><span>{credential ? "Replacement API key" : "API key"} <small>{credential ? "Leave blank to keep current" : ""}</small></span><input type="password" required={!credential} autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} /></label>
+      </div>
+      <Toggle checked={isPrimary} onChange={setIsPrimary} label="Use as primary" description="Optional. This key is tried first while it has capacity; other keys remain fallbacks." />
+      <Toggle checked={enabled} onChange={setEnabled} label="Enable API key" description="Re-enabling also clears quarantine and circuit-breaker state." />
+      <fieldset><legend>Shared API key limits</legend><p className="fieldset-note">Requests from every model under this provider consume these limits together. Blank means no limit.</p><RateFields value={limits} onChange={setLimits} /></fieldset>
       {credential && provider.models.length > 0 && (
         <fieldset>
-          <legend>Additional model limit</legend>
-          <p className="fieldset-note">Both shared and model-specific limits must have capacity.</p>
+          <legend>Optional model-specific limit</legend>
+          <p className="fieldset-note">Leave this unset to use only the shared key limit. When set, both shared and model limits must have capacity.</p>
           <label className="field"><span>Model route</span><select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)}>{provider.models.map((model) => <option key={model.id} value={model.id}>{model.public_alias}</option>)}</select></label>
           <RateFields value={modelLimits} onChange={setModelLimits} compact />
           <div className="button-row">
@@ -999,10 +992,10 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
           </div>
         </fieldset>
       )}
-      {credential && <div className="danger-zone"><div><strong>Delete credential</strong><small>The encrypted secret cannot be recovered after deletion.</small></div><Button variant="danger" onClick={() => {
-        if (confirm(`Delete credential ${credential.label}?`)) void api(`/api/admin/credentials/${credential.id}`, { method: "DELETE" }).then(() => onComplete("Credential deleted.")).catch((caught) => notify(errorMessage(caught), "danger"));
+      {credential && <div className="danger-zone"><div><strong>Delete API key</strong><small>The encrypted secret cannot be recovered after deletion.</small></div><Button variant="danger" onClick={() => {
+        if (confirm(`Delete API key ${credential.label}?`)) void api(`/api/admin/credentials/${credential.id}`, { method: "DELETE" }).then(() => onComplete("API key deleted.")).catch((caught) => notify(errorMessage(caught), "danger"));
       }}><Trash2 size={14} /> Delete</Button></div>}
-      <div className="sheet-actions"><span /><Button disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : credential ? "Save credential" : "Add credentials"}</Button></div>
+      <div className="sheet-actions"><span /><Button disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : credential ? "Save API key" : "Add API key"}</Button></div>
     </Sheet>
   );
 }
@@ -1011,7 +1004,7 @@ function ModelsPage({ notify }: { notify: (message: string, tone?: "success" | "
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
-    void api<{ providers: Provider[] }>("/api/admin/providers").then((result) => setProviders(result.providers)).catch((caught) => notify(errorMessage(caught), "danger")).finally(() => setLoading(false));
+    void api<{ providers: Provider[] }>("/api/admin/providers").then((result) => setProviders(normalizeProviders(result.providers))).catch((caught) => notify(errorMessage(caught), "danger")).finally(() => setLoading(false));
   }, [notify]);
   const models = providers.flatMap((provider) => provider.models.map((model) => ({ ...model, provider, credentials: provider.credentials })));
   return (
@@ -1175,16 +1168,71 @@ function PageSkeleton() {
   return <div className="page-skeleton" aria-label="Loading"><span /><span /><span /><span /></div>;
 }
 
-function parseCredentialLines(value: string, limits: RatePolicy) {
-  return value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
-    const separator = line.indexOf("|");
-    if (separator < 1) return { label: "", secret: "", enabled: true, limits };
-    return { label: line.slice(0, separator).trim(), secret: line.slice(separator + 1).trim(), enabled: true, limits };
-  }).filter((entry) => entry.label && entry.secret);
+type CredentialDraft = {
+  id: string;
+  label: string;
+  secret: string;
+  is_primary: boolean;
+};
+
+function newCredentialDraft(): CredentialDraft {
+  return { id: crypto.randomUUID(), label: "", secret: "", is_primary: false };
 }
 
-function slugify(value: string) {
-  return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 63);
+function CredentialEntries({ value, onChange }: { value: CredentialDraft[]; onChange: (value: CredentialDraft[]) => void }) {
+  const update = (id: string, patch: Partial<CredentialDraft>) => {
+    onChange(value.map((credential) => {
+      if (patch.is_primary) {
+        return credential.id === id ? { ...credential, ...patch } : { ...credential, is_primary: false };
+      }
+      return credential.id === id ? { ...credential, ...patch } : credential;
+    }));
+  };
+  return (
+    <div className="credential-entry-list">
+      <div className="credential-entry-list__intro">
+        <div><strong>API keys</strong><small>Add each key separately. Choosing a primary is optional.</small></div>
+        <Button type="button" variant="quiet" onClick={() => onChange([...value, newCredentialDraft()])}><Plus size={14} /> Add another API key</Button>
+      </div>
+      {value.map((credential, index) => (
+        <section className="credential-entry" key={credential.id}>
+          <header>
+            <strong>API key {index + 1}</strong>
+            {value.length > 1 && <Button type="button" variant="quiet" onClick={() => onChange(value.filter((item) => item.id !== credential.id))}><Trash2 size={13} /> Remove</Button>}
+          </header>
+          <div className="field-pair">
+            <label className="field"><span>Label</span><input placeholder="Production key" value={credential.label} onChange={(event) => update(credential.id, { label: event.target.value })} /></label>
+            <label className="field"><span>API key</span><input type="password" autoComplete="off" placeholder="Paste provider API key" value={credential.secret} onChange={(event) => update(credential.id, { secret: event.target.value })} /></label>
+          </div>
+          <label className="primary-choice">
+            <input type="checkbox" checked={credential.is_primary} onChange={(event) => update(credential.id, { is_primary: event.target.checked })} />
+            <span><strong>Primary</strong><small>Try this key first while it has capacity.</small></span>
+          </label>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function credentialInputs(value: CredentialDraft[], limits: RatePolicy) {
+  return value
+    .filter((credential) => credential.label.trim() && credential.secret.trim())
+    .map((credential) => ({
+      label: credential.label.trim(),
+      secret: credential.secret.trim(),
+      is_primary: credential.is_primary,
+      enabled: true,
+      limits,
+    }));
+}
+
+function normalizeProviders(providers: Provider[] | null | undefined): Provider[] {
+  return (providers ?? []).map((provider) => ({
+    ...provider,
+    extra_headers: provider.extra_headers ?? {},
+    models: provider.models ?? [],
+    credentials: provider.credentials ?? [],
+  }));
 }
 
 function formatNumber(value: number) {

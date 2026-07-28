@@ -116,3 +116,90 @@ func TestTwoCredentialsFortyRPMBalanceAndExhaust(t *testing.T) {
 		t.Fatalf("81st request should be rate limited, selected=%v retry=%s", selected, retry)
 	}
 }
+
+func TestPrimaryCredentialFillsBeforeFallback(t *testing.T) {
+	if time.Now().Second() >= 57 {
+		t.Skip("too close to a minute reset boundary")
+	}
+	client := integrationRedis(t)
+	suffix := fmt.Sprint(time.Now().UnixNano())
+	modelID := "mdl_primary_" + suffix
+	primaryID := "key_primary_" + suffix
+	fallbackID := "key_fallback_" + suffix
+	keys := []string{
+		"rr:" + modelID,
+		"limit:" + primaryID + ":all:rpm",
+		"limit:" + fallbackID + ":all:rpm",
+	}
+	t.Cleanup(func() { _ = client.Del(context.Background(), keys...).Err() })
+
+	two := int64(2)
+	credentials := []credentialRuntime{
+		{CredentialView: CredentialView{
+			ID: primaryID, Label: "primary", IsPrimary: true, Enabled: true, Status: "healthy",
+			Limits: RatePolicy{RPM: &two}, ModelLimits: map[string]RatePolicy{},
+		}},
+		{CredentialView: CredentialView{
+			ID: fallbackID, Label: "fallback", Enabled: true, Status: "healthy",
+			Limits: RatePolicy{RPM: &two}, ModelLimits: map[string]RatePolicy{},
+		}},
+	}
+	server := &Server{redis: client, limiter: newLimiter(client)}
+	got := make([]string, 0, 4)
+	for request := 0; request < 4; request++ {
+		selected, _, _, err := server.selectCredential(
+			context.Background(), modelID, credentials, 1, map[string]bool{}, 0,
+		)
+		if err != nil || selected == nil {
+			t.Fatalf("select request %d: selected=%v err=%v", request+1, selected, err)
+		}
+		got = append(got, selected.Label)
+	}
+	want := []string{"primary", "primary", "fallback", "fallback"}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("selection order = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestSharedCredentialLimitSpansModels(t *testing.T) {
+	if time.Now().Second() >= 57 {
+		t.Skip("too close to a minute reset boundary")
+	}
+	client := integrationRedis(t)
+	suffix := fmt.Sprint(time.Now().UnixNano())
+	credentialID := "key_shared_" + suffix
+	modelA := "mdl_a_" + suffix
+	modelB := "mdl_b_" + suffix
+	keys := []string{
+		"rr:" + modelA,
+		"rr:" + modelB,
+		"limit:" + credentialID + ":all:rpm",
+	}
+	t.Cleanup(func() { _ = client.Del(context.Background(), keys...).Err() })
+
+	two := int64(2)
+	credentials := []credentialRuntime{{CredentialView: CredentialView{
+		ID: credentialID, Label: "shared", Enabled: true, Status: "healthy",
+		Limits: RatePolicy{RPM: &two}, ModelLimits: map[string]RatePolicy{},
+	}}}
+	server := &Server{redis: client, limiter: newLimiter(client)}
+	for _, modelID := range []string{modelA, modelB} {
+		selected, _, _, err := server.selectCredential(
+			context.Background(), modelID, credentials, 1, map[string]bool{}, 0,
+		)
+		if err != nil || selected == nil {
+			t.Fatalf("model %s should share available capacity: selected=%v err=%v", modelID, selected, err)
+		}
+	}
+	selected, _, retry, err := server.selectCredential(
+		context.Background(), modelA, credentials, 1, map[string]bool{}, 0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != nil || retry <= 0 {
+		t.Fatalf("third cross-model request should exhaust the shared limit: selected=%v retry=%s", selected, retry)
+	}
+}

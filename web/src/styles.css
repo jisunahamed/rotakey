@@ -1248,6 +1248,89 @@ fieldset legend {
   background: var(--blue);
 }
 
+.credential-entry-list {
+  display: grid;
+  gap: 12px;
+}
+
+.credential-entry-list__intro,
+.credential-entry > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.credential-entry-list__intro strong,
+.credential-entry-list__intro small {
+  display: block;
+}
+
+.credential-entry-list__intro strong {
+  font-size: 0.78rem;
+}
+
+.credential-entry-list__intro small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.credential-entry {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+
+.credential-entry > header {
+  min-height: 28px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--line);
+}
+
+.credential-entry > header > strong {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+.credential-entry > header .button {
+  min-height: 28px;
+  padding: 4px 8px;
+}
+
+.primary-choice {
+  display: flex;
+  width: fit-content;
+  align-items: flex-start;
+  gap: 9px;
+  cursor: pointer;
+}
+
+.primary-choice input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--blue);
+}
+
+.primary-choice strong,
+.primary-choice small {
+  display: block;
+}
+
+.primary-choice strong {
+  font-size: 0.73rem;
+}
+
+.primary-choice small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.65rem;
+}
+
 .review-list {
   border: 1px solid var(--line);
 }
@@ -2061,6 +2144,15 @@ button.table-row:hover {
   .body-grid,
   .access-key-panel {
     grid-template-columns: 1fr;
+  }
+
+  .credential-entry-list__intro {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .credential-entry-list__intro .button {
+    width: 100%;
   }
 
   .rate-grid,

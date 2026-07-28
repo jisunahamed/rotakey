@@ -38,8 +38,8 @@ type Provider struct {
 	AllowPrivateNetwork bool              `json:"allow_private_network"`
 	CreatedAt           time.Time         `json:"created_at"`
 	UpdatedAt           time.Time         `json:"updated_at"`
-	Models              []ModelRoute      `json:"models,omitempty"`
-	Credentials         []CredentialView  `json:"credentials,omitempty"`
+	Models              []ModelRoute      `json:"models"`
+	Credentials         []CredentialView  `json:"credentials"`
 }
 
 type ModelRoute struct {
@@ -62,6 +62,7 @@ type CredentialView struct {
 	ProviderID    string                `json:"provider_id"`
 	Label         string                `json:"label"`
 	SecretSuffix  string                `json:"secret_suffix"`
+	IsPrimary     bool                  `json:"is_primary"`
 	Enabled       bool                  `json:"enabled"`
 	Status        string                `json:"status"`
 	CooldownUntil *time.Time            `json:"cooldown_until,omitempty"`

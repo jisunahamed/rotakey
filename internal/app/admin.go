@@ -16,8 +16,9 @@ import (
 )
 
 var (
-	slugPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
-	aliasPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{1,127}$`)
+	slugPattern          = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
+	slugSeparatorPattern = regexp.MustCompile(`[^a-z0-9]+`)
+	aliasPattern         = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{1,127}$`)
 )
 
 func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
@@ -81,29 +82,32 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 				Enabled: provider.Enabled && model.Enabled, Total: len(provider.Credentials),
 				Segments: make([]credentialCapacity, 0, len(provider.Credentials)),
 			}
-			eligible := make([]int, 0, len(provider.Credentials))
-			for index, credential := range provider.Credentials {
-				if credential.Enabled && credential.Status != "quarantined" {
-					eligible = append(eligible, index)
-				}
-			}
-			cursorIndex := -1
-			if len(eligible) > 0 {
-				if cursor, err := s.redis.Get(r.Context(), "rr:"+model.ID).Int64(); err == nil {
-					cursorIndex = eligible[int(cursor)%len(eligible)]
-				} else {
-					cursorIndex = eligible[0]
-				}
-			}
+			primaryIndex := -1
+			fallbacks := make([]int, 0, len(provider.Credentials))
 			for index, credential := range provider.Credentials {
 				segment := s.credentialCapacity(r.Context(), credential, model.ID)
-				segment.Cursor = index == cursorIndex
 				capacity.Segments = append(capacity.Segments, segment)
 				if segment.Status == "healthy" {
 					capacity.Healthy++
+					if credential.IsPrimary && primaryIndex == -1 {
+						primaryIndex = index
+					} else {
+						fallbacks = append(fallbacks, index)
+					}
 				} else {
 					capacity.Unavailable++
 				}
+			}
+			cursorIndex := primaryIndex
+			if cursorIndex == -1 && len(fallbacks) > 0 {
+				if cursor, err := s.redis.Get(r.Context(), "rr:"+model.ID).Int64(); err == nil {
+					cursorIndex = fallbacks[int(cursor)%len(fallbacks)]
+				} else {
+					cursorIndex = fallbacks[0]
+				}
+			}
+			if cursorIndex >= 0 {
+				capacity.Segments[cursorIndex].Cursor = true
 			}
 			_ = s.db.QueryRow(r.Context(), `
 				SELECT COUNT(*), COUNT(*) FILTER (WHERE status_code >= 400)
@@ -174,12 +178,12 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 	modelRows.Close()
 
 	credentialRows, err := s.db.Query(ctx, `
-		SELECT c.id, c.provider_id, c.label, c.secret_suffix, c.enabled, c.status,
+		SELECT c.id, c.provider_id, c.label, c.secret_suffix, c.is_primary, c.enabled, c.status,
 		       c.cooldown_until, c.created_at, c.updated_at,
 		       r.scope_key, r.rps, r.rpm, r.rpd, r.tps, r.tpm, r.tpd, r.tpr
 		FROM credentials c
 		LEFT JOIN rate_policies r ON r.credential_id = c.id
-		ORDER BY c.created_at, c.id, r.scope_key
+		ORDER BY c.is_primary DESC, c.created_at, c.id, r.scope_key
 	`)
 	if err != nil {
 		return nil, err
@@ -190,14 +194,14 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 	for credentialRows.Next() {
 		var (
 			id, providerID, label, suffix, status string
-			enabled                               bool
+			isPrimary, enabled                    bool
 			cooldown                              *time.Time
 			createdAt, updatedAt                  time.Time
 			scope                                 *string
 			policy                                RatePolicy
 		)
 		if err := credentialRows.Scan(
-			&id, &providerID, &label, &suffix, &enabled, &status,
+			&id, &providerID, &label, &suffix, &isPrimary, &enabled, &status,
 			&cooldown, &createdAt, &updatedAt, &scope,
 			&policy.RPS, &policy.RPM, &policy.RPD, &policy.TPS,
 			&policy.TPM, &policy.TPD, &policy.TPR,
@@ -213,7 +217,7 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 			}
 			view = &CredentialView{
 				ID: id, ProviderID: providerID, Label: label, SecretSuffix: suffix,
-				Enabled: enabled, Status: status, CooldownUntil: cooldown,
+				IsPrimary: isPrimary, Enabled: enabled, Status: status, CooldownUntil: cooldown,
 				Limits: RatePolicy{}, ModelLimits: map[string]RatePolicy{},
 				CreatedAt: createdAt, UpdatedAt: updatedAt,
 			}
@@ -249,6 +253,7 @@ type limitHeadroom struct {
 type credentialCapacity struct {
 	ID      string         `json:"id"`
 	Label   string         `json:"label"`
+	Primary bool           `json:"primary"`
 	Status  string         `json:"status"`
 	Cursor  bool           `json:"cursor"`
 	Request *limitHeadroom `json:"request_headroom,omitempty"`
@@ -257,7 +262,9 @@ type credentialCapacity struct {
 }
 
 func (s *Server) credentialCapacity(ctx context.Context, credential CredentialView, modelID string) credentialCapacity {
-	result := credentialCapacity{ID: credential.ID, Label: credential.Label, Status: "healthy"}
+	result := credentialCapacity{
+		ID: credential.ID, Label: credential.Label, Primary: credential.IsPrimary, Status: "healthy",
+	}
 	if !credential.Enabled {
 		result.Status = "disabled"
 		return result
@@ -364,11 +371,17 @@ type providerInput struct {
 func validateProviderInput(input *providerInput) error {
 	input.Name = strings.TrimSpace(input.Name)
 	input.Slug = strings.ToLower(strings.TrimSpace(input.Slug))
+	if input.Slug == "" {
+		input.Slug = providerSlugFromName(input.Name)
+	}
 	input.BaseURL = strings.TrimSpace(input.BaseURL)
 	input.AuthHeader = http.CanonicalHeaderKey(strings.TrimSpace(input.AuthHeader))
 	input.AuthScheme = strings.TrimSpace(input.AuthScheme)
-	if len(input.Name) < 2 || len(input.Name) > 100 || !slugPattern.MatchString(input.Slug) {
-		return fmt.Errorf("name or slug is invalid")
+	if len(input.Name) < 2 || len(input.Name) > 100 {
+		return fmt.Errorf("provider name must be between 2 and 100 characters")
+	}
+	if !slugPattern.MatchString(input.Slug) {
+		return fmt.Errorf("provider identifier is invalid")
 	}
 	if input.AuthHeader == "" {
 		input.AuthHeader = "Authorization"
@@ -392,6 +405,53 @@ func validateProviderInput(input *providerInput) error {
 	return nil
 }
 
+func providerSlugFromName(name string) string {
+	slug := strings.ToLower(strings.TrimSpace(name))
+	slug = slugSeparatorPattern.ReplaceAllString(slug, "-")
+	slug = strings.Trim(slug, "-")
+	if len(slug) > 63 {
+		slug = strings.Trim(slug[:63], "-")
+	}
+	if len(slug) < 2 {
+		return "provider"
+	}
+	return slug
+}
+
+func providerSlugCandidate(base string, duplicate int) string {
+	if duplicate == 0 {
+		return base
+	}
+	suffix := fmt.Sprintf("-%d", duplicate+1)
+	maxBase := 63 - len(suffix)
+	if maxBase < 1 {
+		return "provider" + suffix
+	}
+	trimmed := base
+	if len(trimmed) > maxBase {
+		trimmed = trimmed[:maxBase]
+	}
+	trimmed = strings.Trim(trimmed, "-")
+	if trimmed == "" {
+		trimmed = "provider"
+	}
+	return trimmed + suffix
+}
+
+func (s *Server) availableProviderSlug(ctx context.Context, base string) (string, error) {
+	for duplicate := 0; duplicate < 1000; duplicate++ {
+		candidate := providerSlugCandidate(base, duplicate)
+		var exists bool
+		if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM providers WHERE slug=$1)`, candidate).Scan(&exists); err != nil {
+			return "", err
+		}
+		if !exists {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("could not allocate a provider identifier")
+}
+
 func (s *Server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 	var input providerInput
 	if decodeJSON(w, r, 128<<10, &input) != nil {
@@ -401,9 +461,15 @@ func (s *Server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_provider", err.Error())
 		return
 	}
+	slug, err := s.availableProviderSlug(r.Context(), input.Slug)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "provider_unavailable", "Provider identifier could not be generated.")
+		return
+	}
+	input.Slug = slug
 	id, _ := newID("prv")
 	headers, _ := json.Marshal(input.ExtraHeaders)
-	_, err := s.db.Exec(r.Context(), `
+	_, err = s.db.Exec(r.Context(), `
 		INSERT INTO providers
 		    (id, name, slug, base_url, auth_header, auth_scheme, extra_headers,
 		     timeout_seconds, enabled, allow_private_network)
@@ -422,6 +488,12 @@ func (s *Server) handleUpdateProvider(w http.ResponseWriter, r *http.Request) {
 	var input providerInput
 	if decodeJSON(w, r, 128<<10, &input) != nil {
 		return
+	}
+	if strings.TrimSpace(input.Slug) == "" {
+		if err := s.db.QueryRow(r.Context(), `SELECT slug FROM providers WHERE id=$1`, r.PathValue("id")).Scan(&input.Slug); err != nil {
+			writeError(w, http.StatusNotFound, "provider_not_found", "Provider was not found.")
+			return
+		}
 	}
 	if err := validateProviderInput(&input); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_provider", err.Error())
@@ -568,10 +640,11 @@ func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 }
 
 type credentialInput struct {
-	Label   string     `json:"label"`
-	Secret  string     `json:"secret"`
-	Enabled *bool      `json:"enabled,omitempty"`
-	Limits  RatePolicy `json:"limits"`
+	Label     string     `json:"label"`
+	Secret    string     `json:"secret"`
+	IsPrimary bool       `json:"is_primary"`
+	Enabled   *bool      `json:"enabled,omitempty"`
+	Limits    RatePolicy `json:"limits"`
 }
 
 func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request) {
@@ -591,6 +664,24 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer func() { _ = tx.Rollback(r.Context()) }()
+	primaryCount := 0
+	for _, credential := range input.Credentials {
+		if credential.IsPrimary {
+			primaryCount++
+		}
+	}
+	if primaryCount > 1 {
+		writeError(w, http.StatusBadRequest, "multiple_primary_credentials", "Choose at most one primary API key.")
+		return
+	}
+	if primaryCount == 1 {
+		if _, err := tx.Exec(r.Context(), `
+			UPDATE credentials SET is_primary=FALSE, updated_at=NOW() WHERE provider_id=$1
+		`, r.PathValue("id")); err != nil {
+			writeError(w, http.StatusInternalServerError, "credential_create_failed", "Primary API key could not be updated.")
+			return
+		}
+	}
 	created := make([]string, 0, len(input.Credentials))
 	for _, credential := range input.Credentials {
 		credential.Label = strings.TrimSpace(credential.Label)
@@ -616,9 +707,10 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 		}
 		if _, err := tx.Exec(r.Context(), `
 			INSERT INTO credentials
-			    (id, provider_id, label, secret_cipher, secret_suffix, enabled, status)
-			VALUES ($1,$2,$3,$4,$5,$6,$7)
-		`, id, r.PathValue("id"), credential.Label, encrypted, secretSuffix(credential.Secret), enabled, status); err != nil {
+			    (id, provider_id, label, secret_cipher, secret_suffix, is_primary, enabled, status)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		`, id, r.PathValue("id"), credential.Label, encrypted, secretSuffix(credential.Secret),
+			credential.IsPrimary, enabled, status); err != nil {
 			writeError(w, http.StatusConflict, "credential_conflict", "Credential labels must be unique inside a provider.")
 			return
 		}
@@ -652,6 +744,20 @@ func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer func() { _ = tx.Rollback(r.Context()) }()
+	var providerID string
+	if err := tx.QueryRow(r.Context(), `SELECT provider_id FROM credentials WHERE id=$1`, r.PathValue("id")).Scan(&providerID); err != nil {
+		writeError(w, http.StatusNotFound, "credential_not_found", "Credential was not found.")
+		return
+	}
+	if input.IsPrimary {
+		if _, err := tx.Exec(r.Context(), `
+			UPDATE credentials SET is_primary=FALSE, updated_at=NOW()
+			WHERE provider_id=$1 AND id<>$2 AND is_primary=TRUE
+		`, providerID, r.PathValue("id")); err != nil {
+			writeError(w, http.StatusInternalServerError, "credential_update_failed", "Primary API key could not be updated.")
+			return
+		}
+	}
 	enabled := true
 	if input.Enabled != nil {
 		enabled = *input.Enabled
@@ -670,9 +776,9 @@ func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) 
 		encrypted, _ := s.vault.Encrypt([]byte(secret))
 		commandTag, err := tx.Exec(r.Context(), `
 			UPDATE credentials SET label=$2, secret_cipher=$3, secret_suffix=$4,
-			    enabled=$5, status=$6, cooldown_until=NULL, consecutive_failures=0,
+			    is_primary=$5, enabled=$6, status=$7, cooldown_until=NULL, consecutive_failures=0,
 			    updated_at=NOW() WHERE id=$1
-		`, r.PathValue("id"), input.Label, encrypted, secretSuffix(secret), enabled, status)
+		`, r.PathValue("id"), input.Label, encrypted, secretSuffix(secret), input.IsPrimary, enabled, status)
 		if err != nil {
 			writeError(w, http.StatusConflict, "credential_update_failed", "Credential could not be updated.")
 			return
@@ -680,10 +786,10 @@ func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) 
 		affected = commandTag.RowsAffected()
 	} else {
 		commandTag, err := tx.Exec(r.Context(), `
-			UPDATE credentials SET label=$2, enabled=$3, status=$4,
+			UPDATE credentials SET label=$2, is_primary=$3, enabled=$4, status=$5,
 			    cooldown_until=NULL, consecutive_failures=0, updated_at=NOW()
 			WHERE id=$1
-		`, r.PathValue("id"), input.Label, enabled, status)
+		`, r.PathValue("id"), input.Label, input.IsPrimary, enabled, status)
 		if err != nil {
 			writeError(w, http.StatusConflict, "credential_update_failed", "Credential could not be updated.")
 			return

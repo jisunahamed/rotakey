@@ -38,6 +38,7 @@ export type Credential = {
   provider_id: string;
   label: string;
   secret_suffix: string;
+  is_primary: boolean;
   enabled: boolean;
   status: "healthy" | "cooldown" | "quarantined" | "disabled";
   cooldown_until?: string;
@@ -86,6 +87,7 @@ export type Overview = {
     segments: Array<{
       id: string;
       label: string;
+      primary: boolean;
       status: "healthy" | "cooldown" | "quarantined" | "disabled" | "exhausted" | "unknown";
       cursor: boolean;
       unknown: boolean;

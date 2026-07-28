@@ -152,13 +152,13 @@ func (s *Server) loadCredentials(ctx context.Context, providerID, modelID string
 	rows, err := s.db.Query(ctx, `
 		SELECT
 			c.id, c.provider_id, c.label, c.secret_cipher, c.secret_suffix,
-			c.enabled, c.status, c.cooldown_until, c.created_at, c.updated_at,
+			c.is_primary, c.enabled, c.status, c.cooldown_until, c.created_at, c.updated_at,
 			r.scope_key, r.rps, r.rpm, r.rpd, r.tps, r.tpm, r.tpd, r.tpr
 		FROM credentials c
 		LEFT JOIN rate_policies r
 			ON r.credential_id = c.id AND (r.scope_key = '*' OR r.scope_key = $2)
 		WHERE c.provider_id = $1 AND c.enabled = TRUE AND c.status <> 'quarantined'
-		ORDER BY c.created_at, c.id, r.scope_key
+		ORDER BY c.is_primary DESC, c.created_at, c.id, r.scope_key
 	`, providerID, modelID)
 	if err != nil {
 		return nil, err
@@ -171,7 +171,7 @@ func (s *Server) loadCredentials(ctx context.Context, providerID, modelID string
 		var (
 			id, provider, label, suffix, status string
 			ciphertext                          []byte
-			enabled                             bool
+			isPrimary, enabled                  bool
 			cooldown                            *time.Time
 			createdAt, updatedAt                time.Time
 			scope                               *string
@@ -179,7 +179,7 @@ func (s *Server) loadCredentials(ctx context.Context, providerID, modelID string
 		)
 		if err := rows.Scan(
 			&id, &provider, &label, &ciphertext, &suffix,
-			&enabled, &status, &cooldown, &createdAt, &updatedAt,
+			&isPrimary, &enabled, &status, &cooldown, &createdAt, &updatedAt,
 			&scope, &policy.RPS, &policy.RPM, &policy.RPD, &policy.TPS,
 			&policy.TPM, &policy.TPD, &policy.TPR,
 		); err != nil {
@@ -196,6 +196,7 @@ func (s *Server) loadCredentials(ctx context.Context, providerID, modelID string
 				ProviderID:    provider,
 				Label:         label,
 				SecretSuffix:  suffix,
+				IsPrimary:     isPrimary,
 				Enabled:       enabled,
 				Status:        status,
 				CooldownUntil: cooldown,
