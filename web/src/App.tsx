@@ -1175,8 +1175,16 @@ type CredentialDraft = {
   is_primary: boolean;
 };
 
+let credentialDraftSequence = 0;
+
 function newCredentialDraft(): CredentialDraft {
-  return { id: crypto.randomUUID(), label: "", secret: "", is_primary: false };
+  credentialDraftSequence += 1;
+  return {
+    id: `credential-draft-${Date.now()}-${credentialDraftSequence}`,
+    label: "",
+    secret: "",
+    is_primary: false,
+  };
 }
 
 function CredentialEntries({ value, onChange }: { value: CredentialDraft[]; onChange: (value: CredentialDraft[]) => void }) {
