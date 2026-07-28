@@ -1,0 +1,87 @@
+name: rotakey
+
+services:
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      APP_HOST: ${APP_HOST:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  app:
+    build:
+      context: .
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      APP_ADDR: :8080
+      DATABASE_URL: postgres://${POSTGRES_USER:-rotakey}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-rotakey}?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      APP_MASTER_KEY: ${APP_MASTER_KEY:?Set APP_MASTER_KEY in .env}
+      BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:?Set BOOTSTRAP_TOKEN in .env}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      MAX_REQUEST_BYTES: ${MAX_REQUEST_BYTES:-8388608}
+      MAX_RESPONSE_BYTES: ${MAX_RESPONSE_BYTES:-16777216}
+      CAPTURE_BYTES: ${CAPTURE_BYTES:-1048576}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-12}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health/ready"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+      start_period: 15s
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rotakey}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-rotakey}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

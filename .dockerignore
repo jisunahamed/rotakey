@@ -1,0 +1,13 @@
+.git
+.env
+.env.*
+!.env.example
+!.env.domain.example
+web/node_modules
+web/dist
+.playwright-cli
+output
+coverage
+backups
+*.log
+*.tmp

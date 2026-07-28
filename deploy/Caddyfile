@@ -1,0 +1,14 @@
+{$APP_HOST} {
+	encode zstd gzip
+	reverse_proxy app:8080
+
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

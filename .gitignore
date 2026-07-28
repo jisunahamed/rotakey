@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+!.env.domain.example
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts
+.playwright-cli/
+output/
+backups/
+coverage/
+*.log
+*.tmp
+.DS_Store
