@@ -23,6 +23,30 @@ The gateway serves:
 
 The admin console is served at `/admin/`.
 
+## Run locally with any coding agent
+
+Copy the prompt below with the code-block copy button and give it to any coding agent that can use your terminal:
+
+```text
+Set up and run Rotakey locally on this computer using command-line tools. Complete the work instead of only giving me instructions.
+
+Repository: https://github.com/jisunahamed/rotakey.git
+Target branch: main
+
+Requirements and safety rules:
+1. Detect the operating system and available shell first. On Windows, use CMD or PowerShell-compatible commands. On macOS/Linux, use the available POSIX shell.
+2. Verify that Git, Docker Engine/Docker Desktop, and Docker Compose are installed and running. If a required tool is missing, explain the exact official installation needed and stop; do not install system software or change the firewall without my approval.
+3. Inspect existing files, containers, services, and occupied ports before making changes. Do not stop, delete, rename, or reconfigure anything that already exists.
+4. Clone the repository into a new `rotakey` directory only if it does not exist. If it exists, verify its remote and current changes; never discard or overwrite local work.
+5. Create `.env` from `.env.example` only when `.env` does not already exist. Generate independent cryptographically secure values for POSTGRES_PASSWORD, APP_MASTER_KEY, and BOOTSTRAP_TOKEN. Never print these values in command logs.
+6. Configure local access through `http://localhost`. If ports 80 or 443 are occupied, do not stop the owner process. Create an untracked local Compose file that runs only Rotakey's app, PostgreSQL, and Redis on an unused high port, with separate project-scoped volumes and no Caddy. Do not modify tracked source files just to resolve a local port conflict.
+7. Use a unique Compose project name such as `rotakey-local` so no existing Rotakey or other Docker resources are reused.
+8. Start the stack with Docker Compose, build the production image, and wait until both `/health/live` and `/health/ready` return HTTP 200. If startup fails, inspect only Rotakey logs, fix the Rotakey-specific problem, and retry.
+9. If `/api/setup/status` reports that setup is required, generate a secure local admin password and complete the one-time setup through `/api/setup`. Capture the gateway key exactly once. Save the admin URL, API base URL, username, generated password, and gateway key in `rotakey-local-credentials.txt`. Restrict the file to the current user where the OS supports it, add it to local Git exclusions, and never commit it.
+10. Verify admin login and call `/v1/models` with the generated Bearer key. An empty model list is valid before providers are configured.
+11. Finish by reporting the local Admin URL, API base URL, health status, credentials-file path, Compose project name, and container status. Do not reveal secret values in the chat unless I explicitly request them.
+```
+
 ## Quick start on an Ubuntu VPS
 
 Requirements: Docker Engine with the Compose plugin, ports `80/tcp`, `443/tcp`, and `443/udp` available, and at least 2 GB RAM.
