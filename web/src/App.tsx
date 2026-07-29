@@ -3,8 +3,10 @@ import {
   Activity,
   AlertTriangle,
   ArrowRight,
+  BookOpen,
   Cable,
   Check,
+  ChevronDown,
   ChevronRight,
   CircleGauge,
   Clipboard,
@@ -193,6 +195,15 @@ function App() {
           ))}
         </nav>
         <div className="sidebar__bottom">
+          <a
+            className="sidebar__github"
+            href="https://github.com/jisunahamed/rotakey/blob/main/docs/OPERATOR-GUIDE.md"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <BookOpen size={15} />
+            <span>Operator guide</span>
+          </a>
           <a
             className="sidebar__github"
             href="https://github.com/jisunahamed/rotakey"
@@ -479,9 +490,16 @@ function OverviewPage({
     return value === "1h" || value === "7d" ? value : "24h";
   });
   const [selected, setSelected] = useState<InspectTarget | null>(null);
+  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(() => new Set());
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const selectTarget = (target: InspectTarget) => {
+    if (overview) {
+      const providerID = overviewProviderIDForTarget(overview, target);
+      if (providerID) {
+        setExpandedProviders((current) => new Set(current).add(providerID));
+      }
+    }
     setSelected(target);
     setInspectorOpen(true);
   };
@@ -491,7 +509,8 @@ function OverviewPage({
     try {
       const result = await api<Overview>(`/api/admin/overview?range=${range}`);
       setOverview(result);
-      setSelected((current) => chooseOverviewTarget(result, current));
+      setSelected((current) => current && overviewTargetExists(result, current) ? current : null);
+      setExpandedProviders((current) => new Set([...current].filter((id) => result.providers.some((provider) => provider.id === id))));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Overview could not be loaded.");
     } finally {
@@ -531,14 +550,14 @@ function OverviewPage({
                 <code>{overview.base_url || `${location.origin}/v1`}</code>
               </span>
               <button
-                className="console-icon"
+                className="console-icon copy-base-url"
                 aria-label="Copy unified base URL"
                 onClick={() => {
-                  void navigator.clipboard.writeText(overview.base_url || `${location.origin}/v1`)
+                  void copyText(overview.base_url || `${location.origin}/v1`)
                     .then(() => notify("Base URL copied."))
                     .catch(() => notify("Clipboard access was blocked.", "danger"));
                 }}
-              ><Clipboard size={14} /></button>
+              ><Clipboard size={14} /><span>Copy</span></button>
             </div>
             <div className="ops-commandbar__actions">
               <div className="range-switcher" aria-label="Overview time range">
@@ -569,7 +588,7 @@ function OverviewPage({
             <LedgerMetric label="Tokens" value={formatNumber(overview.summary.tokens)} />
           </section>
 
-          <div className="ops-console__workspace">
+          <div className={`ops-console__workspace${selected ? " has-inspector" : ""}`}>
             <div className="ops-console__main">
               <div className="signal-grid">
                 <SignalTimeline overview={overview} />
@@ -581,9 +600,9 @@ function OverviewPage({
 
               <section className="console-panel capacity-debugger">
                 <ConsolePanelHeader
-                  eyebrow="Route debugger"
-                  title="Capacity and next-hop state"
-                  detail={`${overview.routes.length} public routes · ${formatRelativeTime(overview.generated_at)}`}
+                  eyebrow="Provider capacity"
+                  title="Providers and model routes"
+                  detail={`Updated ${formatRelativeTime(overview.generated_at)}`}
                 />
                 {overview.routes.length === 0 ? (
                   <EmptyState
@@ -598,6 +617,13 @@ function OverviewPage({
                     routes={overview.routes.filter((route) => route.provider_id === provider.id)}
                     selected={selected}
                     onSelect={selectTarget}
+                    expanded={expandedProviders.has(provider.id)}
+                    onToggle={() => setExpandedProviders((current) => {
+                      const next = new Set(current);
+                      if (next.has(provider.id)) next.delete(provider.id);
+                      else next.add(provider.id);
+                      return next;
+                    })}
                   />
                 ))}
               </section>
@@ -625,12 +651,15 @@ function OverviewPage({
               </section>
             </div>
 
-            <OverviewInspector
+            {selected && <OverviewInspector
               provider={selectedProvider}
               route={selectedRoute}
               credential={selectedCredential}
               open={inspectorOpen}
-              onClose={() => setInspectorOpen(false)}
+              onClose={() => {
+                setInspectorOpen(false);
+                setSelected(null);
+              }}
               onSelectCredential={(id) => selectTarget({ type: "credential", id })}
               onTest={async () => {
                 if (!selectedProvider) return;
@@ -654,7 +683,7 @@ function OverviewPage({
                 }
               }}
               navigate={navigate}
-            />
+            />}
           </div>
         </div>
       )}
@@ -731,32 +760,38 @@ function ProviderCapacityGroup({
   provider,
   routes,
   selected,
-  onSelect
+  onSelect,
+  expanded,
+  onToggle
 }: {
   provider: Overview["providers"][number];
   routes: Overview["routes"];
   selected: { type: "provider" | "route" | "credential"; id: string } | null;
   onSelect: (target: { type: "provider" | "route" | "credential"; id: string }) => void;
+  expanded: boolean;
+  onToggle: () => void;
 }) {
   return (
-    <section className="provider-debug-group">
-      <button className={`provider-debug-head ${selected?.type === "provider" && selected.id === provider.id ? "is-selected" : ""}`} onClick={() => onSelect({ type: "provider", id: provider.id })}>
-        <span><StatusDot state={!provider.enabled ? "disabled" : provider.keys_ready ? "healthy" : "exhausted"} /><strong>{provider.name}</strong><small>{provider.models_ready}/{provider.models_total} routes · {provider.keys_ready}/{provider.keys_total} keys</small></span>
+    <section className={`provider-debug-group${expanded ? " is-expanded" : ""}`}>
+      <div className={`provider-debug-head ${selected?.type === "provider" && selected.id === provider.id ? "is-selected" : ""}`}>
+        <button className="provider-debug-toggle" onClick={onToggle} aria-expanded={expanded} aria-controls={`provider-models-${provider.id}`}>
+          <ChevronDown size={15} />
+          <StatusDot state={!provider.enabled ? "disabled" : provider.keys_ready ? "healthy" : "exhausted"} />
+          <span><strong>{provider.name}</strong><small>{provider.models_ready}/{provider.models_total} models ready · {provider.keys_ready}/{provider.keys_total} keys ready</small></span>
+        </button>
         <div className="limit-preview">
           {capacityDimensions.map((dimension) => <LimitCell key={dimension} dimension={dimension} limit={provider.capacity[dimension]} />)}
         </div>
-        <ChevronRight size={14} />
-      </button>
-      <div className="route-debug-list">
-        {routes.map((route) => (
-          <RouteDebugRow
-            key={route.id}
-            route={route}
-            selected={selected}
-            onSelect={onSelect}
-          />
-        ))}
+        <button className="provider-inspect" onClick={() => onSelect({ type: "provider", id: provider.id })}>Inspect</button>
       </div>
+      {expanded && <div className="route-debug-list" id={`provider-models-${provider.id}`}>
+        <div className="route-debug-columns" aria-hidden="true">
+          <span>Public model</span><span>Traffic</span><span>Keys</span><span>Next key</span><span>Model override</span><span />
+        </div>
+        {routes.length ? routes.map((route) => (
+          <RouteDebugRow key={route.id} route={route} selected={selected} onSelect={onSelect} />
+        )) : <p className="provider-model-empty">No model routes configured for this provider.</p>}
+      </div>}
     </section>
   );
 }
@@ -788,44 +823,21 @@ function RouteDebugRow({
       : route.healthy_credentials < route.total_credentials
         ? "partial"
         : "healthy";
+  const isSelected = selected?.type === "route" && selected.id === route.id
+    || selected?.type === "credential" && route.segments.some((segment) => segment.id === selected.id);
+  const modelBottleneck = formatModelBottleneck(route);
   return (
-    <article className={`route-debug-row ${selected?.type === "route" && selected.id === route.id ? "is-selected" : ""}`}>
-      <button className="route-debug-row__identity" onClick={() => onSelect({ type: "route", id: route.id })}>
+    <button className={`route-debug-row ${isSelected ? "is-selected" : ""}`} onClick={() => onSelect({ type: "route", id: route.id })}>
+      <span className="route-debug-row__identity">
         <StatusDot state={state} />
-        <span><code>{route.alias}</code><small>{route.requests} requests · p95 {route.latency_p95_ms} ms</small></span>
-      </button>
-      <div className="route-hop"><ArrowRight size={13} /><span>{route.provider}</span></div>
-      <div className="credential-lane" aria-label={`${route.healthy_credentials} of ${route.total_credentials} credentials healthy`}>
-        {route.segments.length === 0 ? (
-          <div className="debug-segment debug-segment--empty">
-            <strong>No credentials</strong>
-            <small>Add an API key</small>
-          </div>
-        ) : route.segments.map((segment) => (
-          <button
-            key={segment.id}
-            className={`debug-segment debug-segment--${segment.status}${segment.cursor ? " is-cursor" : ""}${selected?.type === "credential" && selected.id === segment.id ? " is-selected" : ""}`}
-            title={`${segment.label}: ${segment.status}`}
-            onClick={() => onSelect({ type: "credential", id: segment.id })}
-          >
-            <span><strong>{segment.label}</strong>{segment.cursor && <i>next</i>}</span>
-            <small>
-              {segment.request_headroom
-                ? `${segment.request_headroom.remaining}/${segment.request_headroom.limit} ${segment.request_headroom.dimension}`
-                : "∞ requests"}
-              {" · "}
-              {segment.token_headroom
-                ? `${segment.token_headroom.remaining}/${segment.token_headroom.limit} ${segment.token_headroom.dimension}`
-                : "∞ tokens"}
-            </small>
-          </button>
-        ))}
-      </div>
-      <div className="route-bottleneck">
-        <small>limiting now</small>
-        <strong>{formatRouteBottleneck(route)}</strong>
-      </div>
-    </article>
+        <span><code>{route.alias}</code><small>{route.upstream_model !== route.alias ? `Upstream · ${route.upstream_model}` : route.supports_responses ? "Chat + Responses" : "Chat Completions"}</small></span>
+      </span>
+      <span className="route-traffic"><strong>{formatNumber(route.requests)}</strong><small>{(route.error_rate * 100).toFixed(1)}% err · {formatNumber(route.latency_p95_ms)} ms</small></span>
+      <span className="route-key-count"><strong>{route.healthy_credentials}/{route.total_credentials}</strong><small>ready</small></span>
+      <span className="route-next-key"><strong>{route.segments.find((segment) => segment.cursor)?.label || "—"}</strong><small>{route.next_credential_id ? "next" : "unavailable"}</small></span>
+      <span className="route-bottleneck"><strong>{modelBottleneck}</strong><small>{modelBottleneck === "Shared only" ? "provider limit" : "model limit"}</small></span>
+      <ChevronRight size={14} />
+    </button>
   );
 }
 
@@ -932,6 +944,7 @@ function OverviewInspector({
           }}><Activity size={14} /> {busy ? "Testing…" : "Test provider"}</Button>
         ) : null}
         {provider && <Button variant="quiet" onClick={() => navigate("providers", { provider: provider.id })}>Open provider</Button>}
+        {route && <Button variant="quiet" onClick={() => navigate("providers", { provider: route.provider_id })}>Manage model limits</Button>}
         {route && <Button variant="quiet" onClick={() => navigate("logs", { q: route.alias })}>View route logs</Button>}
       </div>
     </aside>
@@ -961,20 +974,16 @@ function HeadroomReadout({ label, headroom }: { label: string; headroom?: Overvi
   );
 }
 
-function chooseOverviewTarget(overview: Overview, current: { type: "provider" | "route" | "credential"; id: string } | null) {
-  if (current && overviewTargetExists(overview, current)) return current;
-  const firstAlert = overview.alerts[0];
-  if (firstAlert) return { type: firstAlert.resource_type, id: firstAlert.resource_id };
-  const busiest = [...overview.routes].sort((left, right) => right.requests - left.requests)[0];
-  if (busiest) return { type: "route" as const, id: busiest.id };
-  if (overview.providers[0]) return { type: "provider" as const, id: overview.providers[0].id };
-  return null;
-}
-
 function overviewTargetExists(overview: Overview, target: { type: "provider" | "route" | "credential"; id: string }) {
   if (target.type === "provider") return overview.providers.some((provider) => provider.id === target.id);
   if (target.type === "route") return overview.routes.some((route) => route.id === target.id);
   return overview.routes.some((route) => route.segments.some((segment) => segment.id === target.id));
+}
+
+function overviewProviderIDForTarget(overview: Overview, target: { type: "provider" | "route" | "credential"; id: string }) {
+  if (target.type === "provider") return target.id;
+  if (target.type === "route") return overview.routes.find((route) => route.id === target.id)?.provider_id;
+  return overview.routes.find((route) => route.segments.some((segment) => segment.id === target.id))?.provider_id;
 }
 
 function timelinePath(values: number[], width: number, height: number) {
@@ -991,6 +1000,15 @@ function formatRouteBottleneck(route: Overview["routes"][number]) {
   const candidates = [route.next_request_headroom, route.next_token_headroom].filter(Boolean);
   if (!route.next_credential_id) return "no route";
   if (candidates.length === 0) return "unlimited";
+  const tightest = candidates.sort((left, right) => (
+    (left!.remaining / Math.max(left!.limit, 1)) - (right!.remaining / Math.max(right!.limit, 1))
+  ))[0]!;
+  return `${tightest.remaining}/${tightest.limit} ${tightest.dimension}`;
+}
+
+function formatModelBottleneck(route: Overview["routes"][number]) {
+  const candidates = [route.next_request_headroom, route.next_token_headroom].filter((headroom) => headroom?.scope === "model");
+  if (candidates.length === 0) return "Shared only";
   const tightest = candidates.sort((left, right) => (
     (left!.remaining / Math.max(left!.limit, 1)) - (right!.remaining / Math.max(right!.limit, 1))
   ))[0]!;
@@ -1874,12 +1892,15 @@ function ModelsPage({
                     <StatusDot state={credential.status} />
                     <strong>{credential.label}</strong>
                     <small>{credential.is_primary ? "primary" : credential.status}</small>
-                    <LimitSummary policy={credential.model_limits[selected.id] || credential.limits} />
+                    <span>
+                      <small>{credential.model_limits[selected.id] ? "model override" : "shared provider limit"}</small>
+                      <LimitSummary policy={credential.model_limits[selected.id] || credential.limits} />
+                    </span>
                   </div>
                 ))}
               </section>
               <div className="inspector-actions">
-                <Button variant="quiet" onClick={() => navigate("providers", { provider: selected.provider.id })}>Open provider setup</Button>
+                <Button variant="quiet" onClick={() => navigate("providers", { provider: selected.provider.id })}>Manage model limits</Button>
                 <Button variant="quiet" onClick={() => navigate("logs", { q: selected.public_alias })}>View request logs</Button>
               </div>
             </aside>
@@ -2061,7 +2082,7 @@ function SecretReveal({ title, keyValue, message, onClose, notify }: { title: st
   return (
     <Sheet title={title} eyebrow="One-time secret" onClose={() => { if (confirmed || confirm("Close without confirming that the key is saved?")) onClose(); }}>
       <InlineNotice tone="danger">{message}</InlineNotice>
-      <div className="secret-value"><code>{keyValue}</code><Button variant="quiet" onClick={() => void navigator.clipboard.writeText(keyValue).then(() => notify("Gateway key copied.")).catch(() => notify("Clipboard access was blocked.", "danger"))}><Clipboard size={14} /> Copy</Button></div>
+      <div className="secret-value"><code>{keyValue}</code><Button variant="quiet" onClick={() => void copyText(keyValue).then(() => notify("Gateway key copied.")).catch(() => notify("Clipboard access was blocked.", "danger"))}><Clipboard size={14} /> Copy</Button></div>
       <label className="confirmation-check"><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /><span>I stored this key securely.</span></label>
       <div className="sheet-actions"><span /><Button disabled={!confirmed} onClick={onClose}>Finish</Button></div>
     </Sheet>
@@ -2193,6 +2214,33 @@ function formatNumber(value: number) {
 
 function formatCompact(value: number) {
   return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value);
+}
+
+async function copyText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // HTTP/IP deployments often block the modern Clipboard API. Fall through.
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.readOnly = true;
+  textarea.style.position = "fixed";
+  textarea.style.inset = "0 auto auto -9999px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, value.length);
+  try {
+    if (!document.execCommand("copy")) throw new Error("Clipboard copy failed");
+  } finally {
+    textarea.remove();
+  }
 }
 
 function errorMessage(caught: unknown) {

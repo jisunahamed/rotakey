@@ -23,6 +23,8 @@ The gateway serves:
 
 The admin console is served at `/admin/`.
 
+New to gateway operations? Read the [Rotakey Operator Guide](docs/OPERATOR-GUIDE.md) for setup, dashboard metrics, every rate-limit dimension, routing behavior, errors, security, backup, and troubleshooting.
+
 ## Run locally with any coding agent
 
 Copy the prompt below with the code-block copy button and give it to any coding agent that can use your terminal:
@@ -181,7 +183,7 @@ result = client.chat.completions.create(
 - Upstream `401/403` quarantines a credential, `429` starts its `Retry-After` cooldown, and repeated transport/`5xx` failures open a short circuit.
 - Redis failure returns `503`; limits are never bypassed.
 
-The model-first capacity rail shows the next round-robin segment, credential health, and the currently limiting request/token headroom.
+Overview keeps providers collapsed by default. Expanding a provider reveals its compact model list; selecting a model opens the contextual inspector with the next round-robin key, credential health, and the currently limiting request/token headroom. Shared key capacity is shown once at provider level instead of being repeated for every model.
 
 ### Provider-specific request compatibility
 

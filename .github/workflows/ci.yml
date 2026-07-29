@@ -9,7 +9,9 @@ permissions:
 
 jobs:
   test:
+    name: Test and build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       redis:
         image: redis:7-alpine
@@ -52,3 +54,47 @@ jobs:
         run: docker compose config --quiet
       - name: Production image
         run: docker build --tag rotakey:ci .
+
+  deploy:
+    name: Deploy production
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    concurrency:
+      group: rotakey-production
+      cancel-in-progress: false
+    steps:
+      - name: Configure restricted SSH identity
+        env:
+          DEPLOY_KEY: ${{ secrets.ROTAKEY_DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.ROTAKEY_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          test -n "$DEPLOY_KEY"
+          test -n "$KNOWN_HOSTS"
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/rotakey_deploy"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/rotakey_deploy" "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/rotakey_deploy" >/dev/null
+
+      - name: Deploy tested commit
+        env:
+          DEPLOY_HOST: ${{ secrets.ROTAKEY_DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.ROTAKEY_DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.ROTAKEY_DEPLOY_USER }}
+        run: |
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_PORT"
+          test -n "$DEPLOY_USER"
+          ssh \
+            -F /dev/null \
+            -i "$HOME/.ssh/rotakey_deploy" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -p "$DEPLOY_PORT" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "deploy $GITHUB_SHA"

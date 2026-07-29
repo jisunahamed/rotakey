@@ -141,3 +141,23 @@ A credential is quarantined:
 - confirm the upstream key and auth scheme
 - edit the credential with a replacement secret, which resets quarantine state
 - run the provider connection test before sending production traffic
+
+## 9. GitHub CI/CD
+
+Every push and pull request runs Go tests with the race detector, `go vet`, the admin UI typecheck/build/audit, Compose validation, and a production image build. A successful push to `main` can then deploy only the Rotakey app service through a restricted SSH key.
+
+Install `deploy/rotakey-ci-deploy.sh` as root-owned `/usr/local/sbin/rotakey-ci-deploy`, then add the deploy public key to root's `authorized_keys` with a forced command:
+
+```text
+command="/usr/local/sbin/rotakey-ci-deploy",restrict ssh-ed25519 AAAA... rotakey-github-actions
+```
+
+Configure these GitHub Actions repository secrets:
+
+- `ROTAKEY_DEPLOY_HOST`
+- `ROTAKEY_DEPLOY_PORT`
+- `ROTAKEY_DEPLOY_USER`
+- `ROTAKEY_DEPLOY_SSH_KEY`
+- `ROTAKEY_DEPLOY_KNOWN_HOSTS`
+
+The forced command accepts only `deploy <tested-commit-sha>`. It refuses dirty tracked files or a stale workflow, takes a PostgreSQL backup, builds and recreates only `app`, verifies readiness, and restores the previous app image if readiness fails. PostgreSQL, Redis, Caddy, and unrelated VPS services are not restarted.
