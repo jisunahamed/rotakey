@@ -45,12 +45,14 @@ export function Sheet({
   eyebrow,
   onClose,
   children,
+  actions,
   wide = false
 }: {
   title: string;
   eyebrow?: string;
   onClose: () => void;
   children: ReactNode;
+  actions?: ReactNode;
   wide?: boolean;
 }) {
   return (
@@ -62,9 +64,12 @@ export function Sheet({
             {eyebrow && <p className="eyebrow">{eyebrow}</p>}
             <h2>{title}</h2>
           </div>
-          <button className="icon-button" onClick={onClose} aria-label="Close">
-            <X size={18} />
-          </button>
+          <div className="button-row">
+            {actions}
+            <button className="icon-button" onClick={onClose} aria-label="Close">
+              <X size={18} />
+            </button>
+          </div>
         </header>
         <div className="sheet__body">{children}</div>
       </section>

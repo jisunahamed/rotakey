@@ -1037,6 +1037,8 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
   const [selectedID, setSelectedID] = useState(() => new URLSearchParams(location.search).get("provider") || "");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [openSection, setOpenSection] = useState<"models" | "credentials" | null>(null);
+  const [providerInspectorOpen, setProviderInspectorOpen] = useState(false);
   const [panel, setPanel] = useState<
     null
     | { type: "wizard" }
@@ -1066,6 +1068,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
   }, [load]);
 
   const selected = providers.find((provider) => provider.id === selectedID);
+  useEffect(() => setOpenSection(null), [selectedID]);
   const complete = (message: string) => {
     setPanel(null);
     notify(message);
@@ -1073,7 +1076,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
   };
 
   return (
-    <>
+    <div className="resource-page provider-page">
       <PageHeader
         eyebrow="Upstream setup"
         title="Providers"
@@ -1096,7 +1099,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                 <button
                   key={provider.id}
                   className={`resource-item ${selectedID === provider.id ? "is-selected" : ""}`}
-                  onClick={() => setSelectedID(provider.id)}
+                  onClick={() => { setSelectedID(provider.id); setProviderInspectorOpen(true); }}
                 >
                   <StatusDot state={!provider.enabled ? "disabled" : healthy ? "healthy" : "exhausted"} />
                   <span><strong>{provider.name}</strong><small>{provider.base_url}</small></span>
@@ -1107,7 +1110,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
             })}
           </section>
           {selected && (
-            <section className="resource-inspector">
+            <section className={`resource-inspector${providerInspectorOpen ? " is-open" : ""}`}>
               {selected.credentials.some((credential) => credential.validation_error) && (
                 <InlineNotice tone="danger">
                   {selected.credentials.filter((credential) => credential.validation_error).length} API key warning detected. Open the marked key to replace or re-check it.
@@ -1120,8 +1123,20 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                   <code>{selected.base_url}</code>
                 </div>
                 <div className="button-row">
+                  <button className="console-icon resource-inspector-close" onClick={() => setProviderInspectorOpen(false)} aria-label="Close provider inspector"><X size={15} /></button>
                   <Button variant="quiet" onClick={() => void testProvider(selected, notify)}><Activity size={15} /> Test</Button>
                   <Button variant="quiet" onClick={() => setPanel({ type: "provider", provider: selected })}>Edit</Button>
+                  <Button
+                    variant="danger"
+                    aria-label={`Delete provider ${selected.name}`}
+                    onClick={() => {
+                      if (confirm(`Delete ${selected.name} and every route/credential under it?`)) {
+                        void api<void>(`/api/admin/providers/${selected.id}`, { method: "DELETE" })
+                          .then(() => complete("Provider deleted."))
+                          .catch((caught) => notify(errorMessage(caught), "danger"));
+                      }
+                    }}
+                  ><Trash2 size={14} /> Delete</Button>
                 </div>
               </div>
               <div className="inspector-stats">
@@ -1130,9 +1145,12 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                 <span><strong>{selected.timeout_seconds}s</strong> timeout</span>
               </div>
               <ProviderCapacityStrip provider={selected} />
-              <ResourceSection
+              <ResourceDisclosure
                 title="Model routes"
                 description="Load the provider model catalog, select routes, or add one manually."
+                summary={`${selected.models.length} route${selected.models.length === 1 ? "" : "s"}`}
+                open={openSection === "models"}
+                onToggle={() => setOpenSection((current) => current === "models" ? null : "models")}
                 action={(
                   <div className="button-row">
                     <Button variant="quiet" onClick={() => setPanel({ type: "import", provider: selected })}><RefreshCw size={14} /> Load models</Button>
@@ -1157,10 +1175,13 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                     ))}
                   </div>
                 )}
-              </ResourceSection>
-              <ResourceSection
+              </ResourceDisclosure>
+              <ResourceDisclosure
                 title="Credential pool"
                 description="A primary key is tried first. Without one, healthy keys use balanced round-robin."
+                summary={`${selected.credentials.filter((item) => item.enabled && item.status === "healthy").length}/${selected.credentials.length} keys ready`}
+                open={openSection === "credentials"}
+                onToggle={() => setOpenSection((current) => current === "credentials" ? null : "credentials")}
                 action={<Button variant="quiet" onClick={() => setPanel({ type: "credential", provider: selected })}><Plus size={14} /> API key</Button>}
               >
                 {selected.credentials.length === 0 ? (
@@ -1184,20 +1205,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                     ))}
                   </div>
                 )}
-              </ResourceSection>
-              <div className="danger-zone">
-                <div><strong>Delete provider</strong><small>Routes, credentials and their policies are removed.</small></div>
-                <Button
-                  variant="danger"
-                  onClick={() => {
-                    if (confirm(`Delete ${selected.name} and every route/credential under it?`)) {
-                      void api<void>(`/api/admin/providers/${selected.id}`, { method: "DELETE" })
-                        .then(() => complete("Provider deleted."))
-                        .catch((caught) => notify(errorMessage(caught), "danger"));
-                    }
-                  }}
-                ><Trash2 size={14} /> Delete</Button>
-              </div>
+              </ResourceDisclosure>
             </section>
           )}
         </div>
@@ -1207,15 +1215,38 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
       {panel?.type === "model" && <ModelForm provider={panel.provider} model={panel.model} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
       {panel?.type === "import" && <ModelImportForm provider={panel.provider} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
       {panel?.type === "credential" && <CredentialForm provider={panel.provider} credential={panel.credential} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
-    </>
+    </div>
   );
 }
 
-function ResourceSection({ title, description, action, children }: { title: string; description: string; action: React.ReactNode; children: React.ReactNode }) {
+function ResourceDisclosure({
+  title,
+  description,
+  summary,
+  action,
+  open,
+  onToggle,
+  children
+}: {
+  title: string;
+  description: string;
+  summary: string;
+  action: React.ReactNode;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
   return (
-    <section className="inspector-section">
-      <header><div><h3>{title}</h3><p>{description}</p></div>{action}</header>
-      {children}
+    <section className={`resource-disclosure${open ? " is-open" : ""}`}>
+      <header>
+        <button type="button" className="resource-disclosure__toggle" onClick={onToggle} aria-expanded={open}>
+          <ChevronDown size={15} />
+          <span><strong>{title}</strong><small>{description}</small></span>
+          <code>{summary}</code>
+        </button>
+        <div className="resource-disclosure__actions">{action}</div>
+      </header>
+      {open && <div className="resource-disclosure__body">{children}</div>}
     </section>
   );
 }
@@ -1509,12 +1540,14 @@ function ModelForm({ provider, model, onClose, onComplete, notify }: { provider:
     }
   };
   return (
-    <Sheet title={model ? "Edit model route" : "Add model route"} eyebrow={provider.name} onClose={onClose}>
+    <Sheet title={model ? "Edit model route" : "Add model route"} eyebrow={provider.name} onClose={onClose} actions={model ? <Button variant="danger" onClick={() => {
+      if (confirm(`Delete route ${model.public_alias}?`)) void api(`/api/admin/models/${model.id}`, { method: "DELETE" }).then(() => onComplete("Model route deleted.")).catch((caught) => notify(errorMessage(caught), "danger"));
+    }}><Trash2 size={14} /> Delete model</Button> : undefined}>
       <ModelFields value={draft} onChange={setDraft} />
-      {model && <div className="danger-zone"><div><strong>Delete route</strong><small>Requests using this alias will stop immediately.</small></div><Button variant="danger" onClick={() => {
-        if (confirm(`Delete route ${model.public_alias}?`)) void api(`/api/admin/models/${model.id}`, { method: "DELETE" }).then(() => onComplete("Model route deleted.")).catch((caught) => notify(errorMessage(caught), "danger"));
-      }}><Trash2 size={14} /> Delete</Button></div>}
-      <div className="sheet-actions"><span /><Button disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : model ? "Save route" : "Create route"}</Button></div>
+      <div className="sheet-actions">
+        <span />
+        <Button disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : model ? "Save route" : "Create route"}</Button>
+      </div>
     </Sheet>
   );
 }
@@ -1618,7 +1651,9 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
   };
 
   return (
-    <Sheet title={credential ? `Edit ${credential.label}` : "Add API key"} eyebrow={provider.name} onClose={onClose} wide>
+    <Sheet title={credential ? `Edit ${credential.label}` : "Add API key"} eyebrow={provider.name} onClose={onClose} wide actions={credential ? <Button variant="danger" onClick={() => {
+      if (confirm(`Delete API key ${credential.label}?`)) void api(`/api/admin/credentials/${credential.id}`, { method: "DELETE" }).then(() => onComplete("API key deleted.")).catch((caught) => notify(errorMessage(caught), "danger"));
+    }}><Trash2 size={14} /> Delete key</Button> : undefined}>
       {credential?.validation_error && <InlineNotice tone="danger">{credential.validation_error}</InlineNotice>}
       <div className="field-pair">
         <label className="field"><span>Label</span><input required placeholder="Production key" value={label} onChange={(e) => setLabel(e.target.value)} /></label>
@@ -1668,10 +1703,10 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
           </div>
         </fieldset>
       )}
-      {credential && <div className="danger-zone"><div><strong>Delete API key</strong><small>The encrypted secret cannot be recovered after deletion.</small></div><Button variant="danger" onClick={() => {
-        if (confirm(`Delete API key ${credential.label}?`)) void api(`/api/admin/credentials/${credential.id}`, { method: "DELETE" }).then(() => onComplete("API key deleted.")).catch((caught) => notify(errorMessage(caught), "danger"));
-      }}><Trash2 size={14} /> Delete</Button></div>}
-      <div className="sheet-actions"><span /><Button disabled={busy} onClick={() => void save()}>{busy ? "Working…" : inspection?.valid ? credential ? "Save API key & routes" : "Add API key & routes" : "Check API key first"}</Button></div>
+      <div className="sheet-actions">
+        <span />
+        <Button disabled={busy} onClick={() => void save()}>{busy ? "Working…" : inspection?.valid ? credential ? "Save API key & routes" : "Add API key & routes" : "Check API key first"}</Button>
+      </div>
     </Sheet>
   );
 }
@@ -1832,39 +1867,55 @@ function ModelsPage({
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [providerFilter, setProviderFilter] = useState("");
+  const [credentialsOpen, setCredentialsOpen] = useState(false);
+  const [modelInspectorOpen, setModelInspectorOpen] = useState(false);
   const [selectedID, setSelectedID] = useState(() => new URLSearchParams(location.search).get("model") || "");
-  useEffect(() => {
-    void api<{ providers: Provider[] }>("/api/admin/providers")
-      .then((result) => {
-        const normalized = normalizeProviders(result.providers);
-        setProviders(normalized);
-        const available = normalized.flatMap((provider) => provider.models);
-        setSelectedID((current) => available.some((model) => model.id === current) ? current : available[0]?.id || "");
-      })
-      .catch((caught) => notify(errorMessage(caught), "danger"))
-      .finally(() => setLoading(false));
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await api<{ providers: Provider[] }>("/api/admin/providers");
+      const normalized = normalizeProviders(result.providers);
+      setProviders(normalized);
+      const available = normalized.flatMap((provider) => provider.models);
+      setSelectedID((current) => available.some((model) => model.id === current) ? current : available[0]?.id || "");
+    } catch (caught) {
+      notify(errorMessage(caught), "danger");
+    } finally {
+      setLoading(false);
+    }
   }, [notify]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+  useEffect(() => setCredentialsOpen(false), [selectedID]);
   const models = providers.flatMap((provider) => provider.models.map((model) => ({ ...model, provider, credentials: provider.credentials })));
   const filtered = models.filter((model) => {
     const needle = query.trim().toLowerCase();
-    return !needle || model.public_alias.toLowerCase().includes(needle) ||
+    const matchesProvider = !providerFilter || model.provider.id === providerFilter;
+    const matchesQuery = !needle || model.public_alias.toLowerCase().includes(needle) ||
       model.upstream_model.toLowerCase().includes(needle) || model.provider.name.toLowerCase().includes(needle);
+    return matchesProvider && matchesQuery;
   });
   const selected = models.find((model) => model.id === selectedID);
   return (
-    <>
-      <PageHeader eyebrow="Public contract" title="Model routes" description="Inspect every public alias as a routable resource, not a provider-specific endpoint." />
+    <div className="resource-page model-page">
+      <PageHeader eyebrow="Public contract" title="Model routes" description="Inspect aliases, apply one model limit to one or every API key, and open only the credential detail you need." />
       {loading ? <PageSkeleton /> : models.length === 0 ? <EmptyState title="No public models" description="Create a route inside a provider to expose it through /v1/models." /> : (
         <div className="ide-resource-workbench">
           <section className="ide-resource-list">
-            <label className="ide-filter"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter aliases, upstreams or providers" /></label>
+            <div className="ide-filter model-filter">
+              <Search size={14} />
+              <label><span className="sr-only">Filter model routes</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter aliases or upstream IDs" /></label>
+              <label><span className="sr-only">Provider</span><select value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)}><option value="">All providers</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
+            </div>
             <header><span>Public alias</span><span>Provider</span><span>Keys</span></header>
             <div>
               {filtered.map((model) => {
                 const ready = model.credentials.filter((item) => item.enabled && item.status === "healthy").length;
                 return (
-                  <button key={model.id} className={selectedID === model.id ? "is-selected" : ""} onClick={() => setSelectedID(model.id)}>
-                    <span><StatusDot state={!model.enabled ? "disabled" : ready ? "healthy" : "exhausted"} /><code>{model.public_alias}</code><small>{model.upstream_model}</small></span>
+                  <button key={model.id} className={selectedID === model.id ? "is-selected" : ""} onClick={() => { setSelectedID(model.id); setModelInspectorOpen(true); }}>
+                    <span><StatusDot state={!model.enabled ? "disabled" : ready ? "healthy" : "exhausted"} /><code>{model.public_alias}</code><small>{model.upstream_model === model.public_alias ? (model.supports_responses ? "Chat + Responses" : "Chat Completions") : model.upstream_model}</small></span>
                     <span>{model.provider.name}</span>
                     <span>{ready}/{model.credentials.length}</span>
                     <ChevronRight size={13} />
@@ -1874,8 +1925,17 @@ function ModelsPage({
             </div>
           </section>
           {selected && (
-            <aside className="ide-resource-inspector">
-              <header><span>Model route</span><h2>{selected.public_alias}</h2><code>{selected.upstream_model}</code></header>
+            <aside className={`ide-resource-inspector${modelInspectorOpen ? " is-open" : ""}`}>
+              <header className="ide-inspector-titlebar">
+                <div><span>Model route</span><h2>{selected.public_alias}</h2><code>{selected.upstream_model}</code></div>
+                <div className="button-row"><button className="console-icon resource-inspector-close" onClick={() => setModelInspectorOpen(false)} aria-label="Close model inspector"><X size={15} /></button><Button variant="danger" onClick={() => {
+                  if (confirm(`Delete route ${selected.public_alias}? Requests using this alias will stop immediately.`)) {
+                    void api(`/api/admin/models/${selected.id}`, { method: "DELETE" })
+                      .then(() => { notify("Model route deleted."); void load(); })
+                      .catch((caught) => notify(errorMessage(caught), "danger"));
+                  }
+                }}><Trash2 size={13} /> Delete</Button></div>
+              </header>
               <div className="inspector-definition">
                 <Definition label="Provider" value={selected.provider.name} />
                 <Definition label="Route state" value={selected.enabled ? "enabled" : "disabled"} />
@@ -1885,9 +1945,12 @@ function ModelsPage({
                 <Definition label="Tokenizer" value={selected.tokenizer} mono />
               </div>
               {selected.strip_parameters.length > 0 && <InlineNotice>Removes unsupported fields: <code>{selected.strip_parameters.join(", ")}</code></InlineNotice>}
-              <section className="ide-inspector-section">
-                <span>Credential path</span>
-                {selected.credentials.map((credential) => (
+              <ModelLimitEditor model={selected} credentials={selected.credentials} notify={notify} onSaved={load} />
+              <section className={`ide-inspector-section inspector-disclosure${credentialsOpen ? " is-open" : ""}`}>
+                <button type="button" onClick={() => setCredentialsOpen((current) => !current)} aria-expanded={credentialsOpen}>
+                  <ChevronDown size={14} /><span><strong>Credential path</strong><small>{selected.credentials.length} API key{selected.credentials.length === 1 ? "" : "s"}</small></span>
+                </button>
+                {credentialsOpen && <div className="inspector-disclosure__body">{selected.credentials.map((credential) => (
                   <div key={credential.id} className={credential.validation_error ? "has-warning" : ""}>
                     <StatusDot state={credential.status} />
                     <strong>{credential.label}</strong>
@@ -1897,7 +1960,7 @@ function ModelsPage({
                       <LimitSummary policy={credential.model_limits[selected.id] || credential.limits} />
                     </span>
                   </div>
-                ))}
+                ))}</div>}
               </section>
               <div className="inspector-actions">
                 <Button variant="quiet" onClick={() => navigate("providers", { provider: selected.provider.id })}>Manage model limits</Button>
@@ -1907,7 +1970,70 @@ function ModelsPage({
           )}
         </div>
       )}
-    </>
+    </div>
+  );
+}
+
+function ModelLimitEditor({
+  model,
+  credentials,
+  notify,
+  onSaved
+}: {
+  model: ModelRoute;
+  credentials: Credential[];
+  notify: (message: string, tone?: "success" | "danger") => void;
+  onSaved: () => Promise<void>;
+}) {
+  const [target, setTarget] = useState("all");
+  const [draft, setDraft] = useState<RatePolicy>(emptyPolicy());
+  const [busy, setBusy] = useState(false);
+  const targetCredential = credentials.find((credential) => credential.id === target);
+  const hasDraftLimit = Object.values(draft).some((value) => value !== null);
+  useEffect(() => {
+    setTarget("all");
+    setDraft(emptyPolicy());
+  }, [model.id]);
+  useEffect(() => {
+    if (target === "all") setDraft(emptyPolicy());
+    else setDraft(targetCredential?.model_limits[model.id] ?? emptyPolicy());
+  }, [target, targetCredential, model.id]);
+  const targets = target === "all" ? credentials : targetCredential ? [targetCredential] : [];
+  const save = async () => {
+    if (targets.length === 0) return;
+    setBusy(true);
+    try {
+      await Promise.all(targets.map((credential) => api(`/api/admin/credentials/${credential.id}/model-limits/${model.id}`, { method: "PUT", json: draft })));
+      notify(`Model limit saved for ${targets.length} API key${targets.length === 1 ? "" : "s"}.`);
+      await onSaved();
+    } catch (caught) {
+      notify(errorMessage(caught), "danger");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const clear = async () => {
+    if (targets.length === 0) return;
+    setBusy(true);
+    try {
+      await Promise.all(targets.map((credential) => api(`/api/admin/credentials/${credential.id}/model-limits/${model.id}`, { method: "DELETE" })));
+      setDraft(emptyPolicy());
+      notify(`Shared provider limits restored for ${targets.length} API key${targets.length === 1 ? "" : "s"}.`);
+      await onSaved();
+    } catch (caught) {
+      notify(errorMessage(caught), "danger");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="model-limit-editor">
+      <header><div><span>Model override</span><strong>Apply limits once</strong></div><code>{target === "all" ? `${credentials.length} keys` : targetCredential?.label}</code></header>
+      <label className="field"><span>Apply to</span><select value={target} onChange={(event) => setTarget(event.target.value)}><option value="all">All API keys</option>{credentials.map((credential) => <option key={credential.id} value={credential.id}>{credential.label}</option>)}</select></label>
+      {target === "all" && <p>Saving replaces this model's override on every API key. Shared provider limits still apply.</p>}
+      <RateFields value={draft} onChange={setDraft} compact />
+      <div className="button-row"><Button disabled={busy || targets.length === 0 || !hasDraftLimit} onClick={() => void save()}>{busy ? "Saving…" : "Save model limit"}</Button><Button variant="quiet" disabled={busy || targets.length === 0} onClick={() => void clear()}>Use shared only</Button></div>
+    </section>
   );
 }
 
@@ -1919,12 +2045,15 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<RequestLog | null>(null);
   const [bodies, setBodies] = useState<{ request: string | null; response: string | null } | null>(null);
+  const [attemptsOpen, setAttemptsOpen] = useState(false);
+  const [bodiesOpen, setBodiesOpen] = useState(false);
+  const [logInspectorOpen, setLogInspectorOpen] = useState(false);
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const result = await api<{ logs: RequestLog[] }>(`/api/admin/logs?limit=100&q=${encodeURIComponent(query)}&status=${encodeURIComponent(status)}`);
       setLogs(result.logs);
-      setSelected((current) => result.logs.find((log) => log.id === current?.id) || result.logs[0] || null);
+      setSelected((current) => result.logs.find((log) => log.id === current?.id) || null);
     } catch (caught) {
       notify(errorMessage(caught), "danger");
     } finally {
@@ -1940,13 +2069,17 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
   }, [query, status]);
   useEffect(() => {
     setBodies(null);
-    if (selected?.body_captured) {
+    setAttemptsOpen(false);
+    setBodiesOpen(false);
+  }, [selected?.id]);
+  useEffect(() => {
+    if (selected?.body_captured && bodiesOpen) {
       void api<{ request: string | null; response: string | null }>(`/api/admin/logs/${selected.id}/bodies`).then(setBodies).catch((caught) => notify(errorMessage(caught), "danger"));
     }
-  }, [selected, notify]);
+  }, [selected, bodiesOpen, notify]);
 
   return (
-    <>
+    <div className="resource-page log-page">
       <PageHeader eyebrow="Request evidence" title="Logs" description="Metadata is always retained. Bodies appear only for routes where encrypted capture is enabled." actions={<Button variant="quiet" onClick={() => void load()}><RefreshCw size={15} /> Refresh</Button>} />
       <div className="ide-resource-workbench log-workbench">
         <section className="ide-resource-list" aria-label="Request logs">
@@ -1970,14 +2103,14 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
             ) : logs.length === 0 ? (
               <EmptyState title="No matching requests" description="Send a request through /v1 or clear the current filters." />
             ) : logs.map((log) => (
-              <button key={log.id} className={selected?.id === log.id ? "is-selected" : ""} onClick={() => setSelected(log)}>
+              <button key={log.id} className={selected?.id === log.id ? "is-selected" : ""} onClick={() => { setSelected(log); setLogInspectorOpen(true); }}>
                 <span>
                   <StatusDot state={log.status_code >= 500 ? "exhausted" : log.status_code >= 400 ? "partial" : "healthy"} />
                   <strong>{new Date(log.created_at).toLocaleTimeString()}</strong>
                   <small>{log.request_id}</small>
                 </span>
                 <span><code>{log.model_alias}</code><small>{log.provider_name} · {log.credential_label || "No credential"}</small></span>
-                <strong className={log.status_code >= 400 ? "text-danger" : ""}>{log.status_code}</strong>
+                <strong className={`status-code status-code--${log.status_code >= 500 ? "fault" : log.status_code >= 400 ? "warning" : "healthy"}`}>{log.status_code}</strong>
                 <small>{log.latency_ms} ms</small>
                 <ChevronRight size={13} />
               </button>
@@ -1985,11 +2118,10 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
           </div>
         </section>
         {selected ? (
-          <aside className="ide-resource-inspector log-resource-inspector">
-            <header>
-              <span>{selected.endpoint} · HTTP {selected.status_code}</span>
-              <h2>{selected.request_id}</h2>
-              <code>{selected.model_alias}</code>
+          <aside className={`ide-resource-inspector log-resource-inspector${logInspectorOpen ? " is-open" : ""}`}>
+            <header className="ide-inspector-titlebar">
+              <div><span>{selected.endpoint} · HTTP {selected.status_code}</span><h2>{selected.request_id}</h2><code>{selected.model_alias}</code></div>
+              <div className="button-row"><strong className={`status-code status-code--${selected.status_code >= 500 ? "fault" : selected.status_code >= 400 ? "warning" : "healthy"}`}>{selected.status_code}</strong><button className="console-icon resource-inspector-close" onClick={() => setLogInspectorOpen(false)} aria-label="Close log inspector"><X size={15} /></button></div>
             </header>
             <div className="log-detail-grid">
               <div><span>Provider</span><strong>{selected.provider_name}</strong></div>
@@ -1997,12 +2129,15 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
               <div><span>Latency</span><strong>{selected.latency_ms} ms</strong></div>
               <div><span>Tokens</span><strong>{selected.input_tokens} in · {selected.output_tokens} out</strong></div>
             </div>
-            <fieldset><legend>Routing attempts</legend><div className="attempt-list">{selected.attempts.length ? selected.attempts.map((attempt, index) => <div key={`${attempt.credential_id}-${index}`}><span>{index + 1}</span><strong>{attempt.credential_label}</strong><code>{attempt.status_code || attempt.error}{attempt.removed_parameters?.length ? ` · removed ${attempt.removed_parameters.join(", ")}` : ""}{attempt.replaced_parameters ? ` · replaced ${Object.entries(attempt.replaced_parameters).map(([from, to]) => `${from} → ${to}`).join(", ")}` : ""}</code><small>{attempt.duration_ms} ms</small></div>) : <p className="console-empty">No attempt detail was recorded.</p>}</div></fieldset>
+            <section className={`inspector-disclosure log-disclosure${attemptsOpen ? " is-open" : ""}`}>
+              <button type="button" onClick={() => setAttemptsOpen((current) => !current)} aria-expanded={attemptsOpen}><ChevronDown size={14} /><span><strong>Routing attempts</strong><small>{selected.attempts.length} recorded</small></span></button>
+              {attemptsOpen && <div className="attempt-list">{selected.attempts.length ? selected.attempts.map((attempt, index) => <div key={`${attempt.credential_id}-${index}`}><span>{index + 1}</span><strong>{attempt.credential_label}</strong><code>{attempt.status_code || attempt.error}{attempt.removed_parameters?.length ? ` · removed ${attempt.removed_parameters.join(", ")}` : ""}{attempt.replaced_parameters ? ` · replaced ${Object.entries(attempt.replaced_parameters).map(([from, to]) => `${from} → ${to}`).join(", ")}` : ""}</code><small>{attempt.duration_ms} ms</small></div>) : <p className="console-empty">No attempt detail was recorded.</p>}</div>}
+            </section>
             {selected.body_captured ? (
-              <div className="body-grid">
-                <section><h3>Request {selected.body_truncated && <small>truncated</small>}</h3><pre>{bodies?.request ?? "Loading encrypted body…"}</pre></section>
-                <section><h3>Response {selected.body_truncated && <small>truncated</small>}</h3><pre>{bodies?.response ?? "No captured response body."}</pre></section>
-              </div>
+              <section className={`inspector-disclosure log-disclosure${bodiesOpen ? " is-open" : ""}`}>
+                <button type="button" onClick={() => setBodiesOpen((current) => !current)} aria-expanded={bodiesOpen}><ChevronDown size={14} /><span><strong>Encrypted bodies</strong><small>{selected.body_truncated ? "captured · truncated" : "captured"}</small></span></button>
+                {bodiesOpen && <div className="body-grid"><section><h3>Request {selected.body_truncated && <small>truncated</small>}</h3><pre>{bodies?.request ?? "Loading encrypted body…"}</pre></section><section><h3>Response {selected.body_truncated && <small>truncated</small>}</h3><pre>{bodies?.response ?? "No captured response body."}</pre></section></div>}
+              </section>
             ) : <InlineNotice>Body capture was off for this model route. Only metadata is available.</InlineNotice>}
           </aside>
         ) : (
@@ -2011,7 +2146,7 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
           </aside>
         )}
       </div>
-    </>
+    </div>
   );
 }
 
