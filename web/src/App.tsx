@@ -8,6 +8,7 @@ import {
   Clipboard,
   Database,
   FileClock,
+  Github,
   KeyRound,
   LogOut,
   Menu,
@@ -15,6 +16,7 @@ import {
   Plus,
   RefreshCw,
   Route,
+  Search,
   Settings as SettingsIcon,
   ShieldCheck,
   Sun,
@@ -34,6 +36,7 @@ import {
 import {
   emptyPolicy,
   type Credential,
+  type DiscoveredModel,
   type ModelRoute,
   type Overview,
   type Provider,
@@ -186,17 +189,28 @@ function App() {
             </button>
           ))}
         </nav>
-        <div className="sidebar__footer">
-          <div className="operator">
-            <span className="operator__avatar">{username.slice(0, 1).toUpperCase()}</span>
-            <span>
-              <strong>{username}</strong>
-              <small>Owner</small>
-            </span>
+        <div className="sidebar__bottom">
+          <a
+            className="sidebar__github"
+            href="https://github.com/jisunahamed/rotakey"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <Github size={15} />
+            <span>Star on GitHub</span>
+          </a>
+          <div className="sidebar__footer">
+            <div className="operator">
+              <span className="operator__avatar">{username.slice(0, 1).toUpperCase()}</span>
+              <span>
+                <strong>{username}</strong>
+                <small>Owner</small>
+              </span>
+            </div>
+            <button className="icon-button" onClick={() => void logout()} aria-label="Sign out">
+              <LogOut size={17} />
+            </button>
           </div>
-          <button className="icon-button" onClick={() => void logout()} aria-label="Sign out">
-            <LogOut size={17} />
-          </button>
         </div>
       </aside>
 
@@ -595,7 +609,14 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
   const [selectedID, setSelectedID] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [panel, setPanel] = useState<null | { type: "wizard" } | { type: "provider"; provider: Provider } | { type: "model"; provider: Provider; model?: ModelRoute } | { type: "credential"; provider: Provider; credential?: Credential }>(null);
+  const [panel, setPanel] = useState<
+    null
+    | { type: "wizard" }
+    | { type: "provider"; provider: Provider }
+    | { type: "model"; provider: Provider; model?: ModelRoute }
+    | { type: "import"; provider: Provider }
+    | { type: "credential"; provider: Provider; credential?: Credential }
+  >(null);
 
   const load = useCallback(async () => {
     setError("");
@@ -610,7 +631,11 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
       setLoading(false);
     }
   }, []);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    const refresh = window.setInterval(() => void load(), 10_000);
+    return () => window.clearInterval(refresh);
+  }, [load]);
 
   const selected = providers.find((provider) => provider.id === selectedID);
   const complete = (message: string) => {
@@ -655,6 +680,11 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
           </section>
           {selected && (
             <section className="resource-inspector">
+              {selected.credentials.some((credential) => credential.validation_error) && (
+                <InlineNotice tone="danger">
+                  {selected.credentials.filter((credential) => credential.validation_error).length} API key warning detected. Open the marked key to replace or re-check it.
+                </InlineNotice>
+              )}
               <div className="inspector-header">
                 <div>
                   <p className="eyebrow">OpenAI-compatible upstream</p>
@@ -671,10 +701,16 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                 <span><strong>{selected.credentials.length}</strong> credentials</span>
                 <span><strong>{selected.timeout_seconds}s</strong> timeout</span>
               </div>
+              <ProviderCapacityStrip provider={selected} />
               <ResourceSection
                 title="Model routes"
-                description="Add multiple upstream models here; each gets its own public alias."
-                action={<Button variant="quiet" onClick={() => setPanel({ type: "model", provider: selected })}><Plus size={14} /> Model</Button>}
+                description="Load the provider model catalog, select routes, or add one manually."
+                action={(
+                  <div className="button-row">
+                    <Button variant="quiet" onClick={() => setPanel({ type: "import", provider: selected })}><RefreshCw size={14} /> Load models</Button>
+                    <Button variant="quiet" onClick={() => setPanel({ type: "model", provider: selected })}><Plus size={14} /> Manual</Button>
+                  </div>
+                )}
               >
                 {selected.models.length === 0 ? (
                   <p className="inline-empty">No route can receive traffic yet.</p>
@@ -684,7 +720,10 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                       <button key={model.id} className="dense-row" onClick={() => setPanel({ type: "model", provider: selected, model })}>
                         <StatusDot state={model.enabled ? "healthy" : "disabled"} />
                         <span><code>{model.public_alias}</code><small>→ {model.upstream_model}</small></span>
-                        <span>{model.supports_responses ? "Responses native" : "Responses translated"}</span>
+                        <span>
+                          {model.supports_responses ? "Responses native" : "Responses translated"}
+                          {model.strip_parameters.length > 0 ? ` · removes ${model.strip_parameters.join(", ")}` : ""}
+                        </span>
                         <ChevronRight size={14} />
                       </button>
                     ))}
@@ -701,9 +740,16 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                 ) : (
                   <div className="dense-table">
                     {selected.credentials.map((credential) => (
-                      <button key={credential.id} className="dense-row" onClick={() => setPanel({ type: "credential", provider: selected, credential })}>
+                      <button key={credential.id} className={`dense-row ${credential.validation_error ? "has-warning" : ""}`} onClick={() => setPanel({ type: "credential", provider: selected, credential })}>
                         <StatusDot state={credential.status} />
-                        <span><strong>{credential.label}</strong><small>{credential.is_primary ? "PRIMARY · " : ""}•••• {credential.secret_suffix}</small></span>
+                        <span>
+                          <strong>{credential.label}</strong>
+                          <small>
+                            {credential.validation_error
+                              ? credential.validation_error
+                              : `${credential.is_primary ? "PRIMARY · " : ""}•••• ${credential.secret_suffix}`}
+                          </small>
+                        </span>
                         <LimitSummary policy={credential.limits} />
                         <ChevronRight size={14} />
                       </button>
@@ -731,6 +777,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
       {panel?.type === "wizard" && <ProviderWizard onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
       {panel?.type === "provider" && <ProviderForm provider={panel.provider} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
       {panel?.type === "model" && <ModelForm provider={panel.provider} model={panel.model} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
+      {panel?.type === "import" && <ModelImportForm provider={panel.provider} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
       {panel?.type === "credential" && <CredentialForm provider={panel.provider} credential={panel.credential} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
     </>
   );
@@ -751,10 +798,51 @@ function LimitSummary({ policy }: { policy: RatePolicy }) {
   return <span className="mono-summary">{active.slice(0, 2).map(([key, value]) => `${key.toUpperCase()} ${value}`).join(" · ")}{active.length > 2 ? ` +${active.length - 2}` : ""}</span>;
 }
 
+const capacityDimensions = ["rps", "rpm", "rpd", "tps", "tpm", "tpd", "tpr"] as const;
+
+function ProviderCapacityStrip({ provider }: { provider: Provider }) {
+  const capacity = provider.capacity;
+  return (
+    <section className="pool-capacity" aria-label={`${provider.name} API key pool capacity`}>
+      <header>
+        <div>
+          <p className="eyebrow">Pool arithmetic</p>
+          <h3>Total provider capacity</h3>
+        </div>
+        <span>{capacity?.ready_keys ?? 0}/{capacity?.total_keys ?? provider.credentials.length} keys ready</span>
+      </header>
+      <div className="pool-capacity__limits">
+        {capacityDimensions.map((dimension) => {
+          const limit = capacity?.limits?.[dimension];
+          return (
+            <div key={dimension}>
+              <span>{dimension.toUpperCase()}</span>
+              <strong>
+                {!limit
+                  ? "—"
+                  : limit.unlimited
+                    ? "∞"
+                    : limit.unknown
+                      ? `? / ${formatCompact(limit.limit)}`
+                      : `${formatCompact(limit.remaining)} / ${formatCompact(limit.limit)}`}
+              </strong>
+              <small>{dimension === "tpr" ? "max / request" : limit?.unlimited ? "unlimited" : "remaining / total"}</small>
+            </div>
+          );
+        })}
+      </div>
+      <p>Shared limits from every ready API key are combined. Usage lowers remaining capacity; adding or removing a key recalculates the total.</p>
+    </section>
+  );
+}
+
 async function testProvider(provider: Provider, notify: (message: string, tone?: "success" | "danger") => void) {
   try {
-    const result = await api<{ ok: boolean; status_code: number; latency_ms: number }>(`/api/admin/providers/${provider.id}/test`, { method: "POST" });
-    notify(result.ok ? `Provider responded in ${result.latency_ms} ms.` : `Provider returned HTTP ${result.status_code}.`, result.ok ? "success" : "danger");
+    const result = await api<{ ok: boolean; valid: number; total: number }>(`/api/admin/providers/${provider.id}/test`, { method: "POST" });
+    notify(
+      result.ok ? `${result.valid}/${result.total} API keys are valid.` : `${result.total - result.valid} of ${result.total} API keys need attention.`,
+      result.ok ? "success" : "danger"
+    );
   } catch (caught) {
     notify(errorMessage(caught), "danger");
   }
@@ -768,40 +856,62 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
     name: "", base_url: "", auth_header: "Authorization", auth_scheme: "Bearer",
     timeout_seconds: 120, enabled: true, allow_private_network: false, extra_headers: {}
   });
-  const [model, setModel] = useState({
-    public_alias: "", upstream_model: "", supports_chat: true, supports_responses: false,
-    default_max_output_tokens: 1024, tokenizer: "heuristic", capture_bodies: false, enabled: true
-  });
   const [credentialDrafts, setCredentialDrafts] = useState<CredentialDraft[]>(() => [newCredentialDraft()]);
   const [limits, setLimits] = useState<RatePolicy>(emptyPolicy);
-  const steps = ["Provider", "Model route", "Credentials", "Review"];
+  const [discoveredModels, setDiscoveredModels] = useState<DiscoveredModel[]>([]);
+  const [selectedModels, setSelectedModels] = useState<Record<string, string>>({});
+  const steps = ["Provider", "API keys", "Models", "Review"];
+
+  const inspectKeys = async () => {
+    const incomplete = credentialDrafts.some((credential) => Boolean(credential.label.trim()) !== Boolean(credential.secret.trim()));
+    const credentials = credentialInputs(credentialDrafts, limits);
+    if (incomplete || credentials.length === 0) {
+      setError("Add at least one complete API key entry before loading models.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const inspections = await Promise.all(credentials.map((credential) => (
+        api<CredentialInspection>("/api/admin/providers/inspect", {
+          method: "POST",
+          json: { provider, secret: credential.secret }
+        })
+      )));
+      const invalid = inspections.findIndex((inspection) => !inspection.valid);
+      if (invalid >= 0) {
+        setError(`${credentials[invalid].label}: ${inspections[invalid].warning || "API key validation failed."}`);
+        return;
+      }
+      const models = mergeModelCatalogs(inspections.map((inspection) => inspection.models));
+      setDiscoveredModels(models);
+      setSelectedModels({});
+      setStep(2);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const finish = async () => {
     setBusy(true);
     setError("");
+    let createdID = "";
     try {
-      const incomplete = credentialDrafts.some((credential) => Boolean(credential.label.trim()) !== Boolean(credential.secret.trim()));
-      if (incomplete) {
-        setError("Every API key entry needs both a label and an API key.");
-        return;
-      }
       const credentials = credentialInputs(credentialDrafts, limits);
       const created = await api<{ id: string }>("/api/admin/providers", { method: "POST", json: provider });
-      if (model.public_alias.trim() && model.upstream_model.trim()) {
-        await api(`/api/admin/providers/${created.id}/models`, { method: "POST", json: model });
+      createdID = created.id;
+      await api(`/api/admin/providers/${created.id}/credentials`, { method: "POST", json: { credentials } });
+      const routes = routeInputsFromSelection(selectedModels);
+      if (routes.length > 0) {
+        await api(`/api/admin/providers/${created.id}/models/bulk`, { method: "POST", json: { models: routes } });
       }
-      if (credentials.length) {
-        await api(`/api/admin/providers/${created.id}/credentials`, { method: "POST", json: { credentials } });
-      }
-      if (credentials.length) {
-        try {
-          await api(`/api/admin/providers/${created.id}/test`, { method: "POST" });
-        } catch (caught) {
-          notify(`Provider saved, but test failed: ${errorMessage(caught)}`, "danger");
-        }
-      }
-      onComplete("Provider setup completed.");
+      onComplete(`Provider saved with ${credentials.length} validated API key${credentials.length === 1 ? "" : "s"} and ${routes.length} model route${routes.length === 1 ? "" : "s"}.`);
     } catch (caught) {
+      if (createdID) {
+        await api(`/api/admin/providers/${createdID}`, { method: "DELETE" }).catch(() => undefined);
+      }
       setError(errorMessage(caught));
     } finally {
       setBusy(false);
@@ -814,28 +924,59 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
         {steps.map((label, index) => <span key={label} className={index <= step ? "is-active" : ""}>{label}</span>)}
       </div>
       {error && <InlineNotice tone="danger">{error}</InlineNotice>}
-      {step === 0 && <ProviderFields value={provider} onChange={setProvider} />}
-      {step === 1 && <ModelFields value={model} onChange={setModel} />}
-      {step === 2 && (
+      {step === 0 && <ProviderFields value={provider} onChange={(next) => {
+        setProvider(next);
+        setDiscoveredModels([]);
+        setSelectedModels({});
+      }} />}
+      {step === 1 && (
         <>
-          <CredentialEntries value={credentialDrafts} onChange={setCredentialDrafts} />
+          <CredentialEntries value={credentialDrafts} onChange={(next) => {
+            setCredentialDrafts(next);
+            setDiscoveredModels([]);
+            setSelectedModels({});
+          }} />
           <fieldset><legend>Shared limits for these API keys</legend><p className="fieldset-note">Usage from every model under this provider consumes the same key limit. Blank means no limit.</p><RateFields value={limits} onChange={setLimits} /></fieldset>
         </>
+      )}
+      {step === 2 && (
+        <ModelCatalog
+          provider={{ slug: providerSlugForUI(provider.name) }}
+          models={discoveredModels}
+          existing={[]}
+          selected={selectedModels}
+          onChange={setSelectedModels}
+        />
       )}
       {step === 3 && (
         <div className="review-list">
           <div><span>Provider</span><strong>{provider.name || "Missing"}</strong><code>{provider.base_url || "Missing base URL"}</code></div>
-          <div><span>Public model</span><strong>{model.public_alias || "No initial route"}</strong><code>{model.upstream_model || "Add later"}</code></div>
-          <div><span>API keys</span><strong>{credentialInputs(credentialDrafts, limits).length}</strong><small>Primary is optional. Secrets are encrypted before storage.</small></div>
+          <div><span>Public models</span><strong>{Object.keys(selectedModels).length}</strong><small>{discoveredModels.length} discovered from the provider.</small></div>
+          <div><span>API keys</span><strong>{credentialInputs(credentialDrafts, limits).length}</strong><small>Validated again on save, then encrypted.</small></div>
         </div>
       )}
       <div className="sheet-actions">
         {step > 0 && <Button variant="quiet" onClick={() => setStep(step - 1)} disabled={busy}>Back</Button>}
         <span />
         {step < steps.length - 1 ? (
-          <Button onClick={() => setStep(step + 1)}>Continue</Button>
+          <Button disabled={busy} onClick={() => {
+            setError("");
+            if (step === 0) {
+              if (!provider.name.trim() || !provider.base_url.trim()) {
+                setError("Provider name and base URL are required.");
+                return;
+              }
+              setStep(1);
+              return;
+            }
+            if (step === 1) {
+              void inspectKeys();
+              return;
+            }
+            setStep(step + 1);
+          }}>{busy ? "Checking API keys…" : step === 1 ? "Check keys & load models" : "Continue"}</Button>
         ) : (
-          <Button onClick={() => void finish()} disabled={busy}>{busy ? "Creating provider…" : "Create and test"}</Button>
+          <Button onClick={() => void finish()} disabled={busy}>{busy ? "Creating provider…" : "Create provider"}</Button>
         )}
       </div>
     </Sheet>
@@ -898,6 +1039,17 @@ function ModelFields({ value, onChange }: { value: ModelDraft; onChange: (value:
       </div>
       <Toggle checked={value.supports_chat} onChange={(supports_chat) => onChange({ ...value, supports_chat })} label="Upstream supports Chat Completions" />
       <Toggle checked={value.supports_responses} onChange={(supports_responses) => onChange({ ...value, supports_responses })} label="Upstream supports Responses natively" description="When off, the gateway translates the supported Responses subset to Chat Completions." />
+      <label className="field">
+        <span>Remove unsupported request fields <small>Top-level names, comma separated. Changes apply only to this route.</small></span>
+        <input
+          placeholder="thinking"
+          value={value.strip_parameters.join(", ")}
+          onChange={(event) => onChange({
+            ...value,
+            strip_parameters: event.target.value.split(",").map((item) => item.trim()).filter(Boolean)
+          })}
+        />
+      </label>
       <Toggle checked={value.capture_bodies} onChange={(capture_bodies) => onChange({ ...value, capture_bodies })} label="Capture encrypted request and response bodies" description="Off by default. Captured bodies follow the configured retention window." />
       <Toggle checked={value.enabled} onChange={(enabled) => onChange({ ...value, enabled })} label="Enable public route" />
     </div>
@@ -909,11 +1061,11 @@ function ModelForm({ provider, model, onClose, onComplete, notify }: { provider:
     public_alias: model.public_alias, upstream_model: model.upstream_model,
     supports_chat: model.supports_chat, supports_responses: model.supports_responses,
     default_max_output_tokens: model.default_max_output_tokens, tokenizer: model.tokenizer,
-    capture_bodies: model.capture_bodies, enabled: model.enabled
+    capture_bodies: model.capture_bodies, strip_parameters: model.strip_parameters ?? [], enabled: model.enabled
   } : {
     public_alias: `${provider.slug}/`, upstream_model: "", supports_chat: true,
     supports_responses: false, default_max_output_tokens: 1024,
-    tokenizer: "heuristic", capture_bodies: false, enabled: true
+    tokenizer: "heuristic", capture_bodies: false, strip_parameters: [], enabled: true
   });
   const [busy, setBusy] = useState(false);
   const save = async () => {
@@ -939,12 +1091,23 @@ function ModelForm({ provider, model, onClose, onComplete, notify }: { provider:
   );
 }
 
+type CredentialInspection = {
+  valid: boolean;
+  status_code: number;
+  latency_ms: number;
+  models: DiscoveredModel[];
+  warning?: string;
+};
+
 function CredentialForm({ provider, credential, onClose, onComplete, notify }: { provider: Provider; credential?: Credential; onClose: () => void; onComplete: (message: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
   const [label, setLabel] = useState(credential?.label ?? "");
   const [secret, setSecret] = useState("");
   const [isPrimary, setIsPrimary] = useState(credential?.is_primary ?? false);
   const [enabled, setEnabled] = useState(credential?.enabled ?? true);
   const [limits, setLimits] = useState<RatePolicy>(credential?.limits ?? emptyPolicy());
+  const [inspection, setInspection] = useState<CredentialInspection | null>(null);
+  const [checkedSecret, setCheckedSecret] = useState("");
+  const [selectedModels, setSelectedModels] = useState<Record<string, string>>({});
   const [selectedModel, setSelectedModel] = useState(provider.models[0]?.id ?? "");
   const [modelLimits, setModelLimits] = useState<RatePolicy>(() => credential?.model_limits[provider.models[0]?.id] ?? emptyPolicy());
   const [busy, setBusy] = useState(false);
@@ -953,17 +1116,72 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
     setModelLimits(credential?.model_limits[selectedModel] ?? emptyPolicy());
   }, [selectedModel, credential]);
 
+  const checkKey = async () => {
+    setBusy(true);
+    setInspection(null);
+    setSelectedModels({});
+    try {
+      let result: CredentialInspection;
+      if (credential && !secret.trim()) {
+        result = await api<CredentialInspection>(`/api/admin/providers/${provider.id}/models/discover`, {
+          method: "POST",
+          json: { credential_id: credential.id }
+        });
+      } else {
+        if (secret.trim().length < 8) {
+          notify("Enter a complete API key before checking it.", "danger");
+          return;
+        }
+        result = await api<CredentialInspection>(`/api/admin/providers/${provider.id}/credentials/inspect`, {
+          method: "POST",
+          json: { secret }
+        });
+      }
+      setInspection(result);
+      setCheckedSecret(secret.trim());
+      if (!result.valid) {
+        notify(result.warning || "The provider rejected this API key.", "danger");
+      }
+    } catch (caught) {
+      notify(errorMessage(caught), "danger");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const save = async () => {
+    if (!inspection?.valid || (secret.trim() && checkedSecret !== secret.trim())) {
+      await checkKey();
+      return;
+    }
     setBusy(true);
     try {
+      let discovered: DiscoveredModel[] = inspection.models;
       if (credential) {
-        await api(`/api/admin/credentials/${credential.id}`, { method: "PUT", json: { label, secret, is_primary: isPrimary, enabled, limits } });
-        onComplete("API key and shared limits updated.");
+        const result = await api<{ models: DiscoveredModel[] }>(`/api/admin/credentials/${credential.id}`, {
+          method: "PUT",
+          json: { label, secret, is_primary: isPrimary, enabled, limits }
+        });
+        discovered = result.models ?? discovered;
       } else {
         const credentials = [{ label, secret, is_primary: isPrimary, enabled, limits }];
-        await api(`/api/admin/providers/${provider.id}/credentials`, { method: "POST", json: { credentials } });
-        onComplete("API key added.");
+        const result = await api<{ models: DiscoveredModel[] }>(`/api/admin/providers/${provider.id}/credentials`, {
+          method: "POST",
+          json: { credentials }
+        });
+        discovered = result.models ?? discovered;
       }
+      const discoveredIDs = new Set(discovered.map((model) => model.id));
+      const routes = routeInputsFromSelection(
+        Object.fromEntries(Object.entries(selectedModels).filter(([id]) => discoveredIDs.has(id)))
+      );
+      if (routes.length > 0) {
+        await api(`/api/admin/providers/${provider.id}/models/bulk`, {
+          method: "POST",
+          json: { models: routes }
+        });
+      }
+      onComplete(`${credential ? "API key updated" : "API key added"} and ${routes.length} model route${routes.length === 1 ? "" : "s"} enabled.`);
     } catch (caught) {
       notify(errorMessage(caught), "danger");
     } finally {
@@ -973,12 +1191,42 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
 
   return (
     <Sheet title={credential ? `Edit ${credential.label}` : "Add API key"} eyebrow={provider.name} onClose={onClose} wide>
+      {credential?.validation_error && <InlineNotice tone="danger">{credential.validation_error}</InlineNotice>}
       <div className="field-pair">
         <label className="field"><span>Label</span><input required placeholder="Production key" value={label} onChange={(e) => setLabel(e.target.value)} /></label>
-        <label className="field"><span>{credential ? "Replacement API key" : "API key"} <small>{credential ? "Leave blank to keep current" : ""}</small></span><input type="password" required={!credential} autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} /></label>
+        <label className="field"><span>{credential ? "Replacement API key" : "API key"} <small>{credential ? "Leave blank to check the saved key" : ""}</small></span><input type="password" required={!credential} autoComplete="off" value={secret} onChange={(e) => {
+          setSecret(e.target.value);
+          setInspection(null);
+          setSelectedModels({});
+        }} /></label>
       </div>
       <Toggle checked={isPrimary} onChange={setIsPrimary} label="Use as primary" description="Optional. This key is tried first while it has capacity; other keys remain fallbacks." />
       <Toggle checked={enabled} onChange={setEnabled} label="Enable API key" description="Re-enabling also clears quarantine and circuit-breaker state." />
+      <div className="validation-action">
+        <div>
+          <strong>Validate key and discover models</strong>
+          <small>Rotakey calls the provider’s `/models` endpoint now and checks again when saving.</small>
+        </div>
+        <Button type="button" variant="quiet" disabled={busy} onClick={() => void checkKey()}>
+          <RefreshCw size={14} /> {busy ? "Checking…" : "Check & load models"}
+        </Button>
+      </div>
+      {inspection && (
+        <InlineNotice tone={inspection.valid ? "success" : "danger"}>
+          {inspection.valid
+            ? `API key valid · ${inspection.models.length} models loaded · ${inspection.latency_ms} ms`
+            : inspection.warning || "API key validation failed."}
+        </InlineNotice>
+      )}
+      {inspection?.valid && (
+        <ModelCatalog
+          provider={provider}
+          models={inspection.models}
+          existing={provider.models}
+          selected={selectedModels}
+          onChange={setSelectedModels}
+        />
+      )}
       <fieldset><legend>Shared API key limits</legend><p className="fieldset-note">Requests from every model under this provider consume these limits together. Blank means no limit.</p><RateFields value={limits} onChange={setLimits} /></fieldset>
       {credential && provider.models.length > 0 && (
         <fieldset>
@@ -995,8 +1243,154 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
       {credential && <div className="danger-zone"><div><strong>Delete API key</strong><small>The encrypted secret cannot be recovered after deletion.</small></div><Button variant="danger" onClick={() => {
         if (confirm(`Delete API key ${credential.label}?`)) void api(`/api/admin/credentials/${credential.id}`, { method: "DELETE" }).then(() => onComplete("API key deleted.")).catch((caught) => notify(errorMessage(caught), "danger"));
       }}><Trash2 size={14} /> Delete</Button></div>}
-      <div className="sheet-actions"><span /><Button disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : credential ? "Save API key" : "Add API key"}</Button></div>
+      <div className="sheet-actions"><span /><Button disabled={busy} onClick={() => void save()}>{busy ? "Working…" : inspection?.valid ? credential ? "Save API key & routes" : "Add API key & routes" : "Check API key first"}</Button></div>
     </Sheet>
+  );
+}
+
+function ModelImportForm({ provider, onClose, onComplete, notify }: { provider: Provider; onClose: () => void; onComplete: (message: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
+  const [inspection, setInspection] = useState<CredentialInspection | null>(null);
+  const [selected, setSelected] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    setBusy(true);
+    setInspection(null);
+    setSelected({});
+    try {
+      const result = await api<CredentialInspection>(`/api/admin/providers/${provider.id}/models/discover`, {
+        method: "POST",
+        json: {}
+      });
+      setInspection(result);
+      if (!result.valid) notify(result.warning || "Models could not be loaded.", "danger");
+    } catch (caught) {
+      notify(errorMessage(caught), "danger");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => { void load(); }, []);
+
+  const save = async () => {
+    const routes = routeInputsFromSelection(selected);
+    if (routes.length === 0) {
+      notify("Select at least one new model route.", "danger");
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await api<{ created: number; skipped: number }>(`/api/admin/providers/${provider.id}/models/bulk`, {
+        method: "POST",
+        json: { models: routes }
+      });
+      onComplete(`${result.created} model route${result.created === 1 ? "" : "s"} enabled${result.skipped ? ` · ${result.skipped} already existed` : ""}.`);
+    } catch (caught) {
+      notify(errorMessage(caught), "danger");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Sheet title="Load provider models" eyebrow={provider.name} onClose={onClose} wide>
+      <div className="validation-action">
+        <div><strong>Provider model catalog</strong><small>Uses the primary API key first, then records whether that key is valid.</small></div>
+        <Button variant="quiet" disabled={busy} onClick={() => void load()}><RefreshCw size={14} /> Reload</Button>
+      </div>
+      {busy && !inspection && <PageSkeleton />}
+      {inspection && (
+        <InlineNotice tone={inspection.valid ? "success" : "danger"}>
+          {inspection.valid
+            ? `${inspection.models.length} models loaded in ${inspection.latency_ms} ms.`
+            : inspection.warning || "The API key could not load models."}
+        </InlineNotice>
+      )}
+      {inspection?.valid && (
+        <ModelCatalog
+          provider={provider}
+          models={inspection.models}
+          existing={provider.models}
+          selected={selected}
+          onChange={setSelected}
+        />
+      )}
+      <div className="sheet-actions"><span /><Button disabled={busy || !inspection?.valid} onClick={() => void save()}>{busy ? "Saving…" : `Enable ${Object.keys(selected).length} selected`}</Button></div>
+    </Sheet>
+  );
+}
+
+function ModelCatalog({
+  provider,
+  models,
+  existing,
+  selected,
+  onChange
+}: {
+  provider: Pick<Provider, "slug">;
+  models: DiscoveredModel[];
+  existing: ModelRoute[];
+  selected: Record<string, string>;
+  onChange: (selected: Record<string, string>) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const existingIDs = useMemo(() => new Set(existing.map((model) => model.upstream_model)), [existing]);
+  const visible = models.filter((model) => {
+    const needle = query.trim().toLowerCase();
+    return !needle || model.id.toLowerCase().includes(needle) || model.owned_by?.toLowerCase().includes(needle);
+  });
+  const selectable = visible.filter((model) => !existingIDs.has(model.id));
+  const selectedCount = Object.keys(selected).length;
+  return (
+    <section className="model-catalog">
+      <header>
+        <div><strong>Select public models</strong><small>{selectedCount} selected · {existingIDs.size} already routed</small></div>
+        <div className="button-row">
+          <Button type="button" variant="quiet" onClick={() => {
+            const next = { ...selected };
+            for (const model of selectable) next[model.id] = next[model.id] || defaultPublicAlias(provider.slug, model.id);
+            onChange(next);
+          }}>Select visible</Button>
+          {selectedCount > 0 && <Button type="button" variant="quiet" onClick={() => onChange({})}>Clear</Button>}
+        </div>
+      </header>
+      <label className="catalog-search">
+        <Search size={15} />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter model IDs" />
+      </label>
+      <div className="model-catalog__list">
+        {visible.map((model) => {
+          const alreadyRouted = existingIDs.has(model.id);
+          const checked = alreadyRouted || selected[model.id] !== undefined;
+          return (
+            <div className={`catalog-model ${alreadyRouted ? "is-existing" : ""}`} key={model.id}>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={alreadyRouted}
+                  onChange={(event) => {
+                    const next = { ...selected };
+                    if (event.target.checked) next[model.id] = defaultPublicAlias(provider.slug, model.id);
+                    else delete next[model.id];
+                    onChange(next);
+                  }}
+                />
+                <span><code>{model.id}</code><small>{alreadyRouted ? "Already routed" : model.owned_by || "Provider model"}</small></span>
+              </label>
+              {!alreadyRouted && selected[model.id] !== undefined && (
+                <label className="catalog-alias">
+                  <span>Public alias</span>
+                  <input value={selected[model.id]} onChange={(event) => onChange({ ...selected, [model.id]: event.target.value })} />
+                </label>
+              )}
+            </div>
+          );
+        })}
+        {visible.length === 0 && <p className="inline-empty">No provider models match this filter.</p>}
+      </div>
+    </section>
   );
 }
 
@@ -1017,7 +1411,7 @@ function ModelsPage({ notify }: { notify: (message: string, tone?: "success" | "
             <div className="table-row" key={model.id}>
               <span><StatusDot state={model.enabled ? "healthy" : "disabled"} /><code>{model.public_alias}</code></span>
               <span><strong>{model.provider.name}</strong><small>{model.upstream_model}</small></span>
-              <span><small>Chat · {model.supports_responses ? "Responses native" : "Responses translated"}</small></span>
+              <span><small>Chat · {model.supports_responses ? "Responses native" : "Responses translated"}{model.strip_parameters.length ? ` · removes ${model.strip_parameters.join(", ")}` : ""}</small></span>
               <span>{model.credentials.filter((item) => item.enabled && item.status === "healthy").length}/{model.credentials.length} ready</span>
               <span>{model.capture_bodies ? "30d encrypted" : "Metadata only"}</span>
             </div>
@@ -1234,17 +1628,61 @@ function credentialInputs(value: CredentialDraft[], limits: RatePolicy) {
     }));
 }
 
+function mergeModelCatalogs(catalogs: DiscoveredModel[][]): DiscoveredModel[] {
+  const byID = new Map<string, DiscoveredModel>();
+  for (const catalog of catalogs) {
+    for (const model of catalog ?? []) {
+      if (!byID.has(model.id)) byID.set(model.id, model);
+    }
+  }
+  return [...byID.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function defaultPublicAlias(providerSlug: string, upstreamModel: string) {
+  const raw = upstreamModel.startsWith(`${providerSlug}/`)
+    ? upstreamModel
+    : `${providerSlug}/${upstreamModel}`;
+  const safe = raw.replace(/[^A-Za-z0-9._:/-]+/g, "-").replace(/^-+|-+$/g, "");
+  return safe.slice(0, 128);
+}
+
+function providerSlugForUI(name: string) {
+  const slug = name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 63);
+  return slug.length >= 2 ? slug : "provider";
+}
+
+function routeInputsFromSelection(selected: Record<string, string>): ModelDraft[] {
+  return Object.entries(selected).map(([upstreamModel, publicAlias]) => ({
+    public_alias: publicAlias.trim(),
+    upstream_model: upstreamModel,
+    supports_chat: true,
+    supports_responses: false,
+    default_max_output_tokens: 1024,
+    tokenizer: "heuristic",
+    capture_bodies: false,
+    strip_parameters: [],
+    enabled: true,
+  }));
+}
+
 function normalizeProviders(providers: Provider[] | null | undefined): Provider[] {
   return (providers ?? []).map((provider) => ({
     ...provider,
     extra_headers: provider.extra_headers ?? {},
-    models: provider.models ?? [],
-    credentials: provider.credentials ?? [],
+    models: (provider.models ?? []).map((model) => ({ ...model, strip_parameters: model.strip_parameters ?? [] })),
+    credentials: (provider.credentials ?? []).map((credential) => ({
+      ...credential,
+      validation_error: credential.validation_error ?? "",
+    })),
   }));
 }
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("en", { notation: value > 9999 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value);
+}
+
+function formatCompact(value: number) {
+  return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
 function errorMessage(caught: unknown) {

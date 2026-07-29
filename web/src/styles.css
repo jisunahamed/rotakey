@@ -263,11 +263,35 @@ h3 {
   color: #6fc1cf;
 }
 
+.sidebar__bottom {
+  display: grid;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.sidebar__github {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 10px;
+  color: #aeb8c1;
+  border: 1px solid rgb(255 255 255 / 0.09);
+  border-radius: 7px;
+  font-size: 0.72rem;
+  text-decoration: none;
+}
+
+.sidebar__github:hover {
+  color: #fff;
+  background: rgb(255 255 255 / 0.045);
+  border-color: #2f4350;
+}
+
 .sidebar__footer {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: auto;
   padding: 13px 7px 3px;
   border-top: 1px solid rgb(255 255 255 / 0.09);
 }
@@ -860,6 +884,92 @@ h3 {
   font-size: 0.85rem;
 }
 
+.pool-capacity {
+  margin: 18px 0 4px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.pool-capacity > header {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.pool-capacity > header h3 {
+  margin: 2px 0 0;
+  font-size: 0.86rem;
+}
+
+.pool-capacity > header > span {
+  color: var(--muted);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.68rem;
+}
+
+.pool-capacity__limits {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.pool-capacity__limits > div {
+  min-width: 0;
+  padding: 12px 10px;
+  border-right: 1px solid var(--line);
+}
+
+.pool-capacity__limits > div:last-child {
+  border-right: 0;
+}
+
+.pool-capacity__limits span,
+.pool-capacity__limits strong,
+.pool-capacity__limits small {
+  display: block;
+}
+
+.pool-capacity__limits span {
+  color: var(--muted);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.59rem;
+  letter-spacing: 0.06em;
+}
+
+.pool-capacity__limits strong {
+  margin-top: 4px;
+  overflow: hidden;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pool-capacity__limits small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.57rem;
+}
+
+.pool-capacity > p {
+  margin: 0;
+  padding: 9px 14px;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+  font-size: 0.65rem;
+}
+
+.dense-row.has-warning {
+  box-shadow: inset 3px 0 0 var(--red);
+}
+
+.dense-row.has-warning small {
+  color: var(--red);
+}
+
 .inspector-section {
   padding: 23px 25px 3px;
 }
@@ -1251,6 +1361,159 @@ fieldset legend {
 .credential-entry-list {
   display: grid;
   gap: 12px;
+}
+
+.validation-action {
+  display: flex;
+  min-height: 64px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  background: var(--blue-soft);
+  border: 1px solid color-mix(in srgb, var(--blue) 30%, var(--line));
+}
+
+.validation-action strong,
+.validation-action small {
+  display: block;
+}
+
+.validation-action strong {
+  font-size: 0.76rem;
+}
+
+.validation-action small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.65rem;
+}
+
+.model-catalog {
+  display: grid;
+  gap: 10px;
+  min-height: 220px;
+  padding: 12px;
+  border: 1px solid var(--line);
+}
+
+.model-catalog > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.model-catalog > header strong,
+.model-catalog > header small {
+  display: block;
+}
+
+.model-catalog > header strong {
+  font-size: 0.76rem;
+}
+
+.model-catalog > header small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.64rem;
+}
+
+.catalog-search {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+
+.catalog-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  outline: 0;
+}
+
+.model-catalog__list {
+  display: grid;
+  max-height: 390px;
+  overflow: auto;
+  border: 1px solid var(--line);
+}
+
+.catalog-model {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(210px, 0.7fr);
+  align-items: center;
+  gap: 14px;
+  min-height: 54px;
+  padding: 9px 11px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.catalog-model:last-child {
+  border-bottom: 0;
+}
+
+.catalog-model.is-existing {
+  background: var(--surface-2);
+}
+
+.catalog-model > label:first-child {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 9px;
+  cursor: pointer;
+}
+
+.catalog-model input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  margin: 2px 0 0;
+  accent-color: var(--blue);
+}
+
+.catalog-model code,
+.catalog-model small {
+  display: block;
+}
+
+.catalog-model code {
+  overflow: hidden;
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalog-model small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.61rem;
+}
+
+.catalog-alias {
+  display: grid;
+  gap: 4px;
+}
+
+.catalog-alias span {
+  color: var(--muted);
+  font-size: 0.6rem;
+}
+
+.catalog-alias input {
+  width: 100%;
+  min-height: 32px;
+  padding: 5px 7px;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.64rem;
 }
 
 .credential-entry-list__intro,
@@ -2025,6 +2288,14 @@ button.table-row:hover {
     grid-template-columns: 1fr;
   }
 
+  .pool-capacity__limits {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .pool-capacity__limits > div {
+    border-bottom: 1px solid var(--line);
+  }
+
   .resource-list {
     display: flex;
     overflow-x: auto;
@@ -2149,6 +2420,24 @@ button.table-row:hover {
   .credential-entry-list__intro {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .validation-action,
+  .model-catalog > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .validation-action .button {
+    width: 100%;
+  }
+
+  .catalog-model {
+    grid-template-columns: 1fr;
+  }
+
+  .pool-capacity__limits {
+    grid-template-columns: 1fr 1fr;
   }
 
   .credential-entry-list__intro .button {

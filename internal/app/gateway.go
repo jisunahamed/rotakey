@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -98,6 +99,15 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 			return
 		}
 		translated = true
+	}
+	strippedParameters := stripTopLevelParameters(upstreamPayload, route.Model.StripParameters)
+	if len(strippedParameters) > 0 {
+		s.logger.Info(
+			"removed unsupported upstream parameters",
+			"request_id", requestID,
+			"model", route.Model.PublicAlias,
+			"parameters", strings.Join(strippedParameters, ","),
+		)
 	}
 	upstreamPayload["model"] = route.Model.UpstreamModel
 	inputEstimate, outputReservation := prepareTokenReservation(
@@ -358,6 +368,17 @@ func cloneMap(source map[string]any) map[string]any {
 	return target
 }
 
+func stripTopLevelParameters(payload map[string]any, parameters []string) []string {
+	stripped := make([]string, 0, len(parameters))
+	for _, parameter := range parameters {
+		if _, exists := payload[parameter]; exists {
+			delete(payload, parameter)
+			stripped = append(stripped, parameter)
+		}
+	}
+	return stripped
+}
+
 func prepareTokenReservation(
 	payload map[string]any,
 	endpoint string,
@@ -483,9 +504,10 @@ func (s *Server) markCredentialFailure(ctx context.Context, credentialID string,
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
 		if _, err := s.db.Exec(ctx, `
 			UPDATE credentials SET status='quarantined', cooldown_until=NULL,
+			    validation_error=$2, last_validated_at=NOW(),
 			    consecutive_failures=consecutive_failures+1, updated_at=NOW()
 			WHERE id=$1
-		`, credentialID); err != nil {
+		`, credentialID, fmt.Sprintf("Provider rejected this API key during a request (HTTP %d).", status)); err != nil {
 			s.logger.Warn("credential quarantine state write failed", "credential_id", credentialID, "error", err)
 		}
 		return
@@ -520,6 +542,7 @@ func (s *Server) markCredentialSuccess(ctx context.Context, credentialID string)
 	_ = s.redis.Del(ctx, "failures:"+credentialID, "cooldown:"+credentialID).Err()
 	_, _ = s.db.Exec(ctx, `
 		UPDATE credentials SET status='healthy', cooldown_until=NULL,
+		    validation_error='', last_validated_at=NOW(),
 		    consecutive_failures=0, updated_at=NOW()
 		WHERE id=$1 AND status <> 'quarantined'
 	`, credentialID)

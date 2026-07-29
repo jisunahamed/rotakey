@@ -40,6 +40,25 @@ type Provider struct {
 	UpdatedAt           time.Time         `json:"updated_at"`
 	Models              []ModelRoute      `json:"models"`
 	Credentials         []CredentialView  `json:"credentials"`
+	Capacity            *ProviderCapacity `json:"capacity,omitempty"`
+}
+
+type AggregateLimit struct {
+	Limit     int64 `json:"limit"`
+	Remaining int64 `json:"remaining"`
+	Unlimited bool  `json:"unlimited"`
+	Unknown   bool  `json:"unknown"`
+}
+
+type ProviderCapacity struct {
+	TotalKeys int                       `json:"total_keys"`
+	ReadyKeys int                       `json:"ready_keys"`
+	Limits    map[string]AggregateLimit `json:"limits"`
+}
+
+type DiscoveredModel struct {
+	ID      string `json:"id"`
+	OwnedBy string `json:"owned_by,omitempty"`
 }
 
 type ModelRoute struct {
@@ -52,24 +71,27 @@ type ModelRoute struct {
 	DefaultMaxOutputTokens int       `json:"default_max_output_tokens"`
 	Tokenizer              string    `json:"tokenizer"`
 	CaptureBodies          bool      `json:"capture_bodies"`
+	StripParameters        []string  `json:"strip_parameters"`
 	Enabled                bool      `json:"enabled"`
 	CreatedAt              time.Time `json:"created_at"`
 	UpdatedAt              time.Time `json:"updated_at"`
 }
 
 type CredentialView struct {
-	ID            string                `json:"id"`
-	ProviderID    string                `json:"provider_id"`
-	Label         string                `json:"label"`
-	SecretSuffix  string                `json:"secret_suffix"`
-	IsPrimary     bool                  `json:"is_primary"`
-	Enabled       bool                  `json:"enabled"`
-	Status        string                `json:"status"`
-	CooldownUntil *time.Time            `json:"cooldown_until,omitempty"`
-	Limits        RatePolicy            `json:"limits"`
-	ModelLimits   map[string]RatePolicy `json:"model_limits"`
-	CreatedAt     time.Time             `json:"created_at"`
-	UpdatedAt     time.Time             `json:"updated_at"`
+	ID              string                `json:"id"`
+	ProviderID      string                `json:"provider_id"`
+	Label           string                `json:"label"`
+	SecretSuffix    string                `json:"secret_suffix"`
+	IsPrimary       bool                  `json:"is_primary"`
+	Enabled         bool                  `json:"enabled"`
+	Status          string                `json:"status"`
+	CooldownUntil   *time.Time            `json:"cooldown_until,omitempty"`
+	LastValidatedAt *time.Time            `json:"last_validated_at,omitempty"`
+	ValidationError string                `json:"validation_error,omitempty"`
+	Limits          RatePolicy            `json:"limits"`
+	ModelLimits     map[string]RatePolicy `json:"model_limits"`
+	CreatedAt       time.Time             `json:"created_at"`
+	UpdatedAt       time.Time             `json:"updated_at"`
 }
 
 type credentialRuntime struct {

@@ -102,7 +102,7 @@ func (s *Server) loadRoute(ctx context.Context, alias string) (routeRuntime, err
 		SELECT
 			m.id, m.provider_id, m.public_alias, m.upstream_model, m.supports_chat,
 			m.supports_responses, m.default_max_output_tokens, m.tokenizer,
-			m.capture_bodies, m.enabled, m.created_at, m.updated_at,
+			m.capture_bodies, m.strip_parameters, m.enabled, m.created_at, m.updated_at,
 			p.id, p.name, p.slug, p.base_url, p.auth_header, p.auth_scheme,
 			p.extra_headers, p.timeout_seconds, p.enabled, p.allow_private_network,
 			p.created_at, p.updated_at
@@ -123,6 +123,7 @@ func (s *Server) loadRoute(ctx context.Context, alias string) (routeRuntime, err
 		&route.Model.DefaultMaxOutputTokens,
 		&route.Model.Tokenizer,
 		&route.Model.CaptureBodies,
+		&route.Model.StripParameters,
 		&route.Model.Enabled,
 		&route.Model.CreatedAt,
 		&route.Model.UpdatedAt,
@@ -152,7 +153,8 @@ func (s *Server) loadCredentials(ctx context.Context, providerID, modelID string
 	rows, err := s.db.Query(ctx, `
 		SELECT
 			c.id, c.provider_id, c.label, c.secret_cipher, c.secret_suffix,
-			c.is_primary, c.enabled, c.status, c.cooldown_until, c.created_at, c.updated_at,
+			c.is_primary, c.enabled, c.status, c.cooldown_until,
+			c.last_validated_at, c.validation_error, c.created_at, c.updated_at,
 			r.scope_key, r.rps, r.rpm, r.rpd, r.tps, r.tpm, r.tpd, r.tpr
 		FROM credentials c
 		LEFT JOIN rate_policies r
@@ -173,13 +175,16 @@ func (s *Server) loadCredentials(ctx context.Context, providerID, modelID string
 			ciphertext                          []byte
 			isPrimary, enabled                  bool
 			cooldown                            *time.Time
+			lastValidated                       *time.Time
+			validationError                     string
 			createdAt, updatedAt                time.Time
 			scope                               *string
 			policy                              RatePolicy
 		)
 		if err := rows.Scan(
 			&id, &provider, &label, &ciphertext, &suffix,
-			&isPrimary, &enabled, &status, &cooldown, &createdAt, &updatedAt,
+			&isPrimary, &enabled, &status, &cooldown, &lastValidated, &validationError,
+			&createdAt, &updatedAt,
 			&scope, &policy.RPS, &policy.RPM, &policy.RPD, &policy.TPS,
 			&policy.TPM, &policy.TPD, &policy.TPR,
 		); err != nil {
@@ -192,18 +197,20 @@ func (s *Server) loadCredentials(ctx context.Context, providerID, modelID string
 				return nil, fmt.Errorf("decrypt credential %s: %w", id, err)
 			}
 			entry = &credentialRuntime{CredentialView: CredentialView{
-				ID:            id,
-				ProviderID:    provider,
-				Label:         label,
-				SecretSuffix:  suffix,
-				IsPrimary:     isPrimary,
-				Enabled:       enabled,
-				Status:        status,
-				CooldownUntil: cooldown,
-				Limits:        RatePolicy{},
-				ModelLimits:   map[string]RatePolicy{},
-				CreatedAt:     createdAt,
-				UpdatedAt:     updatedAt,
+				ID:              id,
+				ProviderID:      provider,
+				Label:           label,
+				SecretSuffix:    suffix,
+				IsPrimary:       isPrimary,
+				Enabled:         enabled,
+				Status:          status,
+				CooldownUntil:   cooldown,
+				LastValidatedAt: lastValidated,
+				ValidationError: validationError,
+				Limits:          RatePolicy{},
+				ModelLimits:     map[string]RatePolicy{},
+				CreatedAt:       createdAt,
+				UpdatedAt:       updatedAt,
 			}, Secret: secret}
 			byID[id] = entry
 			order = append(order, id)

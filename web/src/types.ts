@@ -28,6 +28,7 @@ export type ModelRoute = {
   default_max_output_tokens: number;
   tokenizer: string;
   capture_bodies: boolean;
+  strip_parameters: string[];
   enabled: boolean;
   created_at: string;
   updated_at: string;
@@ -42,6 +43,8 @@ export type Credential = {
   enabled: boolean;
   status: "healthy" | "cooldown" | "quarantined" | "disabled";
   cooldown_until?: string;
+  last_validated_at?: string;
+  validation_error?: string;
   limits: RatePolicy;
   model_limits: Record<string, RatePolicy>;
   created_at: string;
@@ -63,6 +66,21 @@ export type Provider = {
   updated_at: string;
   models: ModelRoute[];
   credentials: Credential[];
+  capacity?: {
+    total_keys: number;
+    ready_keys: number;
+    limits: Record<string, {
+      limit: number;
+      remaining: number;
+      unlimited: boolean;
+      unknown: boolean;
+    }>;
+  };
+};
+
+export type DiscoveredModel = {
+  id: string;
+  owned_by?: string;
 };
 
 export type Overview = {

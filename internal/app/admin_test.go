@@ -89,3 +89,38 @@ func TestCredentialSelectionOrder(t *testing.T) {
 	assertOrder([]int{1, 0, 2}, 1)
 	assertOrder([]int{1, 2, 0}, 2)
 }
+
+func TestValidateModelCompatibilityParameters(t *testing.T) {
+	input := modelInput{
+		PublicAlias:     "nvidia/deepseek",
+		UpstreamModel:   "deepseek-ai/deepseek-v4-flash",
+		SupportsChat:    true,
+		StripParameters: []string{" thinking ", "thinking", "reasoning_effort"},
+	}
+	if err := validateModelInput(&input); err != nil {
+		t.Fatal(err)
+	}
+	if len(input.StripParameters) != 2 || input.StripParameters[0] != "thinking" {
+		t.Fatalf("strip parameters = %#v", input.StripParameters)
+	}
+	input.StripParameters = []string{"messages"}
+	if err := validateModelInput(&input); err == nil {
+		t.Fatal("protected messages field should not be removable")
+	}
+}
+
+func TestStripTopLevelParameters(t *testing.T) {
+	payload := map[string]any{
+		"model": "deepseek", "messages": []any{}, "thinking": map[string]any{"type": "enabled"},
+	}
+	stripped := stripTopLevelParameters(payload, []string{"thinking", "missing"})
+	if len(stripped) != 1 || stripped[0] != "thinking" {
+		t.Fatalf("stripped = %#v", stripped)
+	}
+	if _, exists := payload["thinking"]; exists {
+		t.Fatal("thinking parameter was not removed")
+	}
+	if _, exists := payload["messages"]; !exists {
+		t.Fatal("messages parameter was removed")
+	}
+}

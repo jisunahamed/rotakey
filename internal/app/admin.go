@@ -19,6 +19,7 @@ var (
 	slugPattern          = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
 	slugSeparatorPattern = regexp.MustCompile(`[^a-z0-9]+`)
 	aliasPattern         = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{1,127}$`)
+	parameterPattern     = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,63}$`)
 )
 
 func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
@@ -28,11 +29,15 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/admin/providers", admin(s.handleCreateProvider))
 	mux.Handle("PUT /api/admin/providers/{id}", admin(s.handleUpdateProvider))
 	mux.Handle("DELETE /api/admin/providers/{id}", admin(s.handleDeleteProvider))
+	mux.Handle("POST /api/admin/providers/inspect", admin(s.handleInspectUnsavedProvider))
 	mux.Handle("POST /api/admin/providers/{id}/test", admin(s.handleTestProvider))
 	mux.Handle("POST /api/admin/providers/{id}/models", admin(s.handleCreateModel))
+	mux.Handle("POST /api/admin/providers/{id}/models/bulk", admin(s.handleCreateModelsBulk))
+	mux.Handle("POST /api/admin/providers/{id}/models/discover", admin(s.handleDiscoverModels))
 	mux.Handle("PUT /api/admin/models/{id}", admin(s.handleUpdateModel))
 	mux.Handle("DELETE /api/admin/models/{id}", admin(s.handleDeleteModel))
 	mux.Handle("POST /api/admin/providers/{id}/credentials", admin(s.handleCreateCredentials))
+	mux.Handle("POST /api/admin/providers/{id}/credentials/inspect", admin(s.handleInspectProviderCredential))
 	mux.Handle("PUT /api/admin/credentials/{id}", admin(s.handleUpdateCredential))
 	mux.Handle("DELETE /api/admin/credentials/{id}", admin(s.handleDeleteCredential))
 	mux.Handle("PUT /api/admin/credentials/{id}/model-limits/{model_id}", admin(s.handleModelLimits))
@@ -154,7 +159,7 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 	modelRows, err := s.db.Query(ctx, `
 		SELECT id, provider_id, public_alias, upstream_model, supports_chat,
 		       supports_responses, default_max_output_tokens, tokenizer,
-		       capture_bodies, enabled, created_at, updated_at
+		       capture_bodies, strip_parameters, enabled, created_at, updated_at
 		FROM model_routes ORDER BY created_at, id
 	`)
 	if err != nil {
@@ -165,7 +170,7 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 		if err := modelRows.Scan(
 			&model.ID, &model.ProviderID, &model.PublicAlias, &model.UpstreamModel,
 			&model.SupportsChat, &model.SupportsResponses, &model.DefaultMaxOutputTokens,
-			&model.Tokenizer, &model.CaptureBodies, &model.Enabled,
+			&model.Tokenizer, &model.CaptureBodies, &model.StripParameters, &model.Enabled,
 			&model.CreatedAt, &model.UpdatedAt,
 		); err != nil {
 			modelRows.Close()
@@ -179,7 +184,8 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 
 	credentialRows, err := s.db.Query(ctx, `
 		SELECT c.id, c.provider_id, c.label, c.secret_suffix, c.is_primary, c.enabled, c.status,
-		       c.cooldown_until, c.created_at, c.updated_at,
+		       c.cooldown_until, c.last_validated_at, c.validation_error,
+		       c.created_at, c.updated_at,
 		       r.scope_key, r.rps, r.rpm, r.rpd, r.tps, r.tpm, r.tpd, r.tpr
 		FROM credentials c
 		LEFT JOIN rate_policies r ON r.credential_id = c.id
@@ -196,13 +202,15 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 			id, providerID, label, suffix, status string
 			isPrimary, enabled                    bool
 			cooldown                              *time.Time
+			lastValidated                         *time.Time
+			validationError                       string
 			createdAt, updatedAt                  time.Time
 			scope                                 *string
 			policy                                RatePolicy
 		)
 		if err := credentialRows.Scan(
 			&id, &providerID, &label, &suffix, &isPrimary, &enabled, &status,
-			&cooldown, &createdAt, &updatedAt, &scope,
+			&cooldown, &lastValidated, &validationError, &createdAt, &updatedAt, &scope,
 			&policy.RPS, &policy.RPM, &policy.RPD, &policy.TPS,
 			&policy.TPM, &policy.TPD, &policy.TPR,
 		); err != nil {
@@ -218,6 +226,7 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 			view = &CredentialView{
 				ID: id, ProviderID: providerID, Label: label, SecretSuffix: suffix,
 				IsPrimary: isPrimary, Enabled: enabled, Status: status, CooldownUntil: cooldown,
+				LastValidatedAt: lastValidated, ValidationError: validationError,
 				Limits: RatePolicy{}, ModelLimits: map[string]RatePolicy{},
 				CreatedAt: createdAt, UpdatedAt: updatedAt,
 			}
@@ -352,6 +361,9 @@ func (s *Server) handleListProviders(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Providers could not be loaded.")
 		return
+	}
+	for index := range providers {
+		providers[index].Capacity = s.providerCapacity(r.Context(), providers[index].Credentials)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"providers": providers})
 }
@@ -526,14 +538,15 @@ func (s *Server) handleDeleteProvider(w http.ResponseWriter, r *http.Request) {
 }
 
 type modelInput struct {
-	PublicAlias            string `json:"public_alias"`
-	UpstreamModel          string `json:"upstream_model"`
-	SupportsChat           bool   `json:"supports_chat"`
-	SupportsResponses      bool   `json:"supports_responses"`
-	DefaultMaxOutputTokens int    `json:"default_max_output_tokens"`
-	Tokenizer              string `json:"tokenizer"`
-	CaptureBodies          bool   `json:"capture_bodies"`
-	Enabled                bool   `json:"enabled"`
+	PublicAlias            string   `json:"public_alias"`
+	UpstreamModel          string   `json:"upstream_model"`
+	SupportsChat           bool     `json:"supports_chat"`
+	SupportsResponses      bool     `json:"supports_responses"`
+	DefaultMaxOutputTokens int      `json:"default_max_output_tokens"`
+	Tokenizer              string   `json:"tokenizer"`
+	CaptureBodies          bool     `json:"capture_bodies"`
+	StripParameters        []string `json:"strip_parameters"`
+	Enabled                bool     `json:"enabled"`
 }
 
 func validateModelInput(input *modelInput) error {
@@ -560,6 +573,25 @@ func validateModelInput(input *modelInput) error {
 	default:
 		return fmt.Errorf("tokenizer is invalid")
 	}
+	if len(input.StripParameters) > 32 {
+		return fmt.Errorf("too many compatibility parameters")
+	}
+	seenParameters := map[string]bool{}
+	protectedParameters := map[string]bool{
+		"model": true, "messages": true, "input": true, "stream": true,
+	}
+	parameters := make([]string, 0, len(input.StripParameters))
+	for _, parameter := range input.StripParameters {
+		parameter = strings.TrimSpace(parameter)
+		if !parameterPattern.MatchString(parameter) || protectedParameters[parameter] {
+			return fmt.Errorf("compatibility parameter is invalid")
+		}
+		if !seenParameters[parameter] {
+			seenParameters[parameter] = true
+			parameters = append(parameters, parameter)
+		}
+	}
+	input.StripParameters = parameters
 	return nil
 }
 
@@ -577,11 +609,11 @@ func (s *Server) handleCreateModel(w http.ResponseWriter, r *http.Request) {
 		INSERT INTO model_routes
 		    (id, provider_id, public_alias, upstream_model, supports_chat,
 		     supports_responses, default_max_output_tokens, tokenizer,
-		     capture_bodies, enabled)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		     capture_bodies, strip_parameters, enabled)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 	`, id, r.PathValue("id"), input.PublicAlias, input.UpstreamModel,
 		input.SupportsChat, input.SupportsResponses, input.DefaultMaxOutputTokens,
-		input.Tokenizer, input.CaptureBodies, input.Enabled)
+		input.Tokenizer, input.CaptureBodies, input.StripParameters, input.Enabled)
 	if err != nil {
 		writeError(w, http.StatusConflict, "model_conflict", "Model alias already exists or provider was not found.")
 		return
@@ -602,11 +634,11 @@ func (s *Server) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 	tag, err := s.db.Exec(r.Context(), `
 		UPDATE model_routes SET public_alias=$2, upstream_model=$3, supports_chat=$4,
 		    supports_responses=$5, default_max_output_tokens=$6, tokenizer=$7,
-		    capture_bodies=$8, enabled=$9, updated_at=NOW()
+		    capture_bodies=$8, strip_parameters=$9, enabled=$10, updated_at=NOW()
 		WHERE id=$1
 	`, r.PathValue("id"), input.PublicAlias, input.UpstreamModel, input.SupportsChat,
 		input.SupportsResponses, input.DefaultMaxOutputTokens, input.Tokenizer,
-		input.CaptureBodies, input.Enabled)
+		input.CaptureBodies, input.StripParameters, input.Enabled)
 	if err != nil || tag.RowsAffected() == 0 {
 		writeError(w, http.StatusConflict, "model_update_failed", "Model could not be updated.")
 		return
@@ -658,22 +690,51 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid_credentials", "Add between 1 and 100 credentials.")
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Credentials could not be saved.")
-		return
-	}
-	defer func() { _ = tx.Rollback(r.Context()) }()
 	primaryCount := 0
-	for _, credential := range input.Credentials {
+	for index := range input.Credentials {
+		credential := &input.Credentials[index]
+		credential.Label = strings.TrimSpace(credential.Label)
+		credential.Secret = strings.TrimSpace(credential.Secret)
 		if credential.IsPrimary {
 			primaryCount++
+		}
+		if len(credential.Label) < 1 || len(credential.Label) > 100 ||
+			len(credential.Secret) < 8 || len(credential.Secret) > 8192 || !credential.Limits.Valid() {
+			writeError(w, http.StatusBadRequest, "invalid_credential", "API key label, value, or rate limits are invalid.")
+			return
 		}
 	}
 	if primaryCount > 1 {
 		writeError(w, http.StatusBadRequest, "multiple_primary_credentials", "Choose at most one primary API key.")
 		return
 	}
+
+	provider, err := scanProvider(s.db.QueryRow(
+		r.Context(), `SELECT `+providerColumns+` FROM providers WHERE id=$1`, r.PathValue("id"),
+	))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "provider_not_found", "Provider was not found.")
+		return
+	}
+	inspections := make([]credentialInspection, 0, len(input.Credentials))
+	for _, credential := range input.Credentials {
+		inspection := inspectProviderSecret(r.Context(), provider, []byte(credential.Secret))
+		if !inspection.Valid {
+			writeError(
+				w, http.StatusUnprocessableEntity, "invalid_credential",
+				fmt.Sprintf("%s: %s The API key was not saved.", credential.Label, inspection.Warning),
+			)
+			return
+		}
+		inspections = append(inspections, inspection)
+	}
+
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "API keys could not be saved.")
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
 	if primaryCount == 1 {
 		if _, err := tx.Exec(r.Context(), `
 			UPDATE credentials SET is_primary=FALSE, updated_at=NOW() WHERE provider_id=$1
@@ -684,13 +745,6 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 	}
 	created := make([]string, 0, len(input.Credentials))
 	for _, credential := range input.Credentials {
-		credential.Label = strings.TrimSpace(credential.Label)
-		credential.Secret = strings.TrimSpace(credential.Secret)
-		if len(credential.Label) < 1 || len(credential.Label) > 100 ||
-			len(credential.Secret) < 8 || len(credential.Secret) > 8192 || !credential.Limits.Valid() {
-			writeError(w, http.StatusBadRequest, "invalid_credential", "Credential label, secret, or rate limits are invalid.")
-			return
-		}
 		encrypted, err := s.vault.Encrypt([]byte(credential.Secret))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "encryption_failed", "Credential could not be encrypted.")
@@ -707,8 +761,9 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 		}
 		if _, err := tx.Exec(r.Context(), `
 			INSERT INTO credentials
-			    (id, provider_id, label, secret_cipher, secret_suffix, is_primary, enabled, status)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+			    (id, provider_id, label, secret_cipher, secret_suffix, is_primary,
+			     enabled, status, last_validated_at, validation_error)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),'')
 		`, id, r.PathValue("id"), credential.Label, encrypted, secretSuffix(credential.Secret),
 			credential.IsPrimary, enabled, status); err != nil {
 			writeError(w, http.StatusConflict, "credential_conflict", "Credential labels must be unique inside a provider.")
@@ -725,7 +780,9 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.audit(r.Context(), adminIDFromContext(r.Context()), "credential.create", "provider", r.PathValue("id"), map[string]any{"count": len(created)})
-	writeJSON(w, http.StatusCreated, map[string]any{"ids": created})
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"ids": created, "models": mergeDiscoveredModels(inspections),
+	})
 }
 
 func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) {
@@ -735,20 +792,60 @@ func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) 
 	}
 	input.Label = strings.TrimSpace(input.Label)
 	if input.Label == "" || len(input.Label) > 100 || !input.Limits.Valid() {
-		writeError(w, http.StatusBadRequest, "invalid_credential", "Credential label or limits are invalid.")
+		writeError(w, http.StatusBadRequest, "invalid_credential", "API key label or limits are invalid.")
 		return
 	}
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Credential could not be updated.")
-		return
-	}
-	defer func() { _ = tx.Rollback(r.Context()) }()
 	var providerID string
-	if err := tx.QueryRow(r.Context(), `SELECT provider_id FROM credentials WHERE id=$1`, r.PathValue("id")).Scan(&providerID); err != nil {
+	var currentCiphertext []byte
+	if err := s.db.QueryRow(
+		r.Context(), `SELECT provider_id, secret_cipher FROM credentials WHERE id=$1`, r.PathValue("id"),
+	).Scan(&providerID, &currentCiphertext); err != nil {
 		writeError(w, http.StatusNotFound, "credential_not_found", "Credential was not found.")
 		return
 	}
+	provider, err := scanProvider(s.db.QueryRow(
+		r.Context(), `SELECT `+providerColumns+` FROM providers WHERE id=$1`, providerID,
+	))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "provider_not_found", "Provider was not found.")
+		return
+	}
+	enabled := true
+	if input.Enabled != nil {
+		enabled = *input.Enabled
+	}
+	replacement := strings.TrimSpace(input.Secret)
+	if replacement != "" && (len(replacement) < 8 || len(replacement) > 8192) {
+		writeError(w, http.StatusBadRequest, "invalid_credential", "Replacement API key is invalid.")
+		return
+	}
+	shouldInspect := enabled || replacement != ""
+	var inspection credentialInspection
+	if shouldInspect {
+		secret := []byte(replacement)
+		if replacement == "" {
+			secret, err = s.vault.Decrypt(currentCiphertext)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "credential_unavailable", "API key could not be decrypted.")
+				return
+			}
+		}
+		inspection = inspectProviderSecret(r.Context(), provider, secret)
+		if !inspection.Valid {
+			writeError(
+				w, http.StatusUnprocessableEntity, "invalid_credential",
+				inspection.Warning+" Changes were not saved.",
+			)
+			return
+		}
+	}
+
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "API key could not be updated.")
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
 	if input.IsPrimary {
 		if _, err := tx.Exec(r.Context(), `
 			UPDATE credentials SET is_primary=FALSE, updated_at=NOW()
@@ -758,38 +855,36 @@ func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	enabled := true
-	if input.Enabled != nil {
-		enabled = *input.Enabled
-	}
 	status := "healthy"
 	if !enabled {
 		status = "disabled"
 	}
 	var affected int64
-	if strings.TrimSpace(input.Secret) != "" {
-		secret := strings.TrimSpace(input.Secret)
-		if len(secret) < 8 || len(secret) > 8192 {
-			writeError(w, http.StatusBadRequest, "invalid_credential", "Replacement secret is invalid.")
+	if replacement != "" {
+		encrypted, err := s.vault.Encrypt([]byte(replacement))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "encryption_failed", "API key could not be encrypted.")
 			return
 		}
-		encrypted, _ := s.vault.Encrypt([]byte(secret))
 		commandTag, err := tx.Exec(r.Context(), `
 			UPDATE credentials SET label=$2, secret_cipher=$3, secret_suffix=$4,
 			    is_primary=$5, enabled=$6, status=$7, cooldown_until=NULL, consecutive_failures=0,
-			    updated_at=NOW() WHERE id=$1
-		`, r.PathValue("id"), input.Label, encrypted, secretSuffix(secret), input.IsPrimary, enabled, status)
+			    validation_error='', last_validated_at=NOW(), updated_at=NOW() WHERE id=$1
+		`, r.PathValue("id"), input.Label, encrypted, secretSuffix(replacement), input.IsPrimary, enabled, status)
 		if err != nil {
 			writeError(w, http.StatusConflict, "credential_update_failed", "Credential could not be updated.")
 			return
 		}
 		affected = commandTag.RowsAffected()
 	} else {
-		commandTag, err := tx.Exec(r.Context(), `
+		query := `
 			UPDATE credentials SET label=$2, is_primary=$3, enabled=$4, status=$5,
-			    cooldown_until=NULL, consecutive_failures=0, updated_at=NOW()
-			WHERE id=$1
-		`, r.PathValue("id"), input.Label, input.IsPrimary, enabled, status)
+			    cooldown_until=NULL, consecutive_failures=0, updated_at=NOW()`
+		if shouldInspect {
+			query += `, validation_error='', last_validated_at=NOW()`
+		}
+		query += ` WHERE id=$1`
+		commandTag, err := tx.Exec(r.Context(), query, r.PathValue("id"), input.Label, input.IsPrimary, enabled, status)
 		if err != nil {
 			writeError(w, http.StatusConflict, "credential_update_failed", "Credential could not be updated.")
 			return
@@ -810,7 +905,7 @@ func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) 
 	}
 	_ = s.redis.Del(r.Context(), "cooldown:"+r.PathValue("id")).Err()
 	s.audit(r.Context(), adminIDFromContext(r.Context()), "credential.update", "credential", r.PathValue("id"), map[string]any{"label": input.Label})
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, map[string]any{"models": inspection.Models})
 }
 
 func (s *Server) handleDeleteCredential(w http.ResponseWriter, r *http.Request) {
@@ -877,38 +972,56 @@ func (s *Server) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "provider_not_found", "Provider was not found.")
 		return
 	}
-	var ciphertext []byte
-	if err := s.db.QueryRow(r.Context(), `
-		SELECT secret_cipher FROM credentials
-		WHERE provider_id=$1 AND enabled=TRUE ORDER BY created_at LIMIT 1
-	`, provider.ID).Scan(&ciphertext); err != nil {
-		writeError(w, http.StatusConflict, "credential_required", "Add an enabled credential before testing.")
-		return
-	}
-	secret, err := s.vault.Decrypt(ciphertext)
+	rows, err := s.db.Query(r.Context(), `
+		SELECT id, label, secret_cipher FROM credentials
+		WHERE provider_id=$1 AND enabled=TRUE
+		ORDER BY is_primary DESC, created_at, id
+	`, provider.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "credential_unavailable", "Credential could not be decrypted.")
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "API keys could not be loaded.")
 		return
 	}
-	client, err := upstreamClient(provider)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "unsafe_provider_url", err.Error())
+	defer rows.Close()
+	type testResult struct {
+		ID         string `json:"id"`
+		Label      string `json:"label"`
+		Valid      bool   `json:"valid"`
+		StatusCode int    `json:"status_code"`
+		LatencyMS  int64  `json:"latency_ms"`
+		Warning    string `json:"warning,omitempty"`
+		ModelCount int    `json:"model_count"`
+	}
+	results := []testResult{}
+	valid := 0
+	for rows.Next() {
+		var id, label string
+		var ciphertext []byte
+		if err := rows.Scan(&id, &label, &ciphertext); err != nil {
+			writeError(w, http.StatusInternalServerError, "credential_unavailable", "API key could not be loaded.")
+			return
+		}
+		secret, err := s.vault.Decrypt(ciphertext)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "credential_unavailable", "API key could not be decrypted.")
+			return
+		}
+		inspection := inspectProviderSecret(r.Context(), provider, secret)
+		s.recordCredentialInspection(r.Context(), id, inspection)
+		if inspection.Valid {
+			valid++
+		}
+		results = append(results, testResult{
+			ID: id, Label: label, Valid: inspection.Valid,
+			StatusCode: inspection.StatusCode, LatencyMS: inspection.LatencyMS,
+			Warning: inspection.Warning, ModelCount: len(inspection.Models),
+		})
+	}
+	if len(results) == 0 {
+		writeError(w, http.StatusConflict, "credential_required", "Add an enabled API key before testing.")
 		return
 	}
-	target := strings.TrimRight(provider.BaseURL, "/") + "/models"
-	request, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
-	applyProviderHeaders(request, provider, secret)
-	started := time.Now()
-	response, err := client.Do(request)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "provider_unreachable", "Provider could not be reached: "+err.Error())
-		return
-	}
-	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":          response.StatusCode >= 200 && response.StatusCode < 300,
-		"status_code": response.StatusCode, "latency_ms": time.Since(started).Milliseconds(),
+		"ok": valid == len(results), "valid": valid, "total": len(results), "results": results,
 	})
 }
 

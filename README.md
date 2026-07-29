@@ -110,12 +110,15 @@ Caddy obtains and renews the certificate automatically. PostgreSQL and Redis hav
 In **Providers → Add provider**:
 
 1. Enter the provider's OpenAI-compatible base URL and authentication header.
-2. Add one or more upstream model IDs and give each a globally unique public alias such as `groq/llama-3.3-70b`.
-3. Enter API keys in separate fields. Use **Add another API key** for more keys, and optionally mark one key as **Primary**.
-4. Set any combination of RPS, RPM, RPD, TPS, TPM, TPD, and TPR. Blank fields are unlimited. An API key's shared limits are consumed by every model under that provider; optional model-specific limits add a narrower limit for that model.
-5. Review, create, and run the connection test.
+2. Enter API keys in separate fields. Use **Add another API key** for more keys, and optionally mark one key as **Primary**.
+3. Choose **Check keys & load models**. Rotakey validates every key against the upstream `/models` endpoint and loads the provider's model catalog.
+4. Select the models to expose and edit their globally unique public aliases, such as `groq/llama-3.3-70b`.
+5. Set any combination of RPS, RPM, RPD, TPS, TPM, TPD, and TPR. Blank fields are unlimited. An API key's shared limits are consumed by every model under that provider; optional model-specific limits add a narrower limit for that model.
+6. Review and create the provider. Keys are validated again before they are encrypted and saved.
 
 The provider slug is an internal identifier. Rotakey generates it from the provider name and keeps it out of the setup form.
+
+The provider inspector shows aggregate capacity across every ready key. For example, two keys configured at `40 RPM` produce `80 RPM` total. Each routed request lowers the live remaining value; adding or deleting a key recalculates the total. A provider rejection during traffic (`401` or `403`) quarantines the key and surfaces a warning in the UI.
 
 HTTPS is required by default. HTTP and private-network destinations need the explicit private-network switch. Loopback, private, link-local, multicast, and metadata destinations remain blocked unless that switch is enabled.
 
@@ -165,6 +168,12 @@ result = client.chat.completions.create(
 - Redis failure returns `503`; limits are never bypassed.
 
 The model-first capacity rail shows the next round-robin segment, credential health, and the currently limiting request/token headroom.
+
+### Provider-specific request compatibility
+
+Some OpenAI-compatible providers reject otherwise common top-level request fields. Edit a model route and add those field names under **Remove unsupported request fields**. Rotakey removes only the explicitly listed fields for that route and records the removal in gateway logs.
+
+For example, if an upstream returns `Unsupported parameter(s): thinking`, add `thinking` to that model route. Other routes and request fields remain unchanged.
 
 ## Responses compatibility
 

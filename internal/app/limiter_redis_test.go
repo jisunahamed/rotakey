@@ -203,3 +203,38 @@ func TestSharedCredentialLimitSpansModels(t *testing.T) {
 		t.Fatalf("third cross-model request should exhaust the shared limit: selected=%v retry=%s", selected, retry)
 	}
 }
+
+func TestProviderCapacityAddsAndRemovesAPIKeys(t *testing.T) {
+	client := integrationRedis(t)
+	suffix := fmt.Sprint(time.Now().UnixNano())
+	firstID := "key_capacity_first_" + suffix
+	secondID := "key_capacity_second_" + suffix
+	keys := []string{
+		"limit:" + firstID + ":all:rpm",
+		"limit:" + secondID + ":all:rpm",
+	}
+	t.Cleanup(func() { _ = client.Del(context.Background(), keys...).Err() })
+	bucket := time.Now().UnixMilli() / time.Minute.Milliseconds()
+	if err := client.HSet(context.Background(), keys[0], "count", 4, "bucket", bucket).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.HSet(context.Background(), keys[1], "count", 6, "bucket", bucket).Err(); err != nil {
+		t.Fatal(err)
+	}
+	forty := int64(40)
+	credentials := []CredentialView{
+		{ID: firstID, Enabled: true, Status: "healthy", Limits: RatePolicy{RPM: &forty}},
+		{ID: secondID, Enabled: true, Status: "healthy", Limits: RatePolicy{RPM: &forty}},
+	}
+	server := &Server{redis: client}
+	capacity := server.providerCapacity(context.Background(), credentials)
+	rpm := capacity.Limits["rpm"]
+	if rpm.Limit != 80 || rpm.Remaining != 70 || capacity.ReadyKeys != 2 {
+		t.Fatalf("two-key capacity = %#v", capacity)
+	}
+	capacity = server.providerCapacity(context.Background(), credentials[:1])
+	rpm = capacity.Limits["rpm"]
+	if rpm.Limit != 40 || rpm.Remaining != 36 || capacity.TotalKeys != 1 {
+		t.Fatalf("one-key capacity = %#v", capacity)
+	}
+}
