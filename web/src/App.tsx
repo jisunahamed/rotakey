@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
+  AlertTriangle,
+  ArrowRight,
   Cable,
   Check,
   ChevronRight,
@@ -117,10 +119,11 @@ function App() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  const navigate = (next: Page) => {
+  const navigate = (next: Page, query?: Record<string, string>) => {
     setPage(next);
     setMenuOpen(false);
-    history.pushState({}, "", `/admin/${next}`);
+    const search = query ? `?${new URLSearchParams(query).toString()}` : "";
+    history.pushState({}, "", `/admin/${next}${search}`);
   };
 
   const logout = async () => {
@@ -225,7 +228,7 @@ function App() {
         <main className="main-pane">
           {page === "overview" && <OverviewPage navigate={navigate} notify={notify} />}
           {page === "providers" && <ProvidersPage notify={notify} />}
-          {page === "models" && <ModelsPage notify={notify} />}
+          {page === "models" && <ModelsPage navigate={navigate} notify={notify} />}
           {page === "logs" && <LogsPage notify={notify} />}
           {page === "access" && (
             <AccessPage
@@ -465,93 +468,319 @@ function OverviewPage({
   navigate,
   notify
 }: {
-  navigate: (page: Page) => void;
+  navigate: (page: Page, query?: Record<string, string>) => void;
   notify: (message: string, tone?: "success" | "danger") => void;
 }) {
+  type InspectTarget = { type: "provider" | "route" | "credential"; id: string };
   const [overview, setOverview] = useState<Overview | null>(null);
   const [error, setError] = useState("");
+  const [range, setRange] = useState<Overview["range"]>(() => {
+    const value = new URLSearchParams(location.search).get("range");
+    return value === "1h" || value === "7d" ? value : "24h";
+  });
+  const [selected, setSelected] = useState<InspectTarget | null>(null);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const selectTarget = (target: InspectTarget) => {
+    setSelected(target);
+    setInspectorOpen(true);
+  };
   const load = useCallback(async () => {
     setError("");
+    setRefreshing(true);
     try {
-      setOverview(await api<Overview>("/api/admin/overview"));
+      const result = await api<Overview>(`/api/admin/overview?range=${range}`);
+      setOverview(result);
+      setSelected((current) => chooseOverviewTarget(result, current));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Overview could not be loaded.");
+    } finally {
+      setRefreshing(false);
     }
-  }, []);
+  }, [range]);
   useEffect(() => {
     void load();
-    const timer = window.setInterval(() => void load(), 15000);
+    const timer = window.setInterval(() => void load(), 10_000);
     return () => window.clearInterval(timer);
   }, [load]);
 
   if (!overview && !error) return <PageSkeleton />;
+  const selectedProvider = overview?.providers.find((provider) => (
+    selected?.type === "provider"
+      ? provider.id === selected.id
+      : selected?.type === "route"
+        ? overview.routes.find((route) => route.id === selected.id)?.provider_id === provider.id
+        : overview.routes.some((route) => route.provider_id === provider.id && route.segments.some((segment) => segment.id === selected?.id))
+  ));
+  const selectedRoute = overview?.routes.find((route) => (
+    selected?.type === "route"
+      ? route.id === selected.id
+      : selected?.type === "credential" && route.segments.some((segment) => segment.id === selected.id)
+  ));
+  const selectedCredential = selectedRoute?.segments.find((segment) => segment.id === selected?.id);
   return (
     <>
-      <PageHeader
-        eyebrow="Live routing state"
-        title="Can the next request run?"
-        description="Capacity is shown model-first. Provider details stay behind the route."
-        actions={
-          <Button variant="quiet" onClick={() => void load()}><RefreshCw size={15} /> Refresh</Button>
-        }
-      />
       {error && <InlineNotice tone="danger">{error}</InlineNotice>}
       {overview && (
-        <>
-          <section className="base-url-strip">
-            <div>
-              <span className="signal-light" />
+        <div className="ops-console">
+          <header className="ops-commandbar">
+            <div className="ops-commandbar__identity">
+              <span className={`gateway-pulse ${overview.summary.routes_ready === overview.summary.routes_total ? "" : "is-warning"}`} />
               <span>
-                <small>Unified base URL</small>
+                <small>Unified gateway · {overview.summary.gateway_key_ready ? "authenticated" : "key missing"}</small>
                 <code>{overview.base_url || `${location.origin}/v1`}</code>
               </span>
+              <button
+                className="console-icon"
+                aria-label="Copy unified base URL"
+                onClick={() => {
+                  void navigator.clipboard.writeText(overview.base_url || `${location.origin}/v1`)
+                    .then(() => notify("Base URL copied."))
+                    .catch(() => notify("Clipboard access was blocked.", "danger"));
+                }}
+              ><Clipboard size={14} /></button>
             </div>
-            <Button
-              variant="quiet"
-              onClick={() => {
-                void navigator.clipboard.writeText(overview.base_url || `${location.origin}/v1`)
-                  .then(() => notify("Base URL copied."))
-                  .catch(() => notify("Clipboard access was blocked.", "danger"));
-              }}
-            >
-              <Clipboard size={15} /> Copy
-            </Button>
-          </section>
-          <section className="usage-line" aria-label="Last 24 hours usage">
-            <div><span>Requests</span><strong>{formatNumber(overview.usage.requests_24h)}</strong></div>
-            <div><span>Tokens</span><strong>{formatNumber(overview.usage.tokens_24h)}</strong></div>
-            <div>
-              <span>Errors</span>
-              <strong className={overview.usage.errors_24h ? "text-danger" : ""}>
-                {formatNumber(overview.usage.errors_24h)}
-              </strong>
-            </div>
-            <div><span>Wait ceiling</span><strong>{overview.settings.max_wait_ms / 1000}s</strong></div>
-          </section>
-          <section className="section-block">
-            <div className="section-heading">
-              <div><p className="eyebrow">Capacity rail</p><h2>Public model routes</h2></div>
-              <span>{overview.routes.length} configured</span>
-            </div>
-            {overview.routes.length === 0 ? (
-              <EmptyState
-                title="No model routes yet"
-                description="Add a provider, map a public model alias, then attach at least one credential."
-                action={<Button onClick={() => navigate("providers")}><Plus size={15} /> Add first provider</Button>}
-              />
-            ) : (
-              <div className="capacity-list">
-                {overview.routes.map((route) => <CapacityRail key={route.id} route={route} />)}
+            <div className="ops-commandbar__actions">
+              <div className="range-switcher" aria-label="Overview time range">
+                {(["1h", "24h", "7d"] as const).map((value) => (
+                  <button
+                    key={value}
+                    className={range === value ? "is-active" : ""}
+                    aria-pressed={range === value}
+                    onClick={() => {
+                      setRange(value);
+                      history.replaceState({}, "", `/admin/overview?range=${value}`);
+                    }}
+                  >{value}</button>
+                ))}
               </div>
-            )}
+              <button className={`console-refresh ${refreshing ? "is-refreshing" : ""}`} onClick={() => void load()}>
+                <RefreshCw size={14} /> {refreshing ? "Syncing" : "Refresh"}
+              </button>
+            </div>
+          </header>
+
+          <section className="status-ledger" aria-label={`${range} gateway status`}>
+            <LedgerMetric label="Routes ready" value={`${overview.summary.routes_ready}/${overview.summary.routes_total}`} tone={overview.summary.routes_ready < overview.summary.routes_total ? "danger" : "healthy"} />
+            <LedgerMetric label="API keys ready" value={`${overview.summary.keys_ready}/${overview.summary.keys_total}`} tone={overview.summary.keys_warning ? "warning" : "healthy"} />
+            <LedgerMetric label="Requests" value={formatNumber(overview.summary.requests)} />
+            <LedgerMetric label="Errors" value={`${formatNumber(overview.summary.errors)} · ${(overview.summary.error_rate * 100).toFixed(1)}%`} tone={overview.summary.errors ? "danger" : "default"} />
+            <LedgerMetric label="P95 latency" value={`${formatNumber(overview.summary.latency_p95_ms)} ms`} />
+            <LedgerMetric label="Tokens" value={formatNumber(overview.summary.tokens)} />
           </section>
-        </>
+
+          <div className="ops-console__workspace">
+            <div className="ops-console__main">
+              <div className="signal-grid">
+                <SignalTimeline overview={overview} />
+                <AttentionQueue
+                  alerts={overview.alerts}
+                  onSelect={(alert) => selectTarget({ type: alert.resource_type, id: alert.resource_id })}
+                />
+              </div>
+
+              <section className="console-panel capacity-debugger">
+                <ConsolePanelHeader
+                  eyebrow="Route debugger"
+                  title="Capacity and next-hop state"
+                  detail={`${overview.routes.length} public routes · ${formatRelativeTime(overview.generated_at)}`}
+                />
+                {overview.routes.length === 0 ? (
+                  <EmptyState
+                    title="No model routes yet"
+                    description="Add a provider, validate an API key, then select at least one upstream model."
+                    action={<Button onClick={() => navigate("providers")}><Plus size={15} /> Add first provider</Button>}
+                  />
+                ) : overview.providers.map((provider) => (
+                  <ProviderCapacityGroup
+                    key={provider.id}
+                    provider={provider}
+                    routes={overview.routes.filter((route) => route.provider_id === provider.id)}
+                    selected={selected}
+                    onSelect={selectTarget}
+                  />
+                ))}
+              </section>
+
+              <section className="console-panel failure-panel">
+                <ConsolePanelHeader eyebrow="Request evidence" title="Recent failures" detail={`Selected range · ${range}`} />
+                {overview.recent_failures.length === 0 ? (
+                  <p className="console-empty">No failed requests in this range.</p>
+                ) : (
+                  <div className="failure-list">
+                    {overview.recent_failures.map((failure) => (
+                      <button
+                        key={failure.request_id}
+                        onClick={() => navigate("logs", { q: failure.request_id, status: String(failure.status_code) })}
+                      >
+                        <span className="failure-code">{failure.status_code}</span>
+                        <span><code>{failure.model_alias}</code><small>{failure.error_code || failure.provider_name}</small></span>
+                        <span><strong>{failure.credential_label || "No key"}</strong><small>{failure.latency_ms} ms</small></span>
+                        <time>{formatRelativeTime(failure.created_at)}</time>
+                        <ChevronRight size={14} />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </div>
+
+            <OverviewInspector
+              provider={selectedProvider}
+              route={selectedRoute}
+              credential={selectedCredential}
+              open={inspectorOpen}
+              onClose={() => setInspectorOpen(false)}
+              onSelectCredential={(id) => selectTarget({ type: "credential", id })}
+              onTest={async () => {
+                if (!selectedProvider) return;
+                await testProvider(selectedProvider, notify);
+                await load();
+              }}
+              onRecheck={async (credentialID) => {
+                if (!selectedProvider) return;
+                try {
+                  const inspection = await api<{ valid: boolean; warning?: string; models: unknown[] }>(
+                    `/api/admin/providers/${selectedProvider.id}/models/discover`,
+                    { method: "POST", json: { credential_id: credentialID } }
+                  );
+                  notify(
+                    inspection.valid ? `API key is valid · ${inspection.models.length} models visible.` : inspection.warning || "API key validation failed.",
+                    inspection.valid ? "success" : "danger"
+                  );
+                  await load();
+                } catch (caught) {
+                  notify(errorMessage(caught), "danger");
+                }
+              }}
+              navigate={navigate}
+            />
+          </div>
+        </div>
       )}
     </>
   );
 }
 
-function CapacityRail({ route }: { route: Overview["routes"][number] }) {
+function LedgerMetric({ label, value, tone = "default" }: { label: string; value: string; tone?: "default" | "healthy" | "warning" | "danger" }) {
+  return <div className={`ledger-metric ledger-metric--${tone}`}><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function ConsolePanelHeader({ eyebrow, title, detail }: { eyebrow: string; title: string; detail?: string }) {
+  return (
+    <header className="console-panel__header">
+      <div><span>{eyebrow}</span><h2>{title}</h2></div>
+      {detail && <small>{detail}</small>}
+    </header>
+  );
+}
+
+function SignalTimeline({ overview }: { overview: Overview }) {
+  const requestPath = timelinePath(overview.series.map((point) => point.requests), 720, 128);
+  const latencyPath = timelinePath(overview.series.map((point) => point.latency_p95_ms), 720, 128);
+  const errorPoints = overview.series.map((point, index) => ({
+    x: overview.series.length <= 1 ? 0 : (index / (overview.series.length - 1)) * 720,
+    active: point.errors > 0
+  }));
+  return (
+    <section className="console-panel signal-panel">
+      <ConsolePanelHeader eyebrow="Signal timeline" title={`Traffic · ${overview.range}`} detail={`P50 ${overview.summary.latency_p50_ms} ms`} />
+      <div className="signal-chart">
+        <svg viewBox="0 0 720 150" role="img" aria-label={`Requests and P95 latency over ${overview.range}`}>
+          <g className="signal-gridlines">
+            {[18, 50, 82, 114].map((y) => <line key={y} x1="0" x2="720" y1={y} y2={y} />)}
+          </g>
+          <path className="signal-path signal-path--latency" d={latencyPath} />
+          <path className="signal-path signal-path--requests" d={requestPath} />
+          {errorPoints.filter((point) => point.active).map((point) => (
+            <line className="signal-error-tick" key={point.x} x1={point.x} x2={point.x} y1="132" y2="144" />
+          ))}
+        </svg>
+        <div className="signal-legend">
+          <span><i className="is-request" /> requests</span>
+          <span><i className="is-latency" /> p95 latency</span>
+          <span><i className="is-error" /> error bucket</span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function AttentionQueue({ alerts, onSelect }: { alerts: Overview["alerts"]; onSelect: (alert: Overview["alerts"][number]) => void }) {
+  return (
+    <section className="console-panel attention-panel">
+      <ConsolePanelHeader eyebrow="Attention queue" title={alerts.length ? `${alerts.length} signals` : "All clear"} />
+      {alerts.length === 0 ? (
+        <div className="all-clear"><Check size={16} /><span><strong>No intervention needed</strong><small>Routes and API keys are ready.</small></span></div>
+      ) : (
+        <div className="attention-list">
+          {alerts.slice(0, 6).map((alert) => (
+            <button key={alert.id} className={`attention-item attention-item--${alert.severity}`} onClick={() => onSelect(alert)}>
+              <AlertTriangle size={14} />
+              <span><strong>{alert.title}</strong><small>{alert.detail}</small></span>
+              <ChevronRight size={13} />
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ProviderCapacityGroup({
+  provider,
+  routes,
+  selected,
+  onSelect
+}: {
+  provider: Overview["providers"][number];
+  routes: Overview["routes"];
+  selected: { type: "provider" | "route" | "credential"; id: string } | null;
+  onSelect: (target: { type: "provider" | "route" | "credential"; id: string }) => void;
+}) {
+  return (
+    <section className="provider-debug-group">
+      <button className={`provider-debug-head ${selected?.type === "provider" && selected.id === provider.id ? "is-selected" : ""}`} onClick={() => onSelect({ type: "provider", id: provider.id })}>
+        <span><StatusDot state={!provider.enabled ? "disabled" : provider.keys_ready ? "healthy" : "exhausted"} /><strong>{provider.name}</strong><small>{provider.models_ready}/{provider.models_total} routes · {provider.keys_ready}/{provider.keys_total} keys</small></span>
+        <div className="limit-preview">
+          {capacityDimensions.map((dimension) => <LimitCell key={dimension} dimension={dimension} limit={provider.capacity[dimension]} />)}
+        </div>
+        <ChevronRight size={14} />
+      </button>
+      <div className="route-debug-list">
+        {routes.map((route) => (
+          <RouteDebugRow
+            key={route.id}
+            route={route}
+            selected={selected}
+            onSelect={onSelect}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function LimitCell({ dimension, limit }: { dimension: string; limit?: Overview["providers"][number]["capacity"][string] }) {
+  const ratio = limit && !limit.unlimited && limit.limit > 0 ? limit.remaining / limit.limit : 1;
+  const tone = limit?.unknown ? "unknown" : ratio <= 0 ? "critical" : ratio <= 0.2 ? "warning" : "healthy";
+  return (
+    <span className={`limit-cell limit-cell--${tone}`} title={`${dimension.toUpperCase()} provider capacity`}>
+      <small>{dimension}</small>
+      <strong>{!limit ? "—" : limit.unlimited ? "∞" : limit.unknown ? "?" : `${formatCompact(limit.remaining)}/${formatCompact(limit.limit)}`}</strong>
+    </span>
+  );
+}
+
+function RouteDebugRow({
+  route,
+  selected,
+  onSelect
+}: {
+  route: Overview["routes"][number];
+  selected: { type: "provider" | "route" | "credential"; id: string } | null;
+  onSelect: (target: { type: "provider" | "route" | "credential"; id: string }) => void;
+}) {
   const state = !route.enabled
     ? "disabled"
     : route.healthy_credentials === 0
@@ -560,29 +789,26 @@ function CapacityRail({ route }: { route: Overview["routes"][number] }) {
         ? "partial"
         : "healthy";
   return (
-    <article className="capacity-row">
-      <div className="capacity-row__identity">
+    <article className={`route-debug-row ${selected?.type === "route" && selected.id === route.id ? "is-selected" : ""}`}>
+      <button className="route-debug-row__identity" onClick={() => onSelect({ type: "route", id: route.id })}>
         <StatusDot state={state} />
-        <span><code>{route.alias}</code><small>{route.provider}</small></span>
-      </div>
-      <div className="capacity-track" aria-label={`${route.healthy_credentials} of ${route.total_credentials} credentials healthy`}>
+        <span><code>{route.alias}</code><small>{route.requests} requests · p95 {route.latency_p95_ms} ms</small></span>
+      </button>
+      <div className="route-hop"><ArrowRight size={13} /><span>{route.provider}</span></div>
+      <div className="credential-lane" aria-label={`${route.healthy_credentials} of ${route.total_credentials} credentials healthy`}>
         {route.segments.length === 0 ? (
-          <div className="credential-segment credential-segment--empty">
+          <div className="debug-segment debug-segment--empty">
             <strong>No credentials</strong>
-            <small>Add a key to serve this route</small>
+            <small>Add an API key</small>
           </div>
         ) : route.segments.map((segment) => (
-          <div
+          <button
             key={segment.id}
-            className={`credential-segment credential-segment--${segment.status}${segment.cursor ? " is-cursor" : ""}`}
+            className={`debug-segment debug-segment--${segment.status}${segment.cursor ? " is-cursor" : ""}${selected?.type === "credential" && selected.id === segment.id ? " is-selected" : ""}`}
             title={`${segment.label}: ${segment.status}`}
+            onClick={() => onSelect({ type: "credential", id: segment.id })}
           >
-            <div className="credential-segment__label">
-              <strong>{segment.label}</strong>
-              {(segment.primary || segment.cursor) && (
-                <span>{[segment.primary ? "primary" : "", segment.cursor ? "next" : ""].filter(Boolean).join(" · ")}</span>
-              )}
-            </div>
+            <span><strong>{segment.label}</strong>{segment.cursor && <i>next</i>}</span>
             <small>
               {segment.request_headroom
                 ? `${segment.request_headroom.remaining}/${segment.request_headroom.limit} ${segment.request_headroom.dimension}`
@@ -592,21 +818,205 @@ function CapacityRail({ route }: { route: Overview["routes"][number] }) {
                 ? `${segment.token_headroom.remaining}/${segment.token_headroom.limit} ${segment.token_headroom.dimension}`
                 : "∞ tokens"}
             </small>
-          </div>
+          </button>
         ))}
       </div>
-      <div className="capacity-row__numbers">
-        <span><strong>{route.healthy_credentials}/{route.total_credentials}</strong> keys ready</span>
-        <span><strong>{route.requests_24h}</strong> requests</span>
-        <span className={route.errors_24h ? "text-danger" : ""}><strong>{route.errors_24h}</strong> errors</span>
+      <div className="route-bottleneck">
+        <small>limiting now</small>
+        <strong>{formatRouteBottleneck(route)}</strong>
       </div>
     </article>
   );
 }
 
+function OverviewInspector({
+  provider,
+  route,
+  credential,
+  open,
+  onClose,
+  onSelectCredential,
+  onTest,
+  onRecheck,
+  navigate
+}: {
+  provider?: Overview["providers"][number];
+  route?: Overview["routes"][number];
+  credential?: Overview["routes"][number]["segments"][number];
+  open: boolean;
+  onClose: () => void;
+  onSelectCredential: (id: string) => void;
+  onTest: () => Promise<void>;
+  onRecheck: (id: string) => Promise<void>;
+  navigate: (page: Page, query?: Record<string, string>) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  if (!provider && !route && !credential) {
+    return <aside className={`overview-inspector is-empty${open ? " is-open" : ""}`}><CircleGauge size={20} /><strong>Select a route signal</strong><p>Inspect the next key, limiting bucket and reset without leaving Overview.</p></aside>;
+  }
+  return (
+    <aside className={`overview-inspector${open ? " is-open" : ""}`}>
+      <header>
+        <div><span>{credential ? "API key" : route ? "Public model" : "Provider"}</span><h2>{credential?.label || route?.alias || provider?.name}</h2></div>
+        <button className="console-icon inspector-close" onClick={onClose} aria-label="Close inspector"><X size={15} /></button>
+      </header>
+      {route && (
+        <div className="route-trace" aria-label="Selected route debugger trace">
+          <TraceNode label="model" value={route.alias} />
+          <ArrowRight size={15} />
+          <TraceNode label="provider" value={route.provider} />
+          <ArrowRight size={15} />
+          <TraceNode label="next key" value={route.segments.find((segment) => segment.cursor)?.label || "none"} tone={!route.next_credential_id ? "danger" : "default"} />
+          <ArrowRight size={15} />
+          <TraceNode label="limit" value={formatRouteBottleneck(route)} />
+        </div>
+      )}
+      {credential && (
+        <>
+          {credential.validation_error && <InlineNotice tone="danger">{credential.validation_error}</InlineNotice>}
+          <div className="inspector-definition">
+            <Definition label="Status" value={credential.status} />
+            <Definition label="Secret" value={`•••• ${credential.secret_suffix}`} />
+            <Definition label="Routing role" value={[credential.primary ? "primary" : "", credential.cursor ? "next" : ""].filter(Boolean).join(" · ") || "fallback"} />
+            <Definition label="Validated" value={credential.last_validated_at ? formatRelativeTime(credential.last_validated_at) : "not recorded"} />
+          </div>
+          <HeadroomReadout label="Request limit" headroom={credential.request_headroom} />
+          <HeadroomReadout label="Token limit" headroom={credential.token_headroom} />
+        </>
+      )}
+      {!credential && provider && (
+        <>
+          <div className="inspector-definition">
+            <Definition label="Routes ready" value={`${provider.models_ready}/${provider.models_total}`} />
+            <Definition label="Keys ready" value={`${provider.keys_ready}/${provider.keys_total}`} />
+            <Definition label="Key warnings" value={String(provider.keys_warning)} />
+            <Definition label="State" value={provider.enabled ? "enabled" : "disabled"} />
+          </div>
+          <div className="inspector-limit-grid">
+            {capacityDimensions.map((dimension) => <LimitCell key={dimension} dimension={dimension} limit={provider.capacity[dimension]} />)}
+          </div>
+        </>
+      )}
+      {route && !credential && (
+        <>
+          <div className="inspector-definition">
+            <Definition label="Provider" value={route.provider} />
+            <Definition label="Upstream model" value={route.upstream_model} mono />
+            <Definition label="Keys ready" value={`${route.healthy_credentials}/${route.total_credentials}`} />
+            <Definition label="Selected traffic" value={`${route.requests} requests`} />
+            <Definition label="Error rate" value={`${(route.error_rate * 100).toFixed(1)}%`} />
+            <Definition label="P95 latency" value={`${route.latency_p95_ms} ms`} />
+          </div>
+          <HeadroomReadout label="Next request bucket" headroom={route.next_request_headroom} />
+          <HeadroomReadout label="Next token bucket" headroom={route.next_token_headroom} />
+          <div className="inspector-key-list">
+            <span>Credential path</span>
+            {route.segments.map((segment) => (
+              <button key={segment.id} onClick={() => onSelectCredential(segment.id)}>
+                <StatusDot state={segment.status} /><strong>{segment.label}</strong><small>{segment.cursor ? "next" : segment.status}</small><ChevronRight size={13} />
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+      <div className="inspector-actions">
+        {credential ? (
+          <Button variant="quiet" disabled={busy} onClick={() => {
+            setBusy(true);
+            void onRecheck(credential.id).finally(() => setBusy(false));
+          }}><RefreshCw size={14} /> {busy ? "Checking…" : "Re-check key"}</Button>
+        ) : provider ? (
+          <Button variant="quiet" disabled={busy} onClick={() => {
+            setBusy(true);
+            void onTest().finally(() => setBusy(false));
+          }}><Activity size={14} /> {busy ? "Testing…" : "Test provider"}</Button>
+        ) : null}
+        {provider && <Button variant="quiet" onClick={() => navigate("providers", { provider: provider.id })}>Open provider</Button>}
+        {route && <Button variant="quiet" onClick={() => navigate("logs", { q: route.alias })}>View route logs</Button>}
+      </div>
+    </aside>
+  );
+}
+
+function TraceNode({ label, value, tone = "default" }: { label: string; value: string; tone?: "default" | "danger" }) {
+  return <span className={`trace-node trace-node--${tone}`}><small>{label}</small><strong>{value}</strong></span>;
+}
+
+function Definition({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return <div><span>{label}</span><strong className={mono ? "is-mono" : ""}>{value}</strong></div>;
+}
+
+function HeadroomReadout({ label, headroom }: { label: string; headroom?: Overview["routes"][number]["next_request_headroom"] }) {
+  if (!headroom) {
+    return <div className="headroom-readout is-unlimited"><span>{label}</span><strong>Unlimited</strong><small>No configured bucket limits this path.</small></div>;
+  }
+  const ratio = headroom.limit ? Math.max(0, Math.min(1, headroom.remaining / headroom.limit)) : 1;
+  return (
+    <div className={`headroom-readout ${ratio <= 0 ? "is-critical" : ratio <= 0.2 ? "is-warning" : ""}`}>
+      <span>{label} · {headroom.scope}</span>
+      <strong>{headroom.remaining} / {headroom.limit} {headroom.dimension}</strong>
+      <div><i style={{ width: `${ratio * 100}%` }} /></div>
+      <small>{headroom.reset_at ? `Resets ${formatResetTime(headroom.reset_at)}` : "Per request limit"}</small>
+    </div>
+  );
+}
+
+function chooseOverviewTarget(overview: Overview, current: { type: "provider" | "route" | "credential"; id: string } | null) {
+  if (current && overviewTargetExists(overview, current)) return current;
+  const firstAlert = overview.alerts[0];
+  if (firstAlert) return { type: firstAlert.resource_type, id: firstAlert.resource_id };
+  const busiest = [...overview.routes].sort((left, right) => right.requests - left.requests)[0];
+  if (busiest) return { type: "route" as const, id: busiest.id };
+  if (overview.providers[0]) return { type: "provider" as const, id: overview.providers[0].id };
+  return null;
+}
+
+function overviewTargetExists(overview: Overview, target: { type: "provider" | "route" | "credential"; id: string }) {
+  if (target.type === "provider") return overview.providers.some((provider) => provider.id === target.id);
+  if (target.type === "route") return overview.routes.some((route) => route.id === target.id);
+  return overview.routes.some((route) => route.segments.some((segment) => segment.id === target.id));
+}
+
+function timelinePath(values: number[], width: number, height: number) {
+  if (values.length === 0) return "";
+  const max = Math.max(...values, 1);
+  return values.map((value, index) => {
+    const x = values.length === 1 ? width / 2 : (index / (values.length - 1)) * width;
+    const y = 8 + (height - 16) * (1 - value / max);
+    return `${index ? "L" : "M"} ${x.toFixed(2)} ${y.toFixed(2)}`;
+  }).join(" ");
+}
+
+function formatRouteBottleneck(route: Overview["routes"][number]) {
+  const candidates = [route.next_request_headroom, route.next_token_headroom].filter(Boolean);
+  if (!route.next_credential_id) return "no route";
+  if (candidates.length === 0) return "unlimited";
+  const tightest = candidates.sort((left, right) => (
+    (left!.remaining / Math.max(left!.limit, 1)) - (right!.remaining / Math.max(right!.limit, 1))
+  ))[0]!;
+  return `${tightest.remaining}/${tightest.limit} ${tightest.dimension}`;
+}
+
+function formatResetTime(value: string) {
+  const milliseconds = new Date(value).getTime() - Date.now();
+  if (milliseconds <= 0) return "now";
+  if (milliseconds < 60_000) return `in ${Math.ceil(milliseconds / 1000)}s`;
+  if (milliseconds < 3_600_000) return `in ${Math.ceil(milliseconds / 60_000)}m`;
+  return `at ${new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+function formatRelativeTime(value: string) {
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
+  if (seconds < 10) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
 function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" | "danger") => void }) {
   const [providers, setProviders] = useState<Provider[]>([]);
-  const [selectedID, setSelectedID] = useState("");
+  const [selectedID, setSelectedID] = useState(() => new URLSearchParams(location.search).get("provider") || "");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [panel, setPanel] = useState<
@@ -624,7 +1034,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
       const result = await api<{ providers: Provider[] }>("/api/admin/providers");
       const normalized = normalizeProviders(result.providers);
       setProviders(normalized);
-      setSelectedID((current) => current || normalized[0]?.id || "");
+      setSelectedID((current) => normalized.some((provider) => provider.id === current) ? current : normalized[0]?.id || "");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Providers could not be loaded.");
     } finally {
@@ -836,7 +1246,7 @@ function ProviderCapacityStrip({ provider }: { provider: Provider }) {
   );
 }
 
-async function testProvider(provider: Provider, notify: (message: string, tone?: "success" | "danger") => void) {
+async function testProvider(provider: Pick<Provider, "id">, notify: (message: string, tone?: "success" | "danger") => void) {
   try {
     const result = await api<{ ok: boolean; valid: number; total: number }>(`/api/admin/providers/${provider.id}/test`, { method: "POST" });
     notify(
@@ -1394,28 +1804,86 @@ function ModelCatalog({
   );
 }
 
-function ModelsPage({ notify }: { notify: (message: string, tone?: "success" | "danger") => void }) {
+function ModelsPage({
+  navigate,
+  notify
+}: {
+  navigate: (page: Page, query?: Record<string, string>) => void;
+  notify: (message: string, tone?: "success" | "danger") => void;
+}) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+  const [selectedID, setSelectedID] = useState(() => new URLSearchParams(location.search).get("model") || "");
   useEffect(() => {
-    void api<{ providers: Provider[] }>("/api/admin/providers").then((result) => setProviders(normalizeProviders(result.providers))).catch((caught) => notify(errorMessage(caught), "danger")).finally(() => setLoading(false));
+    void api<{ providers: Provider[] }>("/api/admin/providers")
+      .then((result) => {
+        const normalized = normalizeProviders(result.providers);
+        setProviders(normalized);
+        const available = normalized.flatMap((provider) => provider.models);
+        setSelectedID((current) => available.some((model) => model.id === current) ? current : available[0]?.id || "");
+      })
+      .catch((caught) => notify(errorMessage(caught), "danger"))
+      .finally(() => setLoading(false));
   }, [notify]);
   const models = providers.flatMap((provider) => provider.models.map((model) => ({ ...model, provider, credentials: provider.credentials })));
+  const filtered = models.filter((model) => {
+    const needle = query.trim().toLowerCase();
+    return !needle || model.public_alias.toLowerCase().includes(needle) ||
+      model.upstream_model.toLowerCase().includes(needle) || model.provider.name.toLowerCase().includes(needle);
+  });
+  const selected = models.find((model) => model.id === selectedID);
   return (
     <>
-      <PageHeader eyebrow="Public contract" title="Model routes" description="These aliases—not provider names—are the only routing choice your applications make." />
+      <PageHeader eyebrow="Public contract" title="Model routes" description="Inspect every public alias as a routable resource, not a provider-specific endpoint." />
       {loading ? <PageSkeleton /> : models.length === 0 ? <EmptyState title="No public models" description="Create a route inside a provider to expose it through /v1/models." /> : (
-        <div className="model-table">
-          <div className="table-head"><span>Public alias</span><span>Provider / upstream</span><span>Endpoints</span><span>Credential pool</span><span>Capture</span></div>
-          {models.map((model) => (
-            <div className="table-row" key={model.id}>
-              <span><StatusDot state={model.enabled ? "healthy" : "disabled"} /><code>{model.public_alias}</code></span>
-              <span><strong>{model.provider.name}</strong><small>{model.upstream_model}</small></span>
-              <span><small>Chat · {model.supports_responses ? "Responses native" : "Responses translated"}{model.strip_parameters.length ? ` · removes ${model.strip_parameters.join(", ")}` : ""}</small></span>
-              <span>{model.credentials.filter((item) => item.enabled && item.status === "healthy").length}/{model.credentials.length} ready</span>
-              <span>{model.capture_bodies ? "30d encrypted" : "Metadata only"}</span>
+        <div className="ide-resource-workbench">
+          <section className="ide-resource-list">
+            <label className="ide-filter"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter aliases, upstreams or providers" /></label>
+            <header><span>Public alias</span><span>Provider</span><span>Keys</span></header>
+            <div>
+              {filtered.map((model) => {
+                const ready = model.credentials.filter((item) => item.enabled && item.status === "healthy").length;
+                return (
+                  <button key={model.id} className={selectedID === model.id ? "is-selected" : ""} onClick={() => setSelectedID(model.id)}>
+                    <span><StatusDot state={!model.enabled ? "disabled" : ready ? "healthy" : "exhausted"} /><code>{model.public_alias}</code><small>{model.upstream_model}</small></span>
+                    <span>{model.provider.name}</span>
+                    <span>{ready}/{model.credentials.length}</span>
+                    <ChevronRight size={13} />
+                  </button>
+                );
+              })}
             </div>
-          ))}
+          </section>
+          {selected && (
+            <aside className="ide-resource-inspector">
+              <header><span>Model route</span><h2>{selected.public_alias}</h2><code>{selected.upstream_model}</code></header>
+              <div className="inspector-definition">
+                <Definition label="Provider" value={selected.provider.name} />
+                <Definition label="Route state" value={selected.enabled ? "enabled" : "disabled"} />
+                <Definition label="Chat endpoint" value={selected.supports_chat ? "native" : "off"} />
+                <Definition label="Responses" value={selected.supports_responses ? "native" : "translated"} />
+                <Definition label="Output ceiling" value={`${selected.default_max_output_tokens} tokens`} />
+                <Definition label="Tokenizer" value={selected.tokenizer} mono />
+              </div>
+              {selected.strip_parameters.length > 0 && <InlineNotice>Removes unsupported fields: <code>{selected.strip_parameters.join(", ")}</code></InlineNotice>}
+              <section className="ide-inspector-section">
+                <span>Credential path</span>
+                {selected.credentials.map((credential) => (
+                  <div key={credential.id} className={credential.validation_error ? "has-warning" : ""}>
+                    <StatusDot state={credential.status} />
+                    <strong>{credential.label}</strong>
+                    <small>{credential.is_primary ? "primary" : credential.status}</small>
+                    <LimitSummary policy={credential.model_limits[selected.id] || credential.limits} />
+                  </div>
+                ))}
+              </section>
+              <div className="inspector-actions">
+                <Button variant="quiet" onClick={() => navigate("providers", { provider: selected.provider.id })}>Open provider setup</Button>
+                <Button variant="quiet" onClick={() => navigate("logs", { q: selected.public_alias })}>View request logs</Button>
+              </div>
+            </aside>
+          )}
         </div>
       )}
     </>
@@ -1424,8 +1892,9 @@ function ModelsPage({ notify }: { notify: (message: string, tone?: "success" | "
 
 function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "danger") => void }) {
   const [logs, setLogs] = useState<RequestLog[]>([]);
-  const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("");
+  const initialParams = useMemo(() => new URLSearchParams(location.search), []);
+  const [query, setQuery] = useState(() => initialParams.get("q") || "");
+  const [status, setStatus] = useState(() => initialParams.get("status") || "");
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<RequestLog | null>(null);
   const [bodies, setBodies] = useState<{ request: string | null; response: string | null } | null>(null);
@@ -1434,6 +1903,7 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
     try {
       const result = await api<{ logs: RequestLog[] }>(`/api/admin/logs?limit=100&q=${encodeURIComponent(query)}&status=${encodeURIComponent(status)}`);
       setLogs(result.logs);
+      setSelected((current) => result.logs.find((log) => log.id === current?.id) || result.logs[0] || null);
     } catch (caught) {
       notify(errorMessage(caught), "danger");
     } finally {
@@ -1441,6 +1911,12 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
     }
   }, [query, status, notify]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (query) params.set("q", query);
+    if (status) params.set("status", status);
+    history.replaceState({}, "", `/admin/logs${params.size ? `?${params}` : ""}`);
+  }, [query, status]);
   useEffect(() => {
     setBodies(null);
     if (selected?.body_captured) {
@@ -1451,42 +1927,69 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
   return (
     <>
       <PageHeader eyebrow="Request evidence" title="Logs" description="Metadata is always retained. Bodies appear only for routes where encrypted capture is enabled." actions={<Button variant="quiet" onClick={() => void load()}><RefreshCw size={15} /> Refresh</Button>} />
-      <div className="filter-bar">
-        <label><span className="sr-only">Search logs</span><input placeholder="Request ID or model alias" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
-        <label><span className="sr-only">Status</span><select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">All statuses</option><option value="200">200</option><option value="400">400</option><option value="429">429</option><option value="500">500</option><option value="502">502</option><option value="503">503</option></select></label>
-      </div>
-      {loading ? <PageSkeleton /> : logs.length === 0 ? <EmptyState title="No matching requests" description="Send a request through /v1 or clear the current filters." /> : (
-        <div className="log-table">
-          <div className="table-head"><span>Time / request</span><span>Model</span><span>Route</span><span>Status</span><span>Latency</span><span>Tokens</span></div>
-          {logs.map((log) => (
-            <button className="table-row" key={log.id} onClick={() => setSelected(log)}>
-              <span><strong>{new Date(log.created_at).toLocaleTimeString()}</strong><small>{log.request_id}</small></span>
-              <span><code>{log.model_alias}</code></span>
-              <span><strong>{log.provider_name}</strong><small>{log.credential_label || "No credential"}</small></span>
-              <span className={log.status_code >= 400 ? "text-danger" : ""}>{log.status_code}</span>
-              <span>{log.latency_ms} ms</span>
-              <span>{formatNumber(log.input_tokens + log.output_tokens)}</span>
-            </button>
-          ))}
-        </div>
-      )}
-      {selected && (
-        <Sheet title={selected.request_id} eyebrow={`${selected.endpoint} · HTTP ${selected.status_code}`} onClose={() => setSelected(null)} wide>
-          <div className="log-detail-grid">
-            <div><span>Model</span><code>{selected.model_alias}</code></div>
-            <div><span>Provider</span><strong>{selected.provider_name}</strong></div>
-            <div><span>Latency</span><strong>{selected.latency_ms} ms</strong></div>
-            <div><span>Tokens</span><strong>{selected.input_tokens} in · {selected.output_tokens} out</strong></div>
+      <div className="ide-resource-workbench log-workbench">
+        <section className="ide-resource-list" aria-label="Request logs">
+          <div className="ide-filter log-filter">
+            <Search size={14} />
+            <label>
+              <span className="sr-only">Search logs</span>
+              <input aria-label="Search logs" placeholder="Request ID or model alias" value={query} onChange={(e) => setQuery(e.target.value)} />
+            </label>
+            <label>
+              <span className="sr-only">Status</span>
+              <select aria-label="Status" value={status} onChange={(e) => setStatus(e.target.value)}>
+                <option value="">All statuses</option><option value="200">200</option><option value="400">400</option><option value="429">429</option><option value="500">500</option><option value="502">502</option><option value="503">503</option>
+              </select>
+            </label>
           </div>
-          <fieldset><legend>Attempts</legend><div className="attempt-list">{selected.attempts.map((attempt, index) => <div key={`${attempt.credential_id}-${index}`}><span>{index + 1}</span><strong>{attempt.credential_label}</strong><code>{attempt.status_code || attempt.error}</code><small>{attempt.duration_ms} ms</small></div>)}</div></fieldset>
-          {selected.body_captured ? (
-            <div className="body-grid">
-              <section><h3>Request {selected.body_truncated && <small>truncated</small>}</h3><pre>{bodies?.request ?? "Loading encrypted body…"}</pre></section>
-              <section><h3>Response {selected.body_truncated && <small>truncated</small>}</h3><pre>{bodies?.response ?? "No captured response body."}</pre></section>
+          <header><span>Request</span><span>Model / route</span><span>Status</span><span>Latency</span><span /></header>
+          <div className="log-resource-rows">
+            {loading ? (
+              <PageSkeleton />
+            ) : logs.length === 0 ? (
+              <EmptyState title="No matching requests" description="Send a request through /v1 or clear the current filters." />
+            ) : logs.map((log) => (
+              <button key={log.id} className={selected?.id === log.id ? "is-selected" : ""} onClick={() => setSelected(log)}>
+                <span>
+                  <StatusDot state={log.status_code >= 500 ? "exhausted" : log.status_code >= 400 ? "partial" : "healthy"} />
+                  <strong>{new Date(log.created_at).toLocaleTimeString()}</strong>
+                  <small>{log.request_id}</small>
+                </span>
+                <span><code>{log.model_alias}</code><small>{log.provider_name} · {log.credential_label || "No credential"}</small></span>
+                <strong className={log.status_code >= 400 ? "text-danger" : ""}>{log.status_code}</strong>
+                <small>{log.latency_ms} ms</small>
+                <ChevronRight size={13} />
+              </button>
+            ))}
+          </div>
+        </section>
+        {selected ? (
+          <aside className="ide-resource-inspector log-resource-inspector">
+            <header>
+              <span>{selected.endpoint} · HTTP {selected.status_code}</span>
+              <h2>{selected.request_id}</h2>
+              <code>{selected.model_alias}</code>
+            </header>
+            <div className="log-detail-grid">
+              <div><span>Provider</span><strong>{selected.provider_name}</strong></div>
+              <div><span>API key</span><strong>{selected.credential_label || "No credential"}</strong></div>
+              <div><span>Latency</span><strong>{selected.latency_ms} ms</strong></div>
+              <div><span>Tokens</span><strong>{selected.input_tokens} in · {selected.output_tokens} out</strong></div>
             </div>
-          ) : <InlineNotice>Body capture was off for this model route. Only metadata is available.</InlineNotice>}
-        </Sheet>
-      )}
+            <fieldset><legend>Routing attempts</legend><div className="attempt-list">{selected.attempts.length ? selected.attempts.map((attempt, index) => <div key={`${attempt.credential_id}-${index}`}><span>{index + 1}</span><strong>{attempt.credential_label}</strong><code>{attempt.status_code || attempt.error}</code><small>{attempt.duration_ms} ms</small></div>) : <p className="console-empty">No attempt detail was recorded.</p>}</div></fieldset>
+            {selected.body_captured ? (
+              <div className="body-grid">
+                <section><h3>Request {selected.body_truncated && <small>truncated</small>}</h3><pre>{bodies?.request ?? "Loading encrypted body…"}</pre></section>
+                <section><h3>Response {selected.body_truncated && <small>truncated</small>}</h3><pre>{bodies?.response ?? "No captured response body."}</pre></section>
+              </div>
+            ) : <InlineNotice>Body capture was off for this model route. Only metadata is available.</InlineNotice>}
+          </aside>
+        ) : (
+          <aside className="ide-resource-inspector ide-resource-inspector--empty">
+            <FileClock size={20} /><strong>Select a request</strong><p>Inspect routing attempts, token usage, latency and optional encrypted bodies.</p>
+          </aside>
+        )}
+      </div>
     </>
   );
 }
@@ -1494,18 +1997,18 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
 function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNewKey: (key: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
   const [settings, setSettings] = useState<Settings | null>(null);
   useEffect(() => { void api<Settings>("/api/admin/settings").then(setSettings).catch((caught) => notify(errorMessage(caught), "danger")); }, [notify, gatewayKey]);
+  const rotateKey = () => {
+    if (!confirm("Rotate the gateway key now? The current key will stop working immediately.")) return;
+    void api<{ gateway_key: string }>("/api/admin/access/rotate", { method: "POST" })
+      .then((result) => { onNewKey(result.gateway_key); notify("Gateway key rotated."); })
+      .catch((caught) => notify(errorMessage(caught), "danger"));
+  };
   return (
     <>
       <PageHeader eyebrow="Unified authentication" title="Access key" description="One active Bearer key can call every enabled model alias. Upstream provider secrets never leave this control plane." />
       <section className="access-key-panel">
         <div className="key-prefix"><ShieldCheck size={20} /><span><small>Active key prefix</small><code>{settings?.gateway_key_prefix ? `${settings.gateway_key_prefix}••••••••••••` : "Loading…"}</code></span></div>
         <div><strong>Immediate rotation</strong><p>Rotating revokes the current key in the same database transaction. Update every application immediately.</p></div>
-        <Button variant="danger" onClick={() => {
-          if (!confirm("Rotate the gateway key now? The current key will stop working immediately.")) return;
-          void api<{ gateway_key: string }>("/api/admin/access/rotate", { method: "POST" })
-            .then((result) => { onNewKey(result.gateway_key); notify("Gateway key rotated."); })
-            .catch((caught) => notify(errorMessage(caught), "danger"));
-        }}><RefreshCw size={15} /> Rotate key</Button>
       </section>
       <section className="section-block code-example">
         <div className="section-heading"><div><p className="eyebrow">Client contract</p><h2>Use any configured model</h2></div></div>
@@ -1514,6 +2017,10 @@ function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNe
   -H "Content-Type: application/json" \\
   -d '{"model":"provider/model-alias","messages":[{"role":"user","content":"Hello"}]}'`}</pre>
       </section>
+      <div className="page-actions console-actionbar">
+        <span>Rotation immediately revokes the current client credential.</span>
+        <Button variant="danger" onClick={rotateKey}><RefreshCw size={15} /> Rotate key</Button>
+      </div>
     </>
   );
 }
@@ -1531,13 +2038,16 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
         <label className="settings-row"><span><strong>Metadata retention</strong><small>Request IDs, routing attempts, status, latency and usage.</small></span><div><input type="number" min={1} max={3650} value={settings.metadata_retention_days} onChange={(e) => setSettings({ ...settings, metadata_retention_days: Number(e.target.value) })} /><code>days</code></div></label>
         <label className="settings-row"><span><strong>Captured body retention</strong><small>Only applies to model routes where encrypted body capture is enabled.</small></span><div><input type="number" min={1} max={365} value={settings.body_retention_days} onChange={(e) => setSettings({ ...settings, body_retention_days: Number(e.target.value) })} /><code>days</code></div></label>
       </section>
-      <div className="page-actions"><Button disabled={busy} onClick={() => {
-        setBusy(true);
-        void api("/api/admin/settings", { method: "PUT", json: settings })
-          .then(() => notify("System settings saved."))
-          .catch((caught) => notify(errorMessage(caught), "danger"))
-          .finally(() => setBusy(false));
-      }}>{busy ? "Saving…" : "Save settings"}</Button></div>
+      <div className="page-actions console-actionbar">
+        <span>Changes apply to new requests without restarting the gateway.</span>
+        <Button disabled={busy} onClick={() => {
+          setBusy(true);
+          void api("/api/admin/settings", { method: "PUT", json: settings })
+            .then(() => notify("System settings saved."))
+            .catch((caught) => notify(errorMessage(caught), "danger"))
+            .finally(() => setBusy(false));
+        }}>{busy ? "Saving…" : "Save settings"}</Button>
+      </div>
       <section className="security-baseline">
         <ShieldCheck size={19} />
         <div><strong>Security baseline active</strong><p>Encrypted provider secrets · HttpOnly sessions · CSRF checks · private-network SSRF blocking · strict browser policy</p></div>

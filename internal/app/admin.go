@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -50,88 +51,18 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
-	providers, err := s.listProviders(r.Context())
+	overview, err := s.buildAdminOverview(r.Context(), r.URL.Query().Get("range"))
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Dashboard data is unavailable.")
-		return
-	}
-	settings, _, err := s.settings(r.Context())
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Gateway settings are unavailable.")
-		return
-	}
-	var requests24h, errors24h, tokens24h int64
-	_ = s.db.QueryRow(r.Context(), `
-		SELECT COUNT(*), COUNT(*) FILTER (WHERE status_code >= 400),
-		       COALESCE(SUM(input_tokens + output_tokens), 0)
-		FROM request_logs WHERE created_at >= NOW() - INTERVAL '24 hours'
-	`).Scan(&requests24h, &errors24h, &tokens24h)
-
-	type routeCapacity struct {
-		ID          string               `json:"id"`
-		Alias       string               `json:"alias"`
-		Provider    string               `json:"provider"`
-		Enabled     bool                 `json:"enabled"`
-		Healthy     int                  `json:"healthy_credentials"`
-		Unavailable int                  `json:"unavailable_credentials"`
-		Total       int                  `json:"total_credentials"`
-		Requests24h int64                `json:"requests_24h"`
-		Errors24h   int64                `json:"errors_24h"`
-		Segments    []credentialCapacity `json:"segments"`
-	}
-	routes := make([]routeCapacity, 0)
-	for _, provider := range providers {
-		for _, model := range provider.Models {
-			capacity := routeCapacity{
-				ID: model.ID, Alias: model.PublicAlias, Provider: provider.Name,
-				Enabled: provider.Enabled && model.Enabled, Total: len(provider.Credentials),
-				Segments: make([]credentialCapacity, 0, len(provider.Credentials)),
-			}
-			primaryIndex := -1
-			fallbacks := make([]int, 0, len(provider.Credentials))
-			for index, credential := range provider.Credentials {
-				segment := s.credentialCapacity(r.Context(), credential, model.ID)
-				capacity.Segments = append(capacity.Segments, segment)
-				if segment.Status == "healthy" {
-					capacity.Healthy++
-					if credential.IsPrimary && primaryIndex == -1 {
-						primaryIndex = index
-					} else {
-						fallbacks = append(fallbacks, index)
-					}
-				} else {
-					capacity.Unavailable++
-				}
-			}
-			cursorIndex := primaryIndex
-			if cursorIndex == -1 && len(fallbacks) > 0 {
-				if cursor, err := s.redis.Get(r.Context(), "rr:"+model.ID).Int64(); err == nil {
-					cursorIndex = fallbacks[int(cursor)%len(fallbacks)]
-				} else {
-					cursorIndex = fallbacks[0]
-				}
-			}
-			if cursorIndex >= 0 {
-				capacity.Segments[cursorIndex].Cursor = true
-			}
-			_ = s.db.QueryRow(r.Context(), `
-				SELECT COUNT(*), COUNT(*) FILTER (WHERE status_code >= 400)
-				FROM request_logs
-				WHERE model_id = $1 AND created_at >= NOW() - INTERVAL '24 hours'
-			`, model.ID).Scan(&capacity.Requests24h, &capacity.Errors24h)
-			routes = append(routes, capacity)
+		if errors.Is(err, errInvalidOverviewRange) {
+			writeError(w, http.StatusBadRequest, "invalid_range", "Range must be 1h, 24h, or 7d.")
+			return
 		}
+		s.logger.Error("admin overview build failed", "error", err)
+		writeError(w, http.StatusServiceUnavailable, "overview_unavailable", "Overview data is unavailable.")
+		return
 	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"base_url":  s.cfg.PublicBaseURL + "/v1",
-		"settings":  settings,
-		"providers": len(providers),
-		"routes":    routes,
-		"usage": map[string]any{
-			"requests_24h": requests24h, "errors_24h": errors24h, "tokens_24h": tokens24h,
-		},
-	})
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, overview)
 }
 
 func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
@@ -250,110 +181,6 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 		}
 	}
 	return providers, nil
-}
-
-type limitHeadroom struct {
-	Dimension string `json:"dimension"`
-	Scope     string `json:"scope"`
-	Remaining int64  `json:"remaining"`
-	Limit     int64  `json:"limit"`
-}
-
-type credentialCapacity struct {
-	ID      string         `json:"id"`
-	Label   string         `json:"label"`
-	Primary bool           `json:"primary"`
-	Status  string         `json:"status"`
-	Cursor  bool           `json:"cursor"`
-	Request *limitHeadroom `json:"request_headroom,omitempty"`
-	Token   *limitHeadroom `json:"token_headroom,omitempty"`
-	Unknown bool           `json:"unknown"`
-}
-
-func (s *Server) credentialCapacity(ctx context.Context, credential CredentialView, modelID string) credentialCapacity {
-	result := credentialCapacity{
-		ID: credential.ID, Label: credential.Label, Primary: credential.IsPrimary, Status: "healthy",
-	}
-	if !credential.Enabled {
-		result.Status = "disabled"
-		return result
-	}
-	if credential.Status == "quarantined" {
-		result.Status = "quarantined"
-		return result
-	}
-	if cooldown, err := s.redis.TTL(ctx, "cooldown:"+credential.ID).Result(); err != nil {
-		result.Status = "unknown"
-		result.Unknown = true
-		return result
-	} else if cooldown > 0 {
-		result.Status = "cooldown"
-	}
-
-	runtime := credentialRuntime{CredentialView: credential}
-	constraints, _ := buildConstraints(runtime, modelID, 0)
-	now := time.Now().UnixMilli()
-	for _, constraint := range constraints {
-		values, err := s.redis.HMGet(ctx, constraint.Key, "count", "bucket").Result()
-		if err != nil {
-			result.Status = "unknown"
-			result.Unknown = true
-			return result
-		}
-		var count, bucket int64
-		if len(values) == 2 {
-			count, _ = strconv.ParseInt(fmt.Sprint(values[0]), 10, 64)
-			bucket, _ = strconv.ParseInt(fmt.Sprint(values[1]), 10, 64)
-		}
-		if bucket != now/constraint.WindowMS {
-			count = 0
-		}
-		remaining := constraint.Capacity - count
-		if remaining < 0 {
-			remaining = 0
-		}
-		parts := strings.Split(constraint.Key, ":")
-		dimension := strings.ToUpper(parts[len(parts)-1])
-		scope := "shared"
-		if strings.Contains(constraint.Key, ":model:") {
-			scope = "model"
-		}
-		candidate := &limitHeadroom{
-			Dimension: dimension, Scope: scope, Remaining: remaining, Limit: constraint.Capacity,
-		}
-		if constraint.Token {
-			result.Token = tighterHeadroom(result.Token, candidate)
-		} else {
-			result.Request = tighterHeadroom(result.Request, candidate)
-		}
-	}
-	for _, scoped := range []struct {
-		scope  string
-		policy RatePolicy
-	}{{scope: "shared", policy: credential.Limits}, {scope: "model", policy: credential.ModelLimits[modelID]}} {
-		if scoped.policy.TPR != nil {
-			result.Token = tighterHeadroom(result.Token, &limitHeadroom{
-				Dimension: "TPR", Scope: scoped.scope, Remaining: *scoped.policy.TPR, Limit: *scoped.policy.TPR,
-			})
-		}
-	}
-	if (result.Request != nil && result.Request.Remaining == 0) ||
-		(result.Token != nil && result.Token.Remaining == 0) {
-		result.Status = "exhausted"
-	}
-	return result
-}
-
-func tighterHeadroom(current, candidate *limitHeadroom) *limitHeadroom {
-	if current == nil {
-		return candidate
-	}
-	currentRatio := float64(current.Remaining) / float64(current.Limit)
-	candidateRatio := float64(candidate.Remaining) / float64(candidate.Limit)
-	if candidateRatio < currentRatio {
-		return candidate
-	}
-	return current
 }
 
 func (s *Server) handleListProviders(w http.ResponseWriter, r *http.Request) {

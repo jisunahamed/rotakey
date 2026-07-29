@@ -84,45 +84,116 @@ export type DiscoveredModel = {
 };
 
 export type Overview = {
+  generated_at: string;
+  range: "1h" | "24h" | "7d";
   base_url: string;
-  providers: number;
-  usage: {
-    requests_24h: number;
-    errors_24h: number;
-    tokens_24h: number;
+  summary: {
+    providers_total: number;
+    providers_ready: number;
+    routes_total: number;
+    routes_ready: number;
+    keys_total: number;
+    keys_ready: number;
+    keys_warning: number;
+    requests: number;
+    tokens: number;
+    errors: number;
+    error_rate: number;
+    latency_p50_ms: number;
+    latency_p95_ms: number;
+    max_wait_ms: number;
+    gateway_key_ready: boolean;
   };
-  settings: Settings;
+  series: Array<{
+    timestamp: string;
+    requests: number;
+    errors: number;
+    tokens: number;
+    latency_p95_ms: number;
+  }>;
+  providers: Array<{
+    id: string;
+    name: string;
+    enabled: boolean;
+    models_total: number;
+    models_ready: number;
+    keys_total: number;
+    keys_ready: number;
+    keys_warning: number;
+    validation_warnings: number;
+    capacity: Record<string, OverviewLimit>;
+  }>;
   routes: Array<{
     id: string;
+    provider_id: string;
     alias: string;
+    upstream_model: string;
     provider: string;
     enabled: boolean;
     healthy_credentials: number;
     unavailable_credentials: number;
     total_credentials: number;
-    requests_24h: number;
-    errors_24h: number;
+    requests: number;
+    errors: number;
+    tokens: number;
+    error_rate: number;
+    latency_p95_ms: number;
+    last_request_at?: string;
+    next_credential_id?: string;
+    next_request_headroom?: OverviewHeadroom;
+    next_token_headroom?: OverviewHeadroom;
+    strip_parameters: string[];
+    supports_responses: boolean;
+    default_max_output_tokens: number;
     segments: Array<{
       id: string;
       label: string;
+      secret_suffix: string;
       primary: boolean;
       status: "healthy" | "cooldown" | "quarantined" | "disabled" | "exhausted" | "unknown";
       cursor: boolean;
       unknown: boolean;
-      request_headroom?: {
-        dimension: string;
-        scope: "shared" | "model";
-        remaining: number;
-        limit: number;
-      };
-      token_headroom?: {
-        dimension: string;
-        scope: "shared" | "model";
-        remaining: number;
-        limit: number;
-      };
+      validation_error?: string;
+      last_validated_at?: string;
+      cooldown_until?: string;
+      request_headroom?: OverviewHeadroom;
+      token_headroom?: OverviewHeadroom;
     }>;
   }>;
+  alerts: Array<{
+    id: string;
+    severity: "critical" | "warning" | "info";
+    resource_type: "provider" | "route" | "credential";
+    resource_id: string;
+    title: string;
+    detail: string;
+  }>;
+  recent_failures: Array<{
+    request_id: string;
+    model_alias: string;
+    provider_name: string;
+    credential_label: string;
+    status_code: number;
+    error_code?: string;
+    latency_ms: number;
+    created_at: string;
+  }>;
+};
+
+export type OverviewLimit = {
+  limit: number;
+  remaining: number;
+  unlimited: boolean;
+  unknown: boolean;
+  reset_at?: string;
+};
+
+export type OverviewHeadroom = {
+  dimension: string;
+  scope: "shared" | "model";
+  remaining: number;
+  limit: number;
+  reset_at?: string;
 };
 
 export type RequestLog = {

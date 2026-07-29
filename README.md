@@ -105,6 +105,20 @@ curl -fsS https://ai.example.com/health/ready
 
 Caddy obtains and renews the certificate automatically. PostgreSQL and Redis have no published host ports.
 
+## Operational console
+
+Overview is the single-owner routing control surface. It refreshes every 10 seconds and can summarize the last `1h`, `24h`, or `7d` without changing public API behavior.
+
+- The status ledger shows ready routes and API keys, requests, errors, tokens, and P95 latency.
+- The accessible SVG signal timeline compares traffic, latency, and error buckets without a chart dependency.
+- The attention queue prioritizes invalid keys, disabled resources, exhausted capacity, and limits with 20% or less headroom.
+- Provider rows aggregate live `RPS`, `RPM`, `RPD`, `TPS`, `TPM`, `TPD`, and `TPR` capacity across every ready key.
+- The Route Debugger traces `public model -> provider -> next API key -> limiting bucket -> reset time`. Every credential segment shows health, cursor state, and effective shared plus model-specific headroom.
+- Selecting a provider, model, or key opens the contextual inspector. On mobile it opens as a full-screen sheet.
+- Overview exposes only safe actions: copy the unified URL, test a provider, recheck a key, or open filtered provider and request-log views.
+
+Providers, Model routes, and Request logs use the same dense resource/inspector navigation. Deep links are supported with `/admin/providers?provider=<id>`, `/admin/models?model=<id>`, and `/admin/logs?q=<model-or-request>&status=<code>`.
+
 ## Add a provider
 
 In **Providers → Add provider**:
