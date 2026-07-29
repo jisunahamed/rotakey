@@ -210,6 +210,7 @@ export type RequestLog = {
     error?: string;
     retryable: boolean;
     duration_ms: number;
+    removed_parameters?: string[];
   }>;
   status_code: number;
   latency_ms: number;

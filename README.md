@@ -185,9 +185,9 @@ The model-first capacity rail shows the next round-robin segment, credential hea
 
 ### Provider-specific request compatibility
 
-Some OpenAI-compatible providers reject otherwise common top-level request fields. Edit a model route and add those field names under **Remove unsupported request fields**. Rotakey removes only the explicitly listed fields for that route and records the removal in gateway logs.
+Some OpenAI-compatible providers reject otherwise common top-level request fields. When an upstream explicitly reports an unsupported optional compatibility hint, Rotakey removes the reported field and retries once. Learned fields are cached per model route for 24 hours, appear in the request's routing attempts, and are returned in `X-Rotakey-Removed-Parameters`.
 
-For example, if an upstream returns `Unsupported parameter(s): thinking`, add `thinking` to that model route. Other routes and request fields remain unchanged.
+Adaptive removal is intentionally limited to safe behavior hints: `thinking`, `reasoning`, `reasoning_effort`, and `verbosity`. Core request fields and arbitrary parameters are never silently removed. For a permanent or provider-specific override, edit a model route and add a field under **Remove unsupported request fields**.
 
 ## Responses compatibility
 

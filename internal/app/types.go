@@ -105,12 +105,13 @@ type routeRuntime struct {
 }
 
 type AttemptRecord struct {
-	CredentialID    string `json:"credential_id"`
-	CredentialLabel string `json:"credential_label"`
-	StatusCode      int    `json:"status_code"`
-	Error           string `json:"error,omitempty"`
-	Retryable       bool   `json:"retryable"`
-	DurationMS      int64  `json:"duration_ms"`
+	CredentialID      string   `json:"credential_id"`
+	CredentialLabel   string   `json:"credential_label"`
+	StatusCode        int      `json:"status_code"`
+	Error             string   `json:"error,omitempty"`
+	Retryable         bool     `json:"retryable"`
+	DurationMS        int64    `json:"duration_ms"`
+	RemovedParameters []string `json:"removed_parameters,omitempty"`
 }
 
 type RequestLog struct {

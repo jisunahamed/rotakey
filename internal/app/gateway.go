@@ -9,9 +9,25 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+)
+
+const adaptiveCompatibilityTTL = 24 * time.Hour
+
+var (
+	adaptiveCompatibilityParameters = map[string]bool{
+		"thinking":         true,
+		"reasoning":        true,
+		"reasoning_effort": true,
+		"verbosity":        true,
+	}
+	unsupportedParameterPattern = regexp.MustCompile(
+		`(?i)(?:unrecognized request argument supplied|unsupported (?:request )?(?:argument|parameter)(?:\(s\))?)\s*:\s*['"` + "`" + `]?([A-Za-z][A-Za-z0-9_.-]{0,63})`,
+	)
 )
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
@@ -101,6 +117,8 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 		translated = true
 	}
 	strippedParameters := stripTopLevelParameters(upstreamPayload, route.Model.StripParameters)
+	learnedParameters := s.learnedCompatibilityParameters(r.Context(), route.Model.ID)
+	strippedParameters = append(strippedParameters, stripTopLevelParameters(upstreamPayload, learnedParameters)...)
 	if len(strippedParameters) > 0 {
 		s.logger.Info(
 			"removed unsupported upstream parameters",
@@ -151,7 +169,10 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 		writeError(w, http.StatusBadGateway, "unsafe_provider_url", err.Error())
 		return
 	}
-	maxAttempts := 2
+	maxAttempts := 3
+	transientRetriesRemaining := 1
+	compatibilityRetryUsed := false
+	compatibilityRemoved := append([]string(nil), strippedParameters...)
 	skipped := map[string]bool{}
 	attempts := make([]AttemptRecord, 0, maxAttempts)
 	var (
@@ -203,12 +224,67 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 				Error: "connection_error", Retryable: true, DurationMS: time.Since(attemptStarted).Milliseconds(),
 			})
 			s.markCredentialFailure(r.Context(), selected.ID, 0, 0)
-			if attemptNumber+1 < maxAttempts {
+			if transientRetriesRemaining > 0 && attemptNumber+1 < maxAttempts {
+				transientRetriesRemaining--
 				continue
 			}
 			writeError(w, http.StatusBadGateway, "upstream_unavailable", "The upstream provider could not be reached.")
 			finalStatus = http.StatusBadGateway
 			finalErrorCode = "upstream_unavailable"
+			break
+		}
+
+		if response.StatusCode == http.StatusBadRequest && !compatibilityRetryUsed {
+			errorBody, wasTruncated, readErr := boundedBody(response.Body, minInt64(s.cfg.MaxResponseBytes, 2<<20))
+			_ = response.Body.Close()
+			if readErr == nil && !wasTruncated {
+				parameters := unsupportedCompatibilityParameters(errorBody, upstreamPayload)
+				if len(parameters) > 0 {
+					for _, parameter := range parameters {
+						delete(upstreamPayload, parameter)
+					}
+					encodedUpstream, err = json.Marshal(upstreamPayload)
+					if err != nil {
+						writeError(w, http.StatusBadRequest, "invalid_request", "Request could not be prepared.")
+						finalStatus = http.StatusBadRequest
+						finalErrorCode = "invalid_request"
+						break
+					}
+					attempts = append(attempts, AttemptRecord{
+						CredentialID: selected.ID, CredentialLabel: selected.Label,
+						StatusCode: response.StatusCode, Error: upstreamErrorCode(errorBody),
+						Retryable: true, DurationMS: time.Since(attemptStarted).Milliseconds(),
+						RemovedParameters: parameters,
+					})
+					compatibilityRetryUsed = true
+					compatibilityRemoved = appendUniqueStrings(compatibilityRemoved, parameters...)
+					s.rememberCompatibilityParameters(r.Context(), route.Model.ID, parameters)
+					s.logger.Info(
+						"learned unsupported upstream parameters",
+						"request_id", requestID,
+						"model", route.Model.PublicAlias,
+						"parameters", strings.Join(parameters, ","),
+					)
+					// This was a request-shape failure, not a credential failure.
+					// Let the normal round-robin cursor select any eligible key again.
+					skipped = map[string]bool{}
+					continue
+				}
+			}
+
+			finalStatus = response.StatusCode
+			attempts = append(attempts, AttemptRecord{
+				CredentialID: selected.ID, CredentialLabel: selected.Label,
+				StatusCode: response.StatusCode, Retryable: false,
+				DurationMS: time.Since(attemptStarted).Milliseconds(),
+			})
+			truncated = wasTruncated
+			finalResponse = errorBody
+			finalErrorCode = upstreamErrorCode(errorBody)
+			copyUpstreamHeaders(w.Header(), response.Header)
+			w.WriteHeader(response.StatusCode)
+			_, _ = w.Write(errorBody)
+			s.markCredentialFailure(r.Context(), selected.ID, response.StatusCode, parseRetryAfter(response.Header.Get("Retry-After")))
 			break
 		}
 
@@ -219,7 +295,7 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 			response.StatusCode == http.StatusGatewayTimeout ||
 			response.StatusCode == http.StatusUnauthorized ||
 			response.StatusCode == http.StatusForbidden
-		if retryable && attemptNumber+1 < maxAttempts {
+		if retryable && transientRetriesRemaining > 0 && attemptNumber+1 < maxAttempts {
 			errorBody, _, _ := boundedBody(response.Body, 1<<20)
 			_ = response.Body.Close()
 			attempts = append(attempts, AttemptRecord{
@@ -228,6 +304,7 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 				Retryable: true, DurationMS: time.Since(attemptStarted).Milliseconds(),
 			})
 			s.markCredentialFailure(r.Context(), selected.ID, response.StatusCode, parseRetryAfter(response.Header.Get("Retry-After")))
+			transientRetriesRemaining--
 			continue
 		}
 
@@ -252,6 +329,9 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 
 		s.markCredentialSuccess(r.Context(), selected.ID)
 		copyUpstreamHeaders(w.Header(), response.Header)
+		if len(compatibilityRemoved) > 0 {
+			w.Header().Set("X-Rotakey-Removed-Parameters", strings.Join(compatibilityRemoved, ","))
+		}
 		if isStream {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Cache-Control", "no-cache")
@@ -377,6 +457,102 @@ func stripTopLevelParameters(payload map[string]any, parameters []string) []stri
 		}
 	}
 	return stripped
+}
+
+func unsupportedCompatibilityParameters(body []byte, payload map[string]any) []string {
+	candidates := make([]string, 0, 2)
+	var envelope struct {
+		Error struct {
+			Message string `json:"message"`
+			Param   any    `json:"param"`
+			Code    any    `json:"code"`
+			Type    string `json:"type"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &envelope) == nil {
+		matches := unsupportedParameterPattern.FindAllStringSubmatch(envelope.Error.Message, -1)
+		code, _ := envelope.Error.Code.(string)
+		signal := strings.Contains(strings.ToLower(code), "unrecognized_request_argument") ||
+			strings.Contains(strings.ToLower(code), "unsupported_parameter") ||
+			strings.Contains(strings.ToLower(envelope.Error.Type), "unsupported_parameter") ||
+			len(matches) > 0
+		if signal {
+			if parameter, ok := envelope.Error.Param.(string); ok {
+				candidates = append(candidates, parameter)
+			}
+		}
+		for _, match := range matches {
+			if len(match) > 1 {
+				candidates = append(candidates, match[1])
+			}
+		}
+	}
+
+	parameters := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if !adaptiveCompatibilityParameters[candidate] {
+			continue
+		}
+		if _, exists := payload[candidate]; !exists || slices.Contains(parameters, candidate) {
+			continue
+		}
+		parameters = append(parameters, candidate)
+	}
+	if len(parameters) == 0 {
+		return nil
+	}
+	return parameters
+}
+
+func appendUniqueStrings(values []string, additions ...string) []string {
+	for _, addition := range additions {
+		if !slices.Contains(values, addition) {
+			values = append(values, addition)
+		}
+	}
+	return values
+}
+
+func compatibilityStripKey(modelID string) string {
+	return "compatibility:strip:" + modelID
+}
+
+func (s *Server) learnedCompatibilityParameters(ctx context.Context, modelID string) []string {
+	parameters, err := s.redis.SMembers(ctx, compatibilityStripKey(modelID)).Result()
+	if err != nil {
+		return nil
+	}
+	filtered := make([]string, 0, len(parameters))
+	for _, parameter := range parameters {
+		if adaptiveCompatibilityParameters[parameter] {
+			filtered = append(filtered, parameter)
+		}
+	}
+	slices.Sort(filtered)
+	return filtered
+}
+
+func (s *Server) rememberCompatibilityParameters(ctx context.Context, modelID string, parameters []string) {
+	if len(parameters) == 0 {
+		return
+	}
+	key := compatibilityStripKey(modelID)
+	values := make([]any, 0, len(parameters))
+	for _, parameter := range parameters {
+		if adaptiveCompatibilityParameters[parameter] {
+			values = append(values, parameter)
+		}
+	}
+	if len(values) == 0 {
+		return
+	}
+	pipe := s.redis.TxPipeline()
+	pipe.SAdd(ctx, key, values...)
+	pipe.Expire(ctx, key, adaptiveCompatibilityTTL)
+	if _, err := pipe.Exec(ctx); err != nil {
+		s.logger.Warn("compatibility cache write failed", "model_id", modelID, "error", err)
+	}
 }
 
 func prepareTokenReservation(

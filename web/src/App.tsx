@@ -1976,7 +1976,7 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
               <div><span>Latency</span><strong>{selected.latency_ms} ms</strong></div>
               <div><span>Tokens</span><strong>{selected.input_tokens} in · {selected.output_tokens} out</strong></div>
             </div>
-            <fieldset><legend>Routing attempts</legend><div className="attempt-list">{selected.attempts.length ? selected.attempts.map((attempt, index) => <div key={`${attempt.credential_id}-${index}`}><span>{index + 1}</span><strong>{attempt.credential_label}</strong><code>{attempt.status_code || attempt.error}</code><small>{attempt.duration_ms} ms</small></div>) : <p className="console-empty">No attempt detail was recorded.</p>}</div></fieldset>
+            <fieldset><legend>Routing attempts</legend><div className="attempt-list">{selected.attempts.length ? selected.attempts.map((attempt, index) => <div key={`${attempt.credential_id}-${index}`}><span>{index + 1}</span><strong>{attempt.credential_label}</strong><code>{attempt.status_code || attempt.error}{attempt.removed_parameters?.length ? ` · removed ${attempt.removed_parameters.join(", ")}` : ""}</code><small>{attempt.duration_ms} ms</small></div>) : <p className="console-empty">No attempt detail was recorded.</p>}</div></fieldset>
             {selected.body_captured ? (
               <div className="body-grid">
                 <section><h3>Request {selected.body_truncated && <small>truncated</small>}</h3><pre>{bodies?.request ?? "Loading encrypted body…"}</pre></section>
