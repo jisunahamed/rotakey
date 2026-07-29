@@ -211,6 +211,7 @@ export type RequestLog = {
     retryable: boolean;
     duration_ms: number;
     removed_parameters?: string[];
+    replaced_parameters?: Record<string, string>;
   }>;
   status_code: number;
   latency_ms: number;

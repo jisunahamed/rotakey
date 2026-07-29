@@ -28,7 +28,15 @@ var (
 	unsupportedParameterPattern = regexp.MustCompile(
 		`(?i)(?:unrecognized request argument supplied|unsupported (?:request )?(?:argument|parameter)(?:\(s\))?)\s*:\s*['"` + "`" + `]?([A-Za-z][A-Za-z0-9_.-]{0,63})`,
 	)
+	suggestedReplacementPattern = regexp.MustCompile(
+		`(?i)\buse\s+['"` + "`" + `]?([A-Za-z][A-Za-z0-9_.-]{0,63})['"` + "`" + `]?\s+instead\b`,
+	)
 )
+
+type compatibilityReplacement struct {
+	From string
+	To   string
+}
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.Query(r.Context(), `
@@ -119,12 +127,24 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 	strippedParameters := stripTopLevelParameters(upstreamPayload, route.Model.StripParameters)
 	learnedParameters := s.learnedCompatibilityParameters(r.Context(), route.Model.ID)
 	strippedParameters = append(strippedParameters, stripTopLevelParameters(upstreamPayload, learnedParameters)...)
+	replacedParameters := applyCompatibilityReplacements(
+		upstreamPayload,
+		s.learnedCompatibilityReplacements(r.Context(), route.Model.ID, endpoint),
+	)
 	if len(strippedParameters) > 0 {
 		s.logger.Info(
 			"removed unsupported upstream parameters",
 			"request_id", requestID,
 			"model", route.Model.PublicAlias,
 			"parameters", strings.Join(strippedParameters, ","),
+		)
+	}
+	if len(replacedParameters) > 0 {
+		s.logger.Info(
+			"replaced unsupported upstream parameters",
+			"request_id", requestID,
+			"model", route.Model.PublicAlias,
+			"parameters", formatCompatibilityReplacements(replacedParameters),
 		)
 	}
 	upstreamPayload["model"] = route.Model.UpstreamModel
@@ -169,10 +189,11 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 		writeError(w, http.StatusBadGateway, "unsafe_provider_url", err.Error())
 		return
 	}
-	maxAttempts := 3
+	maxAttempts := 4
 	transientRetriesRemaining := 1
-	compatibilityRetryUsed := false
+	compatibilityRetriesRemaining := 2
 	compatibilityRemoved := append([]string(nil), strippedParameters...)
+	compatibilityReplaced := cloneStringMap(replacedParameters)
 	skipped := map[string]bool{}
 	attempts := make([]AttemptRecord, 0, maxAttempts)
 	var (
@@ -234,10 +255,40 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 			break
 		}
 
-		if response.StatusCode == http.StatusBadRequest && !compatibilityRetryUsed {
+		if response.StatusCode == http.StatusBadRequest && compatibilityRetriesRemaining > 0 {
 			errorBody, wasTruncated, readErr := boundedBody(response.Body, minInt64(s.cfg.MaxResponseBytes, 2<<20))
 			_ = response.Body.Close()
 			if readErr == nil && !wasTruncated {
+				if replacement, ok := unsupportedCompatibilityReplacement(errorBody, upstreamPayload); ok {
+					applyCompatibilityReplacement(upstreamPayload, replacement)
+					encodedUpstream, err = json.Marshal(upstreamPayload)
+					if err != nil {
+						writeError(w, http.StatusBadRequest, "invalid_request", "Request could not be prepared.")
+						finalStatus = http.StatusBadRequest
+						finalErrorCode = "invalid_request"
+						break
+					}
+					replaced := map[string]string{replacement.From: replacement.To}
+					attempts = append(attempts, AttemptRecord{
+						CredentialID: selected.ID, CredentialLabel: selected.Label,
+						StatusCode: response.StatusCode, Error: upstreamErrorCode(errorBody),
+						Retryable: true, DurationMS: time.Since(attemptStarted).Milliseconds(),
+						ReplacedParameters: replaced,
+					})
+					compatibilityRetriesRemaining--
+					compatibilityReplaced[replacement.From] = replacement.To
+					s.rememberCompatibilityReplacement(r.Context(), route.Model.ID, endpoint, replacement)
+					s.logger.Info(
+						"learned upstream parameter replacement",
+						"request_id", requestID,
+						"model", route.Model.PublicAlias,
+						"from", replacement.From,
+						"to", replacement.To,
+					)
+					skipped = map[string]bool{}
+					continue
+				}
+
 				parameters := unsupportedCompatibilityParameters(errorBody, upstreamPayload)
 				if len(parameters) > 0 {
 					for _, parameter := range parameters {
@@ -256,7 +307,7 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 						Retryable: true, DurationMS: time.Since(attemptStarted).Milliseconds(),
 						RemovedParameters: parameters,
 					})
-					compatibilityRetryUsed = true
+					compatibilityRetriesRemaining--
 					compatibilityRemoved = appendUniqueStrings(compatibilityRemoved, parameters...)
 					s.rememberCompatibilityParameters(r.Context(), route.Model.ID, parameters)
 					s.logger.Info(
@@ -331,6 +382,9 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 		copyUpstreamHeaders(w.Header(), response.Header)
 		if len(compatibilityRemoved) > 0 {
 			w.Header().Set("X-Rotakey-Removed-Parameters", strings.Join(compatibilityRemoved, ","))
+		}
+		if len(compatibilityReplaced) > 0 {
+			w.Header().Set("X-Rotakey-Replaced-Parameters", formatCompatibilityReplacements(compatibilityReplaced))
 		}
 		if isStream {
 			w.Header().Set("Content-Type", "text/event-stream")
@@ -505,6 +559,133 @@ func unsupportedCompatibilityParameters(body []byte, payload map[string]any) []s
 	return parameters
 }
 
+func unsupportedCompatibilityReplacement(body []byte, payload map[string]any) (compatibilityReplacement, bool) {
+	var envelope struct {
+		Error struct {
+			Message string `json:"message"`
+			Param   any    `json:"param"`
+			Code    any    `json:"code"`
+			Type    string `json:"type"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &envelope) != nil {
+		return compatibilityReplacement{}, false
+	}
+
+	code, _ := envelope.Error.Code.(string)
+	unsupported := strings.Contains(strings.ToLower(code), "unsupported_parameter") ||
+		strings.Contains(strings.ToLower(envelope.Error.Type), "unsupported_parameter") ||
+		len(unsupportedParameterPattern.FindStringSubmatch(envelope.Error.Message)) > 1
+	if !unsupported {
+		return compatibilityReplacement{}, false
+	}
+
+	var source string
+	if parameter, ok := envelope.Error.Param.(string); ok {
+		source = strings.TrimSpace(parameter)
+	}
+	if source == "" {
+		match := unsupportedParameterPattern.FindStringSubmatch(envelope.Error.Message)
+		if len(match) > 1 {
+			source = match[1]
+		}
+	}
+	replacementMatch := suggestedReplacementPattern.FindStringSubmatch(envelope.Error.Message)
+	if len(replacementMatch) < 2 {
+		return compatibilityReplacement{}, false
+	}
+	target := replacementMatch[1]
+	if !safeCompatibilityReplacement(source, target) {
+		return compatibilityReplacement{}, false
+	}
+	if _, exists := payload[source]; !exists {
+		return compatibilityReplacement{}, false
+	}
+	return compatibilityReplacement{From: source, To: target}, true
+}
+
+func safeCompatibilityReplacement(source, target string) bool {
+	if source == target {
+		return false
+	}
+	tokenLimits := map[string]bool{
+		"max_tokens":            true,
+		"max_completion_tokens": true,
+		"max_output_tokens":     true,
+	}
+	return tokenLimits[source] && tokenLimits[target]
+}
+
+func applyCompatibilityReplacement(payload map[string]any, replacement compatibilityReplacement) {
+	value, exists := payload[replacement.From]
+	if !exists {
+		return
+	}
+	if _, targetExists := payload[replacement.To]; !targetExists {
+		payload[replacement.To] = value
+	}
+	delete(payload, replacement.From)
+}
+
+func applyCompatibilityReplacements(payload map[string]any, replacements map[string]string) map[string]string {
+	sources := make([]string, 0, len(replacements))
+	for source := range replacements {
+		sources = append(sources, source)
+	}
+	slices.Sort(sources)
+
+	applied := make(map[string]string)
+	for _, source := range sources {
+		if _, exists := payload[source]; !exists {
+			continue
+		}
+		target, ok := resolveCompatibilityReplacement(source, replacements)
+		if !ok {
+			continue
+		}
+		applyCompatibilityReplacement(payload, compatibilityReplacement{From: source, To: target})
+		applied[source] = target
+	}
+	return applied
+}
+
+func resolveCompatibilityReplacement(source string, replacements map[string]string) (string, bool) {
+	current := source
+	visited := map[string]bool{source: true}
+	for {
+		target, exists := replacements[current]
+		if !exists {
+			return current, current != source
+		}
+		if !safeCompatibilityReplacement(current, target) || visited[target] {
+			return "", false
+		}
+		visited[target] = true
+		current = target
+	}
+}
+
+func formatCompatibilityReplacements(replacements map[string]string) string {
+	sources := make([]string, 0, len(replacements))
+	for source := range replacements {
+		sources = append(sources, source)
+	}
+	slices.Sort(sources)
+	values := make([]string, 0, len(sources))
+	for _, source := range sources {
+		values = append(values, source+"="+replacements[source])
+	}
+	return strings.Join(values, ",")
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	target := make(map[string]string, len(source))
+	for key, value := range source {
+		target[key] = value
+	}
+	return target
+}
+
 func appendUniqueStrings(values []string, additions ...string) []string {
 	for _, addition := range additions {
 		if !slices.Contains(values, addition) {
@@ -516,6 +697,10 @@ func appendUniqueStrings(values []string, additions ...string) []string {
 
 func compatibilityStripKey(modelID string) string {
 	return "compatibility:strip:" + modelID
+}
+
+func compatibilityReplaceKey(modelID, endpoint string) string {
+	return "compatibility:replace:" + modelID + ":" + endpoint
 }
 
 func (s *Server) learnedCompatibilityParameters(ctx context.Context, modelID string) []string {
@@ -552,6 +737,39 @@ func (s *Server) rememberCompatibilityParameters(ctx context.Context, modelID st
 	pipe.Expire(ctx, key, adaptiveCompatibilityTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
 		s.logger.Warn("compatibility cache write failed", "model_id", modelID, "error", err)
+	}
+}
+
+func (s *Server) learnedCompatibilityReplacements(ctx context.Context, modelID, endpoint string) map[string]string {
+	replacements, err := s.redis.HGetAll(ctx, compatibilityReplaceKey(modelID, endpoint)).Result()
+	if err != nil {
+		return nil
+	}
+	filtered := make(map[string]string)
+	for source, target := range replacements {
+		if safeCompatibilityReplacement(source, target) {
+			filtered[source] = target
+		}
+	}
+	return filtered
+}
+
+func (s *Server) rememberCompatibilityReplacement(
+	ctx context.Context,
+	modelID string,
+	endpoint string,
+	replacement compatibilityReplacement,
+) {
+	if !safeCompatibilityReplacement(replacement.From, replacement.To) {
+		return
+	}
+	key := compatibilityReplaceKey(modelID, endpoint)
+	pipe := s.redis.TxPipeline()
+	pipe.HDel(ctx, key, replacement.To)
+	pipe.HSet(ctx, key, replacement.From, replacement.To)
+	pipe.Expire(ctx, key, adaptiveCompatibilityTTL)
+	if _, err := pipe.Exec(ctx); err != nil {
+		s.logger.Warn("compatibility replacement cache write failed", "model_id", modelID, "error", err)
 	}
 }
 

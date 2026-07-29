@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"reflect"
 	"testing"
@@ -123,5 +124,104 @@ func TestAppendUniqueStrings(t *testing.T) {
 	want := []string{"thinking", "verbosity"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("values = %#v, want %#v", got, want)
+	}
+}
+
+func TestUnsupportedCompatibilityReplacement(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		payload map[string]any
+		want    compatibilityReplacement
+		ok      bool
+	}{
+		{
+			name: "azure max tokens replacement",
+			body: `{"error":{"message":"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.","type":"invalid_request_error","param":"max_tokens","code":"unsupported_parameter"}}`,
+			payload: map[string]any{
+				"max_tokens": json.Number("128"),
+			},
+			want: compatibilityReplacement{From: "max_tokens", To: "max_completion_tokens"},
+			ok:   true,
+		},
+		{
+			name: "message source fallback",
+			body: `{"error":{"message":"Unsupported parameter: max_completion_tokens is not supported with this model. Use max_tokens instead.","code":"unsupported_parameter"}}`,
+			payload: map[string]any{
+				"max_completion_tokens": 64,
+			},
+			want: compatibilityReplacement{From: "max_completion_tokens", To: "max_tokens"},
+			ok:   true,
+		},
+		{
+			name: "arbitrary rename is rejected",
+			body: `{"error":{"message":"Unsupported parameter: temperature. Use top_p instead.","param":"temperature","code":"unsupported_parameter"}}`,
+			payload: map[string]any{
+				"temperature": 0.2,
+			},
+			ok: false,
+		},
+		{
+			name: "source must be top level",
+			body: `{"error":{"message":"Unsupported parameter: max_tokens. Use max_completion_tokens instead.","param":"max_tokens","code":"unsupported_parameter"}}`,
+			payload: map[string]any{
+				"options": map[string]any{"max_tokens": 128},
+			},
+			ok: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := unsupportedCompatibilityReplacement([]byte(test.body), test.payload)
+			if ok != test.ok || got != test.want {
+				t.Fatalf("replacement = %#v, %v; want %#v, %v", got, ok, test.want, test.ok)
+			}
+		})
+	}
+}
+
+func TestApplyCompatibilityReplacements(t *testing.T) {
+	payload := map[string]any{
+		"max_tokens":            json.Number("128"),
+		"max_completion_tokens": json.Number("256"),
+		"messages":              []any{},
+	}
+	applied := applyCompatibilityReplacements(payload, map[string]string{
+		"max_tokens": "max_completion_tokens",
+		"messages":   "input",
+	})
+	if _, exists := payload["max_tokens"]; exists {
+		t.Fatal("source parameter was not removed")
+	}
+	if got := numberAsInt64(payload["max_completion_tokens"]); got != 256 {
+		t.Fatalf("existing target was overwritten: %d", got)
+	}
+	if _, exists := payload["messages"]; !exists {
+		t.Fatal("unsafe replacement changed a protected field")
+	}
+	want := map[string]string{"max_tokens": "max_completion_tokens"}
+	if !reflect.DeepEqual(applied, want) {
+		t.Fatalf("applied = %#v, want %#v", applied, want)
+	}
+	if got := formatCompatibilityReplacements(applied); got != "max_tokens=max_completion_tokens" {
+		t.Fatalf("formatted replacements = %q", got)
+	}
+}
+
+func TestResolveCompatibilityReplacement(t *testing.T) {
+	target, ok := resolveCompatibilityReplacement("max_tokens", map[string]string{
+		"max_tokens":            "max_completion_tokens",
+		"max_completion_tokens": "max_output_tokens",
+	})
+	if !ok || target != "max_output_tokens" {
+		t.Fatalf("resolved target = %q, %v", target, ok)
+	}
+
+	if target, ok := resolveCompatibilityReplacement("max_tokens", map[string]string{
+		"max_tokens":            "max_completion_tokens",
+		"max_completion_tokens": "max_tokens",
+	}); ok || target != "" {
+		t.Fatalf("cycle was accepted: %q, %v", target, ok)
 	}
 }
