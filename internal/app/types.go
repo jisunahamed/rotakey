@@ -109,28 +109,46 @@ type AttemptRecord struct {
 	CredentialLabel    string            `json:"credential_label"`
 	StatusCode         int               `json:"status_code"`
 	Error              string            `json:"error,omitempty"`
+	ErrorMessage       string            `json:"error_message,omitempty"`
 	Retryable          bool              `json:"retryable"`
 	DurationMS         int64             `json:"duration_ms"`
 	RemovedParameters  []string          `json:"removed_parameters,omitempty"`
 	ReplacedParameters map[string]string `json:"replaced_parameters,omitempty"`
 }
 
+type RoutingDecision struct {
+	CredentialID    string     `json:"credential_id,omitempty"`
+	CredentialLabel string     `json:"credential_label,omitempty"`
+	Reason          string     `json:"reason"`
+	Scope           string     `json:"scope,omitempty"`
+	Dimension       string     `json:"dimension,omitempty"`
+	Limit           int64      `json:"limit,omitempty"`
+	Used            int64      `json:"used,omitempty"`
+	Remaining       int64      `json:"remaining,omitempty"`
+	Required        int64      `json:"required,omitempty"`
+	RetryAfterMS    int64      `json:"retry_after_ms,omitempty"`
+	ResetAt         *time.Time `json:"reset_at,omitempty"`
+}
+
 type RequestLog struct {
-	ID              string          `json:"id"`
-	RequestID       string          `json:"request_id"`
-	ModelAlias      string          `json:"model_alias"`
-	ProviderName    string          `json:"provider_name"`
-	CredentialLabel string          `json:"credential_label"`
-	Endpoint        string          `json:"endpoint"`
-	Attempts        json.RawMessage `json:"attempts"`
-	StatusCode      int             `json:"status_code"`
-	LatencyMS       int64           `json:"latency_ms"`
-	InputTokens     int64           `json:"input_tokens"`
-	OutputTokens    int64           `json:"output_tokens"`
-	ErrorCode       string          `json:"error_code,omitempty"`
-	BodyCaptured    bool            `json:"body_captured"`
-	BodyTruncated   bool            `json:"body_truncated"`
-	CreatedAt       time.Time       `json:"created_at"`
+	ID               string          `json:"id"`
+	RequestID        string          `json:"request_id"`
+	ModelAlias       string          `json:"model_alias"`
+	ProviderName     string          `json:"provider_name"`
+	CredentialLabel  string          `json:"credential_label"`
+	Endpoint         string          `json:"endpoint"`
+	Attempts         json.RawMessage `json:"attempts"`
+	RoutingDecisions json.RawMessage `json:"routing_decisions"`
+	StatusCode       int             `json:"status_code"`
+	LatencyMS        int64           `json:"latency_ms"`
+	InputTokens      int64           `json:"input_tokens"`
+	OutputTokens     int64           `json:"output_tokens"`
+	ErrorCode        string          `json:"error_code,omitempty"`
+	ErrorMessage     string          `json:"error_message,omitempty"`
+	Running          bool            `json:"running,omitempty"`
+	BodyCaptured     bool            `json:"body_captured"`
+	BodyTruncated    bool            `json:"body_truncated"`
+	CreatedAt        time.Time       `json:"created_at"`
 }
 
 type AppSettings struct {

@@ -14,11 +14,13 @@ type limiter struct {
 }
 
 type limitConstraint struct {
-	Key      string
-	Capacity int64
-	WindowMS int64
-	Cost     int64
-	Token    bool
+	Key       string
+	Scope     string
+	Dimension string
+	Capacity  int64
+	WindowMS  int64
+	Cost      int64
+	Token     bool
 }
 
 type reservation struct {
@@ -31,12 +33,20 @@ type reserveResult struct {
 	Allowed    bool
 	Retry      time.Duration
 	ReservedAt int64
+	Blocked    []blockedLimit
+}
+
+type blockedLimit struct {
+	Constraint limitConstraint
+	Used       int64
+	Retry      time.Duration
 }
 
 var reserveScript = redis.NewScript(`
 local now = tonumber(ARGV[1])
 local states = {}
 local max_wait = 0
+local blockers = {}
 
 for i, key in ipairs(KEYS) do
   local base = 2 + ((i - 1) * 3)
@@ -54,12 +64,17 @@ for i, key in ipairs(KEYS) do
   if count + cost > capacity then
     wait = ((bucket + 1) * window) - now
     if wait > max_wait then max_wait = wait end
+    table.insert(blockers, i)
+    table.insert(blockers, count)
+    table.insert(blockers, wait)
   end
   states[i] = {key, count, bucket, window, cost}
 end
 
 if max_wait > 0 then
-  return {0, max_wait}
+  local result = {0, max_wait}
+  for _, value in ipairs(blockers) do table.insert(result, value) end
+  return result
 end
 
 for i, state in ipairs(states) do
@@ -103,15 +118,24 @@ func (l *limiter) Reserve(ctx context.Context, constraints []limitConstraint) (r
 	}
 	keys := make([]string, 0, len(constraints))
 	args := []any{now}
+	directBlockers := make([]blockedLimit, 0)
+	var directRetry time.Duration
 	for _, constraint := range constraints {
 		if constraint.Cost > constraint.Capacity {
 			windowEnd := ((now / constraint.WindowMS) + 1) * constraint.WindowMS
-			return reserveResult{
-				Allowed: false, Retry: time.Duration(windowEnd-now) * time.Millisecond, ReservedAt: now,
-			}, nil
+			retry := time.Duration(windowEnd-now) * time.Millisecond
+			if retry > directRetry {
+				directRetry = retry
+			}
+			directBlockers = append(directBlockers, blockedLimit{Constraint: constraint, Retry: retry})
 		}
 		keys = append(keys, constraint.Key)
 		args = append(args, constraint.Capacity, constraint.WindowMS, constraint.Cost)
+	}
+	if len(directBlockers) > 0 {
+		return reserveResult{
+			Allowed: false, Retry: directRetry, ReservedAt: now, Blocked: directBlockers,
+		}, nil
 	}
 	raw, err := reserveScript.Run(ctx, l.redis, keys, args...).Slice()
 	if err != nil {
@@ -119,8 +143,22 @@ func (l *limiter) Reserve(ctx context.Context, constraints []limitConstraint) (r
 	}
 	allowed, _ := strconv.ParseInt(fmt.Sprint(raw[0]), 10, 64)
 	retryMS, _ := strconv.ParseInt(fmt.Sprint(raw[1]), 10, 64)
+	blocked := make([]blockedLimit, 0, (len(raw)-2)/3)
+	for index := 2; index+2 < len(raw); index += 3 {
+		constraintIndex, _ := strconv.ParseInt(fmt.Sprint(raw[index]), 10, 64)
+		used, _ := strconv.ParseInt(fmt.Sprint(raw[index+1]), 10, 64)
+		blockedRetryMS, _ := strconv.ParseInt(fmt.Sprint(raw[index+2]), 10, 64)
+		if constraintIndex < 1 || int(constraintIndex) > len(constraints) {
+			continue
+		}
+		blocked = append(blocked, blockedLimit{
+			Constraint: constraints[constraintIndex-1], Used: used,
+			Retry: time.Duration(blockedRetryMS) * time.Millisecond,
+		})
+	}
 	return reserveResult{
-		Allowed: allowed == 1, Retry: time.Duration(retryMS) * time.Millisecond, ReservedAt: now,
+		Allowed: allowed == 1, Retry: time.Duration(retryMS) * time.Millisecond,
+		ReservedAt: now, Blocked: blocked,
 	}, nil
 }
 
@@ -148,27 +186,40 @@ func (l *limiter) AdjustTokens(ctx context.Context, reservation reservation, act
 }
 
 func buildConstraints(credential credentialRuntime, modelID string, tokenCost int64) ([]limitConstraint, bool) {
+	constraints, rejected := buildConstraintsWithDiagnostics(credential, modelID, tokenCost)
+	return constraints, len(rejected) == 0
+}
+
+func buildConstraintsWithDiagnostics(credential credentialRuntime, modelID string, tokenCost int64) ([]limitConstraint, []RoutingDecision) {
 	policies := []struct {
-		scope  string
-		policy RatePolicy
-	}{{scope: "all", policy: credential.Limits}}
+		keyScope string
+		scope    string
+		policy   RatePolicy
+	}{{keyScope: "all", scope: "shared", policy: credential.Limits}}
 	if modelPolicy, ok := credential.ModelLimits[modelID]; ok {
 		policies = append(policies, struct {
-			scope  string
-			policy RatePolicy
-		}{scope: "model:" + modelID, policy: modelPolicy})
+			keyScope string
+			scope    string
+			policy   RatePolicy
+		}{keyScope: "model:" + modelID, scope: "model", policy: modelPolicy})
 	}
 
 	constraints := make([]limitConstraint, 0, 12)
+	rejected := make([]RoutingDecision, 0, 2)
 	for _, scoped := range policies {
 		if scoped.policy.TPR != nil && tokenCost > *scoped.policy.TPR {
-			return nil, false
+			rejected = append(rejected, RoutingDecision{
+				CredentialID: credential.ID, CredentialLabel: credential.Label,
+				Reason: "tpr_exceeded", Scope: scoped.scope, Dimension: "tpr",
+				Limit: *scoped.policy.TPR, Remaining: *scoped.policy.TPR, Required: tokenCost,
+			})
 		}
-		prefix := "limit:" + credential.ID + ":" + scoped.scope + ":"
+		prefix := "limit:" + credential.ID + ":" + scoped.keyScope + ":"
 		add := func(name string, value *int64, window time.Duration, cost int64, token bool) {
 			if value != nil {
 				constraints = append(constraints, limitConstraint{
-					Key: prefix + name, Capacity: *value, WindowMS: window.Milliseconds(), Cost: cost, Token: token,
+					Key: prefix + name, Scope: scoped.scope, Dimension: name,
+					Capacity: *value, WindowMS: window.Milliseconds(), Cost: cost, Token: token,
 				})
 			}
 		}
@@ -179,5 +230,5 @@ func buildConstraints(credential credentialRuntime, modelID string, tokenCost in
 		add("tpm", scoped.policy.TPM, time.Minute, tokenCost, true)
 		add("tpd", scoped.policy.TPD, 24*time.Hour, tokenCost, true)
 	}
-	return constraints, true
+	return constraints, rejected
 }

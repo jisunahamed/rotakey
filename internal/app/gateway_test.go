@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 type flushingRecorder struct {
@@ -119,6 +121,19 @@ func TestUnsupportedCompatibilityParameters(t *testing.T) {
 	}
 }
 
+func TestUpstreamErrorMessageIsStructuredCappedAndRedacted(t *testing.T) {
+	secret := []byte("super-secret-key")
+	body := []byte(`{"error":{"message":"Invalid key super-secret-key\nplease replace it"}}`)
+	got := upstreamErrorMessage(body, secret)
+	if got != "Invalid key [redacted] please replace it" {
+		t.Fatalf("unexpected sanitized message %q", got)
+	}
+	long := `{"error":{"message":"` + strings.Repeat("x", 600) + `"}}`
+	if got := upstreamErrorMessage([]byte(long), nil); len(got) > 503 {
+		t.Fatalf("message was not capped: %d bytes", len(got))
+	}
+}
+
 func TestAppendUniqueStrings(t *testing.T) {
 	got := appendUniqueStrings([]string{"thinking"}, "thinking", "verbosity")
 	want := []string{"thinking", "verbosity"}
@@ -223,5 +238,30 @@ func TestResolveCompatibilityReplacement(t *testing.T) {
 		"max_completion_tokens": "max_tokens",
 	}); ok || target != "" {
 		t.Fatalf("cycle was accepted: %q, %v", target, ok)
+	}
+}
+
+func TestActiveRequestLogsExposeRunningStateAndFilter(t *testing.T) {
+	server := &Server{}
+	started := time.Now().Add(-1500 * time.Millisecond)
+	server.beginActiveRequest("req_running", "chat", started)
+	server.updateActiveRequest("req_running", func(log *RequestLog) {
+		log.ModelAlias = "azure/Kimi-K2.6"
+		log.ProviderName = "azure"
+		log.CredentialLabel = "primary"
+	})
+
+	logs := server.activeRequestLogs("kimi")
+	if len(logs) != 1 {
+		t.Fatalf("active logs = %d, want 1", len(logs))
+	}
+	if !logs[0].Running || logs[0].StatusCode != 0 {
+		t.Fatalf("active state = running %v status %d", logs[0].Running, logs[0].StatusCode)
+	}
+	if logs[0].CredentialLabel != "primary" || logs[0].LatencyMS < 1000 {
+		t.Fatalf("active metadata = %#v", logs[0])
+	}
+	if got := server.activeRequestLogs("missing"); len(got) != 0 {
+		t.Fatalf("unexpected filtered logs: %#v", got)
 	}
 }

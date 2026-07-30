@@ -35,6 +35,26 @@ func TestBuildConstraintsRejectsTPR(t *testing.T) {
 	}
 }
 
+func TestBuildConstraintsExplainsEveryTPRRejection(t *testing.T) {
+	credential := credentialRuntime{CredentialView: CredentialView{
+		ID: "key_1", Label: "primary",
+		Limits: RatePolicy{TPR: pointer(100)},
+		ModelLimits: map[string]RatePolicy{
+			"mdl_1": {TPR: pointer(80)},
+		},
+	}}
+	_, rejected := buildConstraintsWithDiagnostics(credential, "mdl_1", 120)
+	if len(rejected) != 2 {
+		t.Fatalf("got %d TPR diagnostics, want shared and model", len(rejected))
+	}
+	if rejected[0].Scope != "shared" || rejected[0].Dimension != "tpr" || rejected[0].Limit != 100 || rejected[0].Required != 120 {
+		t.Fatalf("unexpected shared TPR diagnostic: %#v", rejected[0])
+	}
+	if rejected[1].Scope != "model" || rejected[1].Limit != 80 || rejected[1].CredentialLabel != "primary" {
+		t.Fatalf("unexpected model TPR diagnostic: %#v", rejected[1])
+	}
+}
+
 func TestBuildConstraintsCoversEveryDimension(t *testing.T) {
 	limit := pointer(1000)
 	credential := credentialRuntime{CredentialView: CredentialView{

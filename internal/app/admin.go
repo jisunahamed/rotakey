@@ -858,17 +858,29 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		limit = 100
 	}
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	status, _ := strconv.Atoi(r.URL.Query().Get("status"))
+	statusFilter := strings.TrimSpace(r.URL.Query().Get("status"))
+	status, _ := strconv.Atoi(statusFilter)
+	errorsOnly := statusFilter == "errors"
+	runningOnly := statusFilter == "running"
+	activeLogs := s.activeRequestLogs(query)
+	if runningOnly {
+		if len(activeLogs) > limit {
+			activeLogs = activeLogs[:limit]
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"logs": activeLogs})
+		return
+	}
 	rows, err := s.db.Query(r.Context(), `
 		SELECT id, request_id, model_alias, provider_name, credential_label, endpoint,
-		       attempts, status_code, latency_ms, input_tokens, output_tokens,
-		       COALESCE(error_code,''), request_body_cipher IS NOT NULL,
+		       attempts, routing_decisions, status_code, latency_ms, input_tokens, output_tokens,
+		       COALESCE(error_code,''), COALESCE(error_message,''), request_body_cipher IS NOT NULL,
 		       body_truncated, created_at
 		FROM request_logs
 		WHERE ($1 = '' OR model_alias ILIKE '%' || $1 || '%' OR request_id ILIKE '%' || $1 || '%')
 		  AND ($2 = 0 OR status_code = $2)
-		ORDER BY created_at DESC LIMIT $3
-	`, query, status, limit)
+		  AND (NOT $3 OR status_code >= 400)
+		ORDER BY created_at DESC LIMIT $4
+	`, query, status, errorsOnly, limit)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "logs_unavailable", "Request logs could not be loaded.")
 		return
@@ -879,14 +891,20 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		var log RequestLog
 		if err := rows.Scan(
 			&log.ID, &log.RequestID, &log.ModelAlias, &log.ProviderName,
-			&log.CredentialLabel, &log.Endpoint, &log.Attempts, &log.StatusCode,
-			&log.LatencyMS, &log.InputTokens, &log.OutputTokens, &log.ErrorCode,
+			&log.CredentialLabel, &log.Endpoint, &log.Attempts, &log.RoutingDecisions, &log.StatusCode,
+			&log.LatencyMS, &log.InputTokens, &log.OutputTokens, &log.ErrorCode, &log.ErrorMessage,
 			&log.BodyCaptured, &log.BodyTruncated, &log.CreatedAt,
 		); err != nil {
 			writeError(w, http.StatusInternalServerError, "logs_unavailable", "Request logs could not be decoded.")
 			return
 		}
 		logs = append(logs, log)
+	}
+	if statusFilter == "" && len(activeLogs) > 0 {
+		logs = append(activeLogs, logs...)
+		if len(logs) > limit {
+			logs = logs[:limit]
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"logs": logs})
 }

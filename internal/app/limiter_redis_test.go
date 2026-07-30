@@ -62,6 +62,36 @@ func TestRedisAtomicConcurrentReservations(t *testing.T) {
 	}
 }
 
+func TestRedisReservationReportsEveryBlockingBucket(t *testing.T) {
+	client := integrationRedis(t)
+	suffix := fmt.Sprint(time.Now().UnixNano())
+	rpmKey := "limit:key_diag_" + suffix + ":all:rpm"
+	tpmKey := "limit:key_diag_" + suffix + ":model:model_diag:tpm"
+	t.Cleanup(func() { _ = client.Del(context.Background(), rpmKey, tpmKey).Err() })
+	engine := newLimiter(client)
+	constraints := []limitConstraint{
+		{Key: rpmKey, Scope: "shared", Dimension: "rpm", Capacity: 1, WindowMS: time.Minute.Milliseconds(), Cost: 1},
+		{Key: tpmKey, Scope: "model", Dimension: "tpm", Capacity: 100, WindowMS: time.Minute.Milliseconds(), Cost: 60, Token: true},
+	}
+	first, err := engine.Reserve(context.Background(), constraints)
+	if err != nil || !first.Allowed {
+		t.Fatalf("first reservation should pass: result=%#v err=%v", first, err)
+	}
+	second, err := engine.Reserve(context.Background(), constraints)
+	if err != nil || second.Allowed {
+		t.Fatalf("second reservation should be blocked: result=%#v err=%v", second, err)
+	}
+	if len(second.Blocked) != 2 {
+		t.Fatalf("got %d blocking buckets, want 2", len(second.Blocked))
+	}
+	if second.Blocked[0].Constraint.Dimension != "rpm" || second.Blocked[0].Used != 1 {
+		t.Fatalf("unexpected RPM blocker: %#v", second.Blocked[0])
+	}
+	if second.Blocked[1].Constraint.Scope != "model" || second.Blocked[1].Used != 60 {
+		t.Fatalf("unexpected TPM blocker: %#v", second.Blocked[1])
+	}
+}
+
 func TestTwoCredentialsFortyRPMBalanceAndExhaust(t *testing.T) {
 	if time.Now().Second() >= 57 {
 		t.Skip("too close to a minute reset boundary")

@@ -112,6 +112,7 @@
 
 .ops-console {
   min-width: 0;
+  overflow-x: clip;
   color: var(--ink);
 }
 
@@ -649,7 +650,9 @@
 }
 
 .route-debug-list {
+  max-width: 100%;
   overflow-x: auto;
+  overscroll-behavior-inline: contain;
   background: var(--console-panel);
 }
 
@@ -1342,6 +1345,12 @@
 .status-code--healthy { color: var(--green); background: color-mix(in srgb, var(--green) 8%, transparent); }
 .status-code--warning { color: var(--amber); background: color-mix(in srgb, var(--amber) 9%, transparent); }
 .status-code--fault { color: var(--red); background: color-mix(in srgb, var(--red) 8%, transparent); }
+.status-code--running { color: var(--blue); background: color-mix(in srgb, var(--blue) 10%, transparent); }
+
+.log-resource-rows > button.is-running {
+  box-shadow: inset 2px 0 var(--blue);
+  background: color-mix(in srgb, var(--blue) 4%, var(--surface));
+}
 
 .log-disclosure .attempt-list,
 .log-disclosure .body-grid { margin: 0; }
@@ -1509,6 +1518,63 @@
   margin: 12px;
 }
 
+.log-diagnosis {
+  border-bottom: 1px solid var(--console-line);
+  box-shadow: inset 3px 0 var(--amber);
+}
+
+.log-diagnosis > header {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 54px;
+  padding: 9px 12px;
+  background: color-mix(in srgb, var(--amber) 7%, var(--console-panel));
+}
+
+.log-diagnosis > header > svg { color: var(--amber); }
+.log-diagnosis > header span,
+.log-diagnosis > header small,
+.log-diagnosis > header strong { display: block; }
+.log-diagnosis > header small { color: var(--amber); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.5rem; text-transform: uppercase; }
+.log-diagnosis > header strong { margin-top: 2px; font-size: 0.68rem; }
+.log-diagnosis > header code { color: var(--amber); font-size: 0.55rem; }
+
+.log-diagnosis__rows > div {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  padding: 9px 12px;
+  border-top: 1px solid var(--console-line);
+}
+
+.log-diagnosis__marker {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  color: var(--amber);
+  border: 1px solid color-mix(in srgb, var(--amber) 55%, var(--console-line));
+  border-radius: 50%;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.5rem;
+}
+
+.log-diagnosis__rows strong { display: block; font-size: 0.62rem; }
+.log-diagnosis__rows p { margin: 3px 0 0; color: var(--muted); font-size: 0.58rem; line-height: 1.45; }
+.log-diagnosis__rows small { color: var(--muted); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.5rem; white-space: nowrap; }
+.log-diagnosis__rows time { color: inherit; }
+
+.log-resource-inspector .attempt-list > div > p {
+  grid-column: 2 / -1;
+  margin: -3px 0 3px;
+  color: var(--muted);
+  font-size: 0.58rem;
+  line-height: 1.4;
+}
+
 .access-key-panel {
   grid-template-columns: minmax(240px, 0.9fr) minmax(280px, 1.3fr);
 }
@@ -1533,9 +1599,25 @@
   font-size: 0.63rem;
 }
 
+@media (max-width: 1400px) {
+  .ops-console__workspace.has-inspector .provider-debug-head {
+    grid-template-columns: minmax(210px, 1fr) auto;
+  }
+
+  .ops-console__workspace.has-inspector .provider-debug-head .limit-preview {
+    grid-column: 1 / -1;
+    margin-left: 11px;
+  }
+
+  .ops-console__workspace.has-inspector .route-debug-columns,
+  .ops-console__workspace.has-inspector .route-debug-row {
+    min-width: 0;
+    grid-template-columns: minmax(150px, 1fr) 72px 48px 58px 82px 14px;
+  }
+}
+
 @media (max-width: 1280px) {
   .ops-console__workspace.has-inspector { grid-template-columns: minmax(0, 1fr) 310px; }
-  .provider-debug-head { grid-template-columns: minmax(210px, 0.8fr) minmax(390px, 1.5fr) auto; }
 }
 
 @media (max-width: 1050px) {

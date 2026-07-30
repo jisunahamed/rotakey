@@ -585,7 +585,7 @@ function OverviewPage({
             <LedgerMetric label="Requests" value={formatNumber(overview.summary.requests)} />
             <LedgerMetric label="Errors" value={`${formatNumber(overview.summary.errors)} · ${(overview.summary.error_rate * 100).toFixed(1)}%`} tone={overview.summary.errors ? "danger" : "default"} />
             <LedgerMetric label="P95 latency" value={`${formatNumber(overview.summary.latency_p95_ms)} ms`} />
-            <LedgerMetric label="Tokens" value={formatNumber(overview.summary.tokens)} />
+            <LedgerMetric label="Tokens" value={formatCompact(overview.summary.tokens)} />
           </section>
 
           <div className={`ops-console__workspace${selected ? " has-inspector" : ""}`}>
@@ -896,7 +896,7 @@ function OverviewInspector({
           <HeadroomReadout label="Token limit" headroom={credential.token_headroom} />
         </>
       )}
-      {!credential && provider && (
+      {!credential && provider && !route && (
         <>
           <div className="inspector-definition">
             <Definition label="Routes ready" value={`${provider.models_ready}/${provider.models_total}`} />
@@ -967,9 +967,9 @@ function HeadroomReadout({ label, headroom }: { label: string; headroom?: Overvi
   return (
     <div className={`headroom-readout ${ratio <= 0 ? "is-critical" : ratio <= 0.2 ? "is-warning" : ""}`}>
       <span>{label} · {headroom.scope}</span>
-      <strong>{headroom.remaining} / {headroom.limit} {headroom.dimension}</strong>
+      <strong title={`${headroom.remaining.toLocaleString()} / ${headroom.limit.toLocaleString()} ${headroom.dimension.toUpperCase()}`}>{formatCompact(headroom.remaining)} / {formatCompact(headroom.limit)} {headroom.dimension}</strong>
       <div><i style={{ width: `${ratio * 100}%` }} /></div>
-      <small>{headroom.reset_at ? `Resets ${formatResetTime(headroom.reset_at)}` : "Per request limit"}</small>
+      <small>{headroom.reset_at ? <>Resets <LiveResetTime value={headroom.reset_at} /></> : "Per request limit"}</small>
     </div>
   );
 }
@@ -1003,7 +1003,7 @@ function formatRouteBottleneck(route: Overview["routes"][number]) {
   const tightest = candidates.sort((left, right) => (
     (left!.remaining / Math.max(left!.limit, 1)) - (right!.remaining / Math.max(right!.limit, 1))
   ))[0]!;
-  return `${tightest.remaining}/${tightest.limit} ${tightest.dimension}`;
+  return `${formatCompact(tightest.remaining)}/${formatCompact(tightest.limit)} ${tightest.dimension}`;
 }
 
 function formatModelBottleneck(route: Overview["routes"][number]) {
@@ -1012,11 +1012,21 @@ function formatModelBottleneck(route: Overview["routes"][number]) {
   const tightest = candidates.sort((left, right) => (
     (left!.remaining / Math.max(left!.limit, 1)) - (right!.remaining / Math.max(right!.limit, 1))
   ))[0]!;
-  return `${tightest.remaining}/${tightest.limit} ${tightest.dimension}`;
+  return `${formatCompact(tightest.remaining)}/${formatCompact(tightest.limit)} ${tightest.dimension}`;
 }
 
-function formatResetTime(value: string) {
-  const milliseconds = new Date(value).getTime() - Date.now();
+function LiveResetTime({ value }: { value: string }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [value]);
+  return <time dateTime={value}>{formatResetTime(value, now)}</time>;
+}
+
+function formatResetTime(value: string, now = Date.now()) {
+  const milliseconds = new Date(value).getTime() - now;
   if (milliseconds <= 0) return "now";
   if (milliseconds < 60_000) return `in ${Math.ceil(milliseconds / 1000)}s`;
   if (milliseconds < 3_600_000) return `in ${Math.ceil(milliseconds / 60_000)}m`;
@@ -2048,19 +2058,28 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
   const [attemptsOpen, setAttemptsOpen] = useState(false);
   const [bodiesOpen, setBodiesOpen] = useState(false);
   const [logInspectorOpen, setLogInspectorOpen] = useState(false);
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const result = await api<{ logs: RequestLog[] }>(`/api/admin/logs?limit=100&q=${encodeURIComponent(query)}&status=${encodeURIComponent(status)}`);
-      setLogs(result.logs);
-      setSelected((current) => result.logs.find((log) => log.id === current?.id) || null);
+      const normalized = result.logs.map((log) => ({
+        ...log,
+        attempts: log.attempts ?? [],
+        routing_decisions: log.routing_decisions ?? [],
+      }));
+      setLogs(normalized);
+      setSelected((current) => normalized.find((log) => log.id === current?.id) || normalized.find((log) => log.request_id === current?.request_id) || null);
     } catch (caught) {
       notify(errorMessage(caught), "danger");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [query, status, notify]);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    const timer = window.setInterval(() => void load(true), 2000);
+    return () => window.clearInterval(timer);
+  }, [load]);
   useEffect(() => {
     const params = new URLSearchParams();
     if (query) params.set("q", query);
@@ -2069,7 +2088,7 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
   }, [query, status]);
   useEffect(() => {
     setBodies(null);
-    setAttemptsOpen(false);
+    setAttemptsOpen(Boolean(selected && selected.status_code >= 400 && selected.attempts.length));
     setBodiesOpen(false);
   }, [selected?.id]);
   useEffect(() => {
@@ -2080,7 +2099,7 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
 
   return (
     <div className="resource-page log-page">
-      <PageHeader eyebrow="Request evidence" title="Logs" description="Metadata is always retained. Bodies appear only for routes where encrypted capture is enabled." actions={<Button variant="quiet" onClick={() => void load()}><RefreshCw size={15} /> Refresh</Button>} />
+      <PageHeader eyebrow="Live request evidence" title="Logs" description="Running requests update every two seconds. Completed metadata is retained; bodies appear only where encrypted capture is enabled." actions={<Button variant="quiet" onClick={() => void load()}><RefreshCw size={15} /> Refresh</Button>} />
       <div className="ide-resource-workbench log-workbench">
         <section className="ide-resource-list" aria-label="Request logs">
           <div className="ide-filter log-filter">
@@ -2092,7 +2111,7 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
             <label>
               <span className="sr-only">Status</span>
               <select aria-label="Status" value={status} onChange={(e) => setStatus(e.target.value)}>
-                <option value="">All statuses</option><option value="200">200</option><option value="400">400</option><option value="429">429</option><option value="500">500</option><option value="502">502</option><option value="503">503</option>
+                <option value="">All statuses</option><option value="running">Running</option><option value="errors">All errors</option><option value="200">200</option><option value="400">400</option><option value="401">401</option><option value="403">403</option><option value="404">404</option><option value="429">429</option><option value="500">500</option><option value="502">502</option><option value="503">503</option><option value="504">504</option>
               </select>
             </label>
           </div>
@@ -2103,14 +2122,14 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
             ) : logs.length === 0 ? (
               <EmptyState title="No matching requests" description="Send a request through /v1 or clear the current filters." />
             ) : logs.map((log) => (
-              <button key={log.id} className={selected?.id === log.id ? "is-selected" : ""} onClick={() => { setSelected(log); setLogInspectorOpen(true); }}>
+              <button key={log.id} className={`${selected?.request_id === log.request_id ? "is-selected" : ""}${log.running ? " is-running" : ""}`} onClick={() => { setSelected(log); setLogInspectorOpen(true); }}>
                 <span>
-                  <StatusDot state={log.status_code >= 500 ? "exhausted" : log.status_code >= 400 ? "partial" : "healthy"} />
+                  <StatusDot state={log.running ? "unknown" : log.status_code >= 500 ? "exhausted" : log.status_code >= 400 ? "partial" : "healthy"} />
                   <strong>{new Date(log.created_at).toLocaleTimeString()}</strong>
                   <small>{log.request_id}</small>
                 </span>
-                <span><code>{log.model_alias}</code><small>{log.provider_name} · {log.credential_label || "No credential"}</small></span>
-                <strong className={`status-code status-code--${log.status_code >= 500 ? "fault" : log.status_code >= 400 ? "warning" : "healthy"}`}>{log.status_code}</strong>
+                <span><code>{log.model_alias}</code><small>{log.provider_name} · {routingStageLabel(log)}{log.error_code ? ` · ${log.error_code}` : ""}</small></span>
+                <strong className={`status-code status-code--${log.running ? "running" : log.status_code >= 500 ? "fault" : log.status_code >= 400 ? "warning" : "healthy"}`}>{log.running ? "RUN" : log.status_code}</strong>
                 <small>{log.latency_ms} ms</small>
                 <ChevronRight size={13} />
               </button>
@@ -2120,25 +2139,26 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
         {selected ? (
           <aside className={`ide-resource-inspector log-resource-inspector${logInspectorOpen ? " is-open" : ""}`}>
             <header className="ide-inspector-titlebar">
-              <div><span>{selected.endpoint} · HTTP {selected.status_code}</span><h2>{selected.request_id}</h2><code>{selected.model_alias}</code></div>
-              <div className="button-row"><strong className={`status-code status-code--${selected.status_code >= 500 ? "fault" : selected.status_code >= 400 ? "warning" : "healthy"}`}>{selected.status_code}</strong><button className="console-icon resource-inspector-close" onClick={() => setLogInspectorOpen(false)} aria-label="Close log inspector"><X size={15} /></button></div>
+              <div><span>{selected.endpoint} · {selected.running ? "RUNNING" : `HTTP ${selected.status_code}`}</span><h2>{selected.request_id}</h2><code>{selected.model_alias}</code></div>
+              <div className="button-row"><strong className={`status-code status-code--${selected.running ? "running" : selected.status_code >= 500 ? "fault" : selected.status_code >= 400 ? "warning" : "healthy"}`}>{selected.running ? "RUNNING" : selected.status_code}</strong><button className="console-icon resource-inspector-close" onClick={() => setLogInspectorOpen(false)} aria-label="Close log inspector"><X size={15} /></button></div>
             </header>
             <div className="log-detail-grid">
               <div><span>Provider</span><strong>{selected.provider_name}</strong></div>
-              <div><span>API key</span><strong>{selected.credential_label || "No credential"}</strong></div>
+              <div><span>API key</span><strong>{routingStageLabel(selected)}</strong></div>
               <div><span>Latency</span><strong>{selected.latency_ms} ms</strong></div>
-              <div><span>Tokens</span><strong>{selected.input_tokens} in · {selected.output_tokens} out</strong></div>
+              <div><span>Tokens</span><strong title={`${selected.input_tokens} input · ${selected.output_tokens} output`}>{formatCompact(selected.input_tokens)} in · {formatCompact(selected.output_tokens)} out</strong></div>
             </div>
+            {selected.running ? <InlineNotice>Request is running. This inspector will switch to the final status automatically.</InlineNotice> : selected.status_code >= 400 && <LogDiagnosis log={selected} />}
             <section className={`inspector-disclosure log-disclosure${attemptsOpen ? " is-open" : ""}`}>
               <button type="button" onClick={() => setAttemptsOpen((current) => !current)} aria-expanded={attemptsOpen}><ChevronDown size={14} /><span><strong>Routing attempts</strong><small>{selected.attempts.length} recorded</small></span></button>
-              {attemptsOpen && <div className="attempt-list">{selected.attempts.length ? selected.attempts.map((attempt, index) => <div key={`${attempt.credential_id}-${index}`}><span>{index + 1}</span><strong>{attempt.credential_label}</strong><code>{attempt.status_code || attempt.error}{attempt.removed_parameters?.length ? ` · removed ${attempt.removed_parameters.join(", ")}` : ""}{attempt.replaced_parameters ? ` · replaced ${Object.entries(attempt.replaced_parameters).map(([from, to]) => `${from} → ${to}`).join(", ")}` : ""}</code><small>{attempt.duration_ms} ms</small></div>) : <p className="console-empty">No attempt detail was recorded.</p>}</div>}
+              {attemptsOpen && <div className="attempt-list">{selected.attempts.length ? selected.attempts.map((attempt, index) => <div key={`${attempt.credential_id}-${index}`}><span>{index + 1}</span><strong>{attempt.credential_label}</strong><code>{attempt.status_code || attempt.error}{attempt.error ? ` · ${attempt.error}` : ""}{attempt.removed_parameters?.length ? ` · removed ${attempt.removed_parameters.join(", ")}` : ""}{attempt.replaced_parameters ? ` · replaced ${Object.entries(attempt.replaced_parameters).map(([from, to]) => `${from} → ${to}`).join(", ")}` : ""}</code><small>{attempt.duration_ms} ms</small>{attempt.error_message && <p>{attempt.error_message}</p>}</div>) : <p className="console-empty">No upstream attempt was needed.</p>}</div>}
             </section>
-            {selected.body_captured ? (
+            {!selected.running && selected.body_captured ? (
               <section className={`inspector-disclosure log-disclosure${bodiesOpen ? " is-open" : ""}`}>
                 <button type="button" onClick={() => setBodiesOpen((current) => !current)} aria-expanded={bodiesOpen}><ChevronDown size={14} /><span><strong>Encrypted bodies</strong><small>{selected.body_truncated ? "captured · truncated" : "captured"}</small></span></button>
                 {bodiesOpen && <div className="body-grid"><section><h3>Request {selected.body_truncated && <small>truncated</small>}</h3><pre>{bodies?.request ?? "Loading encrypted body…"}</pre></section><section><h3>Response {selected.body_truncated && <small>truncated</small>}</h3><pre>{bodies?.response ?? "No captured response body."}</pre></section></div>}
               </section>
-            ) : <InlineNotice>Body capture was off for this model route. Only metadata is available.</InlineNotice>}
+            ) : !selected.running && <InlineNotice>Body capture was off for this model route. Only metadata is available.</InlineNotice>}
           </aside>
         ) : (
           <aside className="ide-resource-inspector ide-resource-inspector--empty">
@@ -2148,6 +2168,101 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
       </div>
     </div>
   );
+}
+
+function LogDiagnosis({ log }: { log: RequestLog }) {
+  const decisions = log.routing_decisions ?? [];
+  const failedAttempts = (log.attempts ?? []).filter((attempt) => attempt.error || attempt.status_code >= 400);
+  return (
+    <section className="log-diagnosis" aria-label="Automatic failure diagnosis">
+      <header>
+        <AlertTriangle size={15} />
+        <span><small>Automatic diagnosis</small><strong>{logErrorTitle(log)}</strong></span>
+        <code>{log.error_code || `http_${log.status_code}`}</code>
+      </header>
+      <div className="log-diagnosis__rows">
+        {decisions.map((decision, index) => (
+          <div key={`${decision.credential_id || "route"}-${decision.dimension || decision.reason}-${index}`}>
+            <span className="log-diagnosis__marker">{index + 1}</span>
+            <span>
+              <strong>{decision.credential_label || "Routing pool"}</strong>
+              <p>{routingDecisionMessage(decision)}</p>
+            </span>
+            <small>{decision.reset_at ? <>reset <LiveResetTime value={decision.reset_at} /></> : decision.scope || "routing"}</small>
+          </div>
+        ))}
+        {failedAttempts.map((attempt, index) => (
+          <div key={`attempt-${attempt.credential_id}-${index}`}>
+            <span className="log-diagnosis__marker">{decisions.length + index + 1}</span>
+            <span>
+              <strong>{attempt.credential_label || "Upstream"} · {attempt.status_code ? `HTTP ${attempt.status_code}` : attempt.error}</strong>
+              <p>{attempt.error_message || humanizeErrorCode(attempt.error || log.error_code || "upstream_error")}</p>
+            </span>
+            <small>{attempt.retryable ? "retryable" : "final"} · {attempt.duration_ms} ms</small>
+          </div>
+        ))}
+        {decisions.length === 0 && failedAttempts.length === 0 && (
+          <div>
+            <span className="log-diagnosis__marker">!</span>
+            <span><strong>Gateway decision</strong><p>{log.error_message || humanizeErrorCode(log.error_code || `http_${log.status_code}`)}</p></span>
+            <small>metadata</small>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function routingDecisionMessage(decision: RequestLog["routing_decisions"][number]) {
+  const scope = decision.scope === "model" ? "Model" : "Shared";
+  const dimension = decision.dimension?.toUpperCase();
+  if (decision.reason === "cooldown") {
+    return `Key is cooling down${decision.retry_after_ms ? ` for ${formatDuration(decision.retry_after_ms)}` : ""}.`;
+  }
+  if (decision.reason === "tpr_exceeded") {
+    return `${scope} TPR allows ${formatCompact(decision.limit || 0)} tokens, but this request reserved ${formatCompact(decision.required || 0)}.`;
+  }
+  if (decision.reason === "limit_exhausted") {
+    return `${scope} ${dimension}: ${formatCompact(decision.used || 0)} used + ${formatCompact(decision.required || 0)} required exceeds ${formatCompact(decision.limit || 0)}; ${formatCompact(decision.remaining || 0)} remained.`;
+  }
+  if (decision.reason === "quarantined") return "The provider rejected this API key; re-check or replace it.";
+  if (decision.reason === "disabled") return "This API key is disabled and cannot receive traffic.";
+  return humanizeErrorCode(decision.reason);
+}
+
+function logErrorTitle(log: RequestLog) {
+  if (log.routing_decisions?.length) return "No API key passed every routing constraint";
+  if (log.attempts?.some((attempt) => attempt.status_code >= 400 || attempt.error)) return "Upstream request failed";
+  return "Gateway request failed";
+}
+
+function routingStageLabel(log: RequestLog) {
+  if (log.credential_label) return log.credential_label;
+  if (log.provider_name === "gateway") return "Gateway validation";
+  if (log.attempts?.length) return "No final API key";
+  return "Pre-routing rejection";
+}
+
+function humanizeErrorCode(code: string) {
+  const messages: Record<string, string> = {
+    rate_limit_exceeded: "Every configured API key was at capacity, in cooldown, or blocked by a request/token limit.",
+    no_credentials: "No enabled healthy API key is configured for this model.",
+    limiter_unavailable: "Redis was unavailable, so Rotakey failed closed instead of bypassing limits.",
+    upstream_unavailable: "The upstream connection failed before a response started.",
+    connection_error: "The upstream connection failed before a response started.",
+    upstream_response_too_large: "The upstream response exceeded Rotakey's configured response size limit.",
+    translation_failed: "The upstream response could not be translated to the requested API format.",
+    stream_interrupted: "The response stream ended unexpectedly after it started.",
+    unsupported_parameter: "The upstream model rejected a request parameter.",
+    unrecognized_request_argument: "The upstream model did not recognize a request parameter.",
+  };
+  return messages[code] || code.replaceAll("_", " ");
+}
+
+function formatDuration(milliseconds: number) {
+  if (milliseconds < 60_000) return `${Math.max(1, Math.ceil(milliseconds / 1_000))}s`;
+  if (milliseconds < 3_600_000) return `${Math.ceil(milliseconds / 60_000)}m`;
+  return `${Math.ceil(milliseconds / 3_600_000)}h`;
 }
 
 function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNewKey: (key: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {

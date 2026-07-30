@@ -115,7 +115,9 @@ Responses API features that cannot be translated faithfully return `400 unsuppor
 | Disabled | Enable only after configuration and connection tests pass. |
 | Unknown | Check Redis readiness and app logs. |
 
-Request logs contain request ID, alias, provider, credential label, each attempt, status, latency, usage, parameter adaptations, and error code. Search by model alias or request ID. Captured bodies are off by default; when enabled per route they are encrypted, capped, marked if truncated, and retained for 30 days. Metadata is retained for 90 days.
+Request logs contain request ID, alias, provider, credential label, each attempt, status, latency, usage, parameter adaptations, and error code. Failed requests also include an automatic diagnosis: every API key skipped by routing, shared/model scope, blocking `RPS/RPM/RPD/TPS/TPM/TPD/TPR` bucket, required and remaining capacity, cooldown/reset time, and the redacted upstream error message when available. Use **All errors** to filter every non-success status, or search by model alias/request ID.
+
+Reset labels count down once per second in the inspector. Capacity values use compact notation such as `1K`, `100K`, and `1M`; hover the value when an exact integer is needed. Captured bodies are off by default; when enabled per route they are encrypted, capped, marked if truncated, and retained for 30 days. Metadata is retained for 90 days.
 
 ## 9. Common errors
 
@@ -146,7 +148,8 @@ See [Deployment](DEPLOYMENT.md) for Compose, domain, backup/restore, and GitHub 
 2. Confirm the public alias appears in `/v1/models` using the gateway key.
 3. Open Overview, expand the provider, and inspect the route's next key and limiting bucket.
 4. Re-check warnings/invalid keys and test the provider.
-5. Search Request logs with the request ID or alias; inspect every attempt and parameter adaptation.
-6. Verify shared and model-specific limits against the upstream account's real quota.
-7. For dependency errors, inspect only Rotakey app/PostgreSQL/Redis status before restarting anything.
-8. Preserve logs and take a PostgreSQL backup before changing production configuration.
+5. Request logs refresh every two seconds. Use the `Running` filter to watch in-flight requests; a running row switches to its final status and diagnosis automatically.
+6. Search Request logs with the request ID or alias; inspect every routing decision, attempt and parameter adaptation.
+7. Verify shared and model-specific limits against the upstream account's real quota.
+8. For dependency errors, inspect only Rotakey app/PostgreSQL/Redis status before restarting anything.
+9. Preserve logs and take a PostgreSQL backup before changing production configuration.

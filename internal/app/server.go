@@ -12,6 +12,7 @@ import (
 	"path"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,13 +23,14 @@ import (
 var webFiles embed.FS
 
 type Server struct {
-	cfg     Config
-	db      *pgxpool.Pool
-	redis   *redis.Client
-	vault   *vault
-	limiter *limiter
-	logger  *slog.Logger
-	handler http.Handler
+	cfg            Config
+	db             *pgxpool.Pool
+	redis          *redis.Client
+	vault          *vault
+	limiter        *limiter
+	logger         *slog.Logger
+	handler        http.Handler
+	activeRequests sync.Map
 }
 
 func NewServer(ctx context.Context, cfg Config, logger *slog.Logger) (*Server, error) {
