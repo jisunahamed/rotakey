@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -125,6 +126,45 @@ func TestAnthropicStreamEmulatesOpenAIUsageChunk(t *testing.T) {
 	output := destination.String()
 	if !strings.Contains(output, `"choices":[],"created"`) || !strings.Contains(output, `"completion_tokens":4`) || !strings.Contains(output, `"prompt_tokens":12`) || !strings.Contains(output, "data: [DONE]") {
 		t.Fatalf("translated stream = %s", output)
+	}
+}
+
+func TestAnthropicJSONResponseCanBecomeOpenAIStream(t *testing.T) {
+	body := []byte(`{"id":"msg_1","type":"message","role":"assistant","model":"upstream","content":[{"type":"text","text":"Hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":2}}`)
+	synthetic, err := anthropicJSONToSSE(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := &bytes.Buffer{}
+	if _, err := translateAnthropicStreamToOpenAI(bytes.NewReader(synthetic), destination, "public/model", nil, true); err != nil {
+		t.Fatal(err)
+	}
+	output := destination.String()
+	if !strings.Contains(output, `"content":"Hello"`) || !strings.Contains(output, `"prompt_tokens":3`) || !strings.Contains(output, `"completion_tokens":2`) || !strings.HasSuffix(output, "data: [DONE]\n\n") {
+		t.Fatalf("translated stream = %s", output)
+	}
+}
+
+func TestAnthropicJSONStreamRepairRejectsEmptySuccess(t *testing.T) {
+	for _, body := range [][]byte{nil, []byte(`{}`), []byte(`{"type":"error"}`)} {
+		if _, err := anthropicJSONToSSE(body); err == nil {
+			t.Fatalf("invalid HTTP 200 body was accepted: %s", body)
+		}
+	}
+}
+
+func TestPrepareAnthropicSSERejectsBlankAndPreservesFirstEvent(t *testing.T) {
+	if _, err := prepareAnthropicSSE(strings.NewReader("\n: keepalive\n")); err == nil {
+		t.Fatal("blank SSE response was accepted")
+	}
+	source := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	prepared, err := prepareAnthropicSSE(strings.NewReader(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(prepared)
+	if err != nil || string(body) != source {
+		t.Fatalf("prepared stream = %q, %v", body, err)
 	}
 }
 

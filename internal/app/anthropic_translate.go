@@ -622,6 +622,107 @@ func rewriteAnthropicStream(source io.Reader, destination io.Writer, alias strin
 	}
 }
 
+func prepareAnthropicSSE(source io.Reader) (io.Reader, error) {
+	reader := bufio.NewReaderSize(source, 128<<10)
+	prefix := &bytes.Buffer{}
+	for prefix.Len() <= 256<<10 {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			_, _ = prefix.Write(line)
+			trimmed := bytes.TrimSpace(line)
+			if bytes.HasPrefix(trimmed, []byte("data:")) {
+				data := bytes.TrimSpace(bytes.TrimPrefix(trimmed, []byte("data:")))
+				var event map[string]any
+				if json.Unmarshal(data, &event) == nil {
+					eventType := strings.TrimSpace(fmt.Sprint(event["type"]))
+					if eventType == "error" {
+						return nil, fmt.Errorf("Anthropic error event arrived before the response stream started")
+					}
+					if eventType != "" && eventType != "<nil>" {
+						return io.MultiReader(bytes.NewReader(prefix.Bytes()), reader), nil
+					}
+				}
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("Anthropic SSE prelude exceeded 256 KiB")
+}
+
+// anthropicJSONToSSE repairs providers that accept stream=true but return a
+// regular Anthropic Message object. Keeping this normalization at the protocol
+// boundary lets every public mode reuse the same tested streaming translators.
+func anthropicJSONToSSE(body []byte) ([]byte, error) {
+	var message map[string]any
+	if err := json.Unmarshal(body, &message); err != nil {
+		return nil, err
+	}
+	if message["type"] != "message" {
+		return nil, fmt.Errorf("expected Anthropic Message, got %v", message["type"])
+	}
+
+	output := &bytes.Buffer{}
+	start := cloneMap(message)
+	blocks, _ := message["content"].([]any)
+	start["content"] = []any{}
+	if usage, ok := start["usage"].(map[string]any); ok {
+		start["usage"] = map[string]any{
+			"input_tokens":                usage["input_tokens"],
+			"cache_creation_input_tokens": usage["cache_creation_input_tokens"],
+			"cache_read_input_tokens":     usage["cache_read_input_tokens"],
+			"output_tokens":               0,
+		}
+	}
+	writeSSE(output, nil, "message_start", map[string]any{"type": "message_start", "message": start})
+
+	for index, raw := range blocks {
+		block, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("invalid Anthropic content block")
+		}
+		switch block["type"] {
+		case "text":
+			writeSSE(output, nil, "content_block_start", map[string]any{
+				"type": "content_block_start", "index": index,
+				"content_block": map[string]any{"type": "text", "text": ""},
+			})
+			writeSSE(output, nil, "content_block_delta", map[string]any{
+				"type": "content_block_delta", "index": index,
+				"delta": map[string]any{"type": "text_delta", "text": block["text"]},
+			})
+		case "tool_use":
+			writeSSE(output, nil, "content_block_start", map[string]any{
+				"type": "content_block_start", "index": index,
+				"content_block": map[string]any{"type": "tool_use", "id": block["id"], "name": block["name"], "input": map[string]any{}},
+			})
+			arguments, err := json.Marshal(block["input"])
+			if err != nil {
+				return nil, err
+			}
+			writeSSE(output, nil, "content_block_delta", map[string]any{
+				"type": "content_block_delta", "index": index,
+				"delta": map[string]any{"type": "input_json_delta", "partial_json": string(arguments)},
+			})
+		default:
+			writeSSE(output, nil, "content_block_start", map[string]any{
+				"type": "content_block_start", "index": index, "content_block": block,
+			})
+		}
+		writeSSE(output, nil, "content_block_stop", map[string]any{"type": "content_block_stop", "index": index})
+	}
+
+	_, outputTokens := extractAnthropicUsage(message)
+	writeSSE(output, nil, "message_delta", map[string]any{
+		"type":  "message_delta",
+		"delta": map[string]any{"stop_reason": message["stop_reason"], "stop_sequence": message["stop_sequence"]},
+		"usage": map[string]any{"output_tokens": outputTokens},
+	})
+	writeSSE(output, nil, "message_stop", map[string]any{"type": "message_stop"})
+	return output.Bytes(), nil
+}
+
 func translateAnthropicStreamToOpenAI(source io.Reader, destination io.Writer, alias string, capture *limitedCapture, includeUsage bool) (string, error) {
 	reader := bufio.NewReaderSize(source, 128<<10)
 	id := "chatcmpl_" + strings.TrimPrefix(requestLikeID(), "req_")

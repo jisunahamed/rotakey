@@ -105,7 +105,8 @@ func (s *Server) loadRoute(ctx context.Context, alias string) (routeRuntime, err
 		SELECT
 			m.id, m.provider_id, m.public_alias, m.upstream_model, m.supports_chat,
 			m.supports_responses, m.supports_messages, m.default_max_output_tokens, m.tokenizer,
-			m.capture_bodies, m.strip_parameters, m.enabled, m.created_at, m.updated_at,
+			m.capture_bodies, m.strip_parameters, m.capability_status, m.capability_profile,
+			m.capabilities_checked_at, m.capability_error, m.enabled, m.created_at, m.updated_at,
 			p.id, p.name, p.slug, p.base_url, p.auth_header, p.auth_scheme,
 			p.extra_headers, p.timeout_seconds, p.enabled, p.allow_private_network,
 			p.api_format, p.anthropic_version,
@@ -117,6 +118,7 @@ func (s *Server) loadRoute(ctx context.Context, alias string) (routeRuntime, err
 
 	var route routeRuntime
 	var extra []byte
+	var capabilityProfile []byte
 	err := row.Scan(
 		&route.Model.ID,
 		&route.Model.ProviderID,
@@ -129,6 +131,10 @@ func (s *Server) loadRoute(ctx context.Context, alias string) (routeRuntime, err
 		&route.Model.Tokenizer,
 		&route.Model.CaptureBodies,
 		&route.Model.StripParameters,
+		&route.Model.CapabilityStatus,
+		&capabilityProfile,
+		&route.Model.CapabilitiesCheckedAt,
+		&route.Model.CapabilityError,
 		&route.Model.Enabled,
 		&route.Model.CreatedAt,
 		&route.Model.UpdatedAt,
@@ -149,6 +155,9 @@ func (s *Server) loadRoute(ctx context.Context, alias string) (routeRuntime, err
 	)
 	if err != nil {
 		return routeRuntime{}, err
+	}
+	if json.Unmarshal(capabilityProfile, &route.Model.CapabilityProfile) != nil {
+		route.Model.CapabilityProfile = map[string]string{}
 	}
 	if err := json.Unmarshal(extra, &route.Provider.ExtraHeaders); err != nil {
 		route.Provider.ExtraHeaders = map[string]string{}

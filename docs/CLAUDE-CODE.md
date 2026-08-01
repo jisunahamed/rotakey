@@ -64,6 +64,8 @@ $headers = @{
 
 Every enabled alias with Messages support can be selected explicitly, including routes backed by an OpenAI-compatible provider. Rotakey translates the supported Messages subset before forwarding it.
 
+The Model route inspector shows whether an alias was catalog-verified or passed a live core probe, plus whether Messages is native or translated. Prefer a `probe verified` native Anthropic route when Claude Code needs thinking, prompt caching, citations, or other Anthropic-only features.
+
 ```bash
 claude --model "free-model/claude-fable-5"
 claude --model "azure/grok-4.3"
@@ -161,6 +163,7 @@ Open **Admin → Request logs** to confirm the public protocol, translated/nativ
 | Alias not visible in `/model` | Enable discovery and update Claude Code. IDs not beginning with `claude` or `anthropic` must be selected explicitly or added with `ANTHROPIC_CUSTOM_MODEL_OPTION`. |
 | `404` model not found | Use the Rotakey public alias exactly as returned by `/v1/models`, including case and `/`. Confirm the route is enabled. |
 | `400 unsupported_feature` | The selected route crosses protocols and the request used a feature with no safe translation. Inspect Request logs; use a native Anthropic route or disable that feature. |
+| Blank response with HTTP `200` | Current Rotakey repairs a provider that returns a normal JSON Message despite `stream:true`. If the body is empty or malformed, Request logs show `502 upstream_stream_invalid` rather than a false success. |
 | `429` | Every eligible API key is at a configured/shared/model limit or upstream cooldown. Inspect the limiting bucket and reset countdown. |
 | `503` | Redis/database readiness or safe routing is unavailable. Rotakey fails closed instead of bypassing limits. |
 | Model picker shows stale entries | Restart Claude Code. Gateway discovery refreshes at startup and uses `~/.claude/cache/gateway-models.json`. |

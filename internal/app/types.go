@@ -64,20 +64,24 @@ type DiscoveredModel struct {
 }
 
 type ModelRoute struct {
-	ID                     string    `json:"id"`
-	ProviderID             string    `json:"provider_id"`
-	PublicAlias            string    `json:"public_alias"`
-	UpstreamModel          string    `json:"upstream_model"`
-	SupportsChat           bool      `json:"supports_chat"`
-	SupportsResponses      bool      `json:"supports_responses"`
-	SupportsMessages       bool      `json:"supports_messages"`
-	DefaultMaxOutputTokens int       `json:"default_max_output_tokens"`
-	Tokenizer              string    `json:"tokenizer"`
-	CaptureBodies          bool      `json:"capture_bodies"`
-	StripParameters        []string  `json:"strip_parameters"`
-	Enabled                bool      `json:"enabled"`
-	CreatedAt              time.Time `json:"created_at"`
-	UpdatedAt              time.Time `json:"updated_at"`
+	ID                     string            `json:"id"`
+	ProviderID             string            `json:"provider_id"`
+	PublicAlias            string            `json:"public_alias"`
+	UpstreamModel          string            `json:"upstream_model"`
+	SupportsChat           bool              `json:"supports_chat"`
+	SupportsResponses      bool              `json:"supports_responses"`
+	SupportsMessages       bool              `json:"supports_messages"`
+	DefaultMaxOutputTokens int               `json:"default_max_output_tokens"`
+	Tokenizer              string            `json:"tokenizer"`
+	CaptureBodies          bool              `json:"capture_bodies"`
+	StripParameters        []string          `json:"strip_parameters"`
+	CapabilityStatus       string            `json:"capability_status"`
+	CapabilityProfile      map[string]string `json:"capability_profile"`
+	CapabilitiesCheckedAt  *time.Time        `json:"capabilities_checked_at,omitempty"`
+	CapabilityError        string            `json:"capability_error,omitempty"`
+	Enabled                bool              `json:"enabled"`
+	CreatedAt              time.Time         `json:"created_at"`
+	UpdatedAt              time.Time         `json:"updated_at"`
 }
 
 type CredentialView struct {

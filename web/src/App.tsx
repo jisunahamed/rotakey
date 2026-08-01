@@ -1519,7 +1519,7 @@ function ProviderForm({ provider, onClose, onComplete, notify }: { provider: Pro
   );
 }
 
-type ModelDraft = Omit<ModelRoute, "id" | "provider_id" | "created_at" | "updated_at"> & { manual?: boolean };
+type ModelDraft = Omit<ModelRoute, "id" | "provider_id" | "created_at" | "updated_at" | "capability_status" | "capability_profile" | "capabilities_checked_at" | "capability_error"> & { manual?: boolean };
 
 function ModelFields({ value, onChange }: { value: ModelDraft; onChange: (value: ModelDraft) => void }) {
   return (
@@ -1965,7 +1965,7 @@ function ModelsPage({
                 const ready = model.credentials.filter((item) => item.enabled && item.status === "healthy").length;
                 return (
                   <button key={model.id} className={selectedID === model.id ? "is-selected" : ""} onClick={() => { setSelectedID(model.id); setModelInspectorOpen(true); }}>
-                    <span><StatusDot state={!model.enabled ? "disabled" : ready ? "healthy" : "exhausted"} /><code>{model.public_alias}</code><small>{model.upstream_model === model.public_alias ? (model.supports_responses ? "Chat + Responses" : "Chat Completions") : model.upstream_model}</small></span>
+                    <span><StatusDot state={!model.enabled ? "disabled" : ready ? "healthy" : "exhausted"} /><code>{model.public_alias}</code><small>{model.upstream_model === model.public_alias ? (model.supports_responses ? "Chat + Responses" : "Chat Completions") : model.upstream_model} · {model.capability_status === "probe_verified" ? "probe verified" : model.capability_status === "catalog_verified" ? "catalog verified" : "unverified"}</small></span>
                     <span>{model.provider.name}</span>
                     <span>{ready}/{model.credentials.length}</span>
                     <ChevronRight size={13} />
@@ -1978,7 +1978,11 @@ function ModelsPage({
             <aside className={`ide-resource-inspector${modelInspectorOpen ? " is-open" : ""}`}>
               <header className="ide-inspector-titlebar">
                 <div><span>Model route</span><h2>{selected.public_alias}</h2><code>{selected.upstream_model}</code></div>
-                <div className="button-row"><button className="console-icon resource-inspector-close" onClick={() => setModelInspectorOpen(false)} aria-label="Close model inspector"><X size={15} /></button><Button variant="danger" onClick={() => {
+                <div className="button-row"><button className="console-icon resource-inspector-close" onClick={() => setModelInspectorOpen(false)} aria-label="Close model inspector"><X size={15} /></button><Button variant="quiet" onClick={() => {
+                  void api(`/api/admin/models/${selected.id}/probe`, { method: "POST" })
+                    .then(() => { notify("Model capability probe passed."); void load(); })
+                    .catch((caught) => { notify(errorMessage(caught), "danger"); void load(); });
+                }}><Activity size={13} /> Recheck model</Button><Button variant="danger" onClick={() => {
                   if (confirm(`Delete route ${selected.public_alias}? Requests using this alias will stop immediately.`)) {
                     void api(`/api/admin/models/${selected.id}`, { method: "DELETE" })
                       .then(() => { notify("Model route deleted."); void load(); })
@@ -1989,8 +1993,13 @@ function ModelsPage({
               <div className="inspector-definition">
                 <Definition label="Provider" value={selected.provider.name} />
                 <Definition label="Route state" value={selected.enabled ? "enabled" : "disabled"} />
-                <Definition label="Chat endpoint" value={selected.supports_chat ? "native" : "off"} />
-                <Definition label="Responses" value={selected.supports_responses ? "native" : "translated"} />
+                <Definition label="Capability check" value={selected.capability_status === "probe_verified" ? "probe verified" : selected.capability_status === "catalog_verified" ? "catalog verified" : selected.capability_status || "unverified"} />
+                <Definition label="Chat endpoint" value={selected.capability_profile?.chat || (selected.supports_chat ? "native" : "off")} />
+                <Definition label="Responses" value={selected.capability_profile?.responses || (selected.supports_responses ? "native" : "translated")} />
+                <Definition label="Messages" value={selected.capability_profile?.messages || (selected.supports_messages ? "enabled" : "off")} />
+                <Definition label="Streaming" value={selected.capability_profile?.streaming || "unknown"} />
+                <Definition label="Tools" value={selected.capability_profile?.tools || "unknown"} />
+                <Definition label="Thinking" value={selected.capability_profile?.thinking || "unknown"} />
                 <Definition label="Output ceiling" value={`${selected.default_max_output_tokens} tokens`} />
                 <Definition label="Tokenizer" value={selected.tokenizer} mono />
               </div>
@@ -2516,7 +2525,7 @@ function normalizeProviders(providers: Provider[] | null | undefined): Provider[
     api_format: provider.api_format ?? "openai",
     anthropic_version: provider.anthropic_version ?? "2023-06-01",
     extra_headers: provider.extra_headers ?? {},
-    models: (provider.models ?? []).map((model) => ({ ...model, supports_messages: model.supports_messages ?? true, strip_parameters: model.strip_parameters ?? [] })),
+    models: (provider.models ?? []).map((model) => ({ ...model, supports_messages: model.supports_messages ?? true, strip_parameters: model.strip_parameters ?? [], capability_status: model.capability_status ?? "unverified", capability_profile: model.capability_profile ?? {} })),
     credentials: (provider.credentials ?? []).map((credential) => ({
       ...credential,
       validation_error: credential.validation_error ?? "",

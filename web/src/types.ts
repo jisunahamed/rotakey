@@ -30,6 +30,10 @@ export type ModelRoute = {
   tokenizer: string;
   capture_bodies: boolean;
   strip_parameters: string[];
+  capability_status: "unverified" | "catalog_verified" | "probe_verified" | "failed";
+  capability_profile: Record<string, string>;
+  capabilities_checked_at?: string;
+  capability_error?: string;
   enabled: boolean;
   created_at: string;
   updated_at: string;

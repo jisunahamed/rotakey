@@ -43,6 +43,7 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/admin/providers/{id}/models/bulk", admin(s.handleCreateModelsBulk))
 	mux.Handle("POST /api/admin/providers/{id}/models/discover", admin(s.handleDiscoverModels))
 	mux.Handle("PUT /api/admin/models/{id}", admin(s.handleUpdateModel))
+	mux.Handle("POST /api/admin/models/{id}/probe", admin(s.handleProbeModel))
 	mux.Handle("DELETE /api/admin/models/{id}", admin(s.handleDeleteModel))
 	mux.Handle("POST /api/admin/providers/{id}/credentials", admin(s.handleCreateCredentials))
 	mux.Handle("POST /api/admin/providers/{id}/credentials/inspect", admin(s.handleInspectProviderCredential))
@@ -97,7 +98,8 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 	modelRows, err := s.db.Query(ctx, `
 		SELECT id, provider_id, public_alias, upstream_model, supports_chat,
 		       supports_responses, supports_messages, default_max_output_tokens, tokenizer,
-		       capture_bodies, strip_parameters, enabled, created_at, updated_at
+		       capture_bodies, strip_parameters, capability_status, capability_profile,
+		       capabilities_checked_at, capability_error, enabled, created_at, updated_at
 		FROM model_routes ORDER BY created_at, id
 	`)
 	if err != nil {
@@ -105,15 +107,20 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 	}
 	for modelRows.Next() {
 		var model ModelRoute
+		var capabilityProfile []byte
 		if err := modelRows.Scan(
 			&model.ID, &model.ProviderID, &model.PublicAlias, &model.UpstreamModel,
 			&model.SupportsChat, &model.SupportsResponses, &model.SupportsMessages,
 			&model.DefaultMaxOutputTokens,
-			&model.Tokenizer, &model.CaptureBodies, &model.StripParameters, &model.Enabled,
+			&model.Tokenizer, &model.CaptureBodies, &model.StripParameters,
+			&model.CapabilityStatus, &capabilityProfile, &model.CapabilitiesCheckedAt, &model.CapabilityError, &model.Enabled,
 			&model.CreatedAt, &model.UpdatedAt,
 		); err != nil {
 			modelRows.Close()
 			return nil, err
+		}
+		if json.Unmarshal(capabilityProfile, &model.CapabilityProfile) != nil {
+			model.CapabilityProfile = map[string]string{}
 		}
 		if index, ok := byID[model.ProviderID]; ok {
 			providers[index].Models = append(providers[index].Models, model)
@@ -476,26 +483,29 @@ func (s *Server) handleCreateModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_model", err.Error())
 		return
 	}
-	if err := s.validateAnthropicModel(r.Context(), r.PathValue("id"), input.UpstreamModel); err != nil {
+	status, profile, checkedAt, err := s.probeProviderModel(r.Context(), r.PathValue("id"), &input)
+	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "model_validation_failed", err.Error())
 		return
 	}
+	profileJSON, _ := json.Marshal(profile)
 	id, _ := newID("mdl")
-	_, err := s.db.Exec(r.Context(), `
+	_, err = s.db.Exec(r.Context(), `
 		INSERT INTO model_routes
 		    (id, provider_id, public_alias, upstream_model, supports_chat,
 		     supports_responses, supports_messages, default_max_output_tokens, tokenizer,
-		     capture_bodies, strip_parameters, enabled)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		     capture_bodies, strip_parameters, capability_status, capability_profile,
+		     capabilities_checked_at, capability_error, enabled)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'',$15)
 	`, id, r.PathValue("id"), input.PublicAlias, input.UpstreamModel,
 		input.SupportsChat, input.SupportsResponses, input.SupportsMessages, input.DefaultMaxOutputTokens,
-		input.Tokenizer, input.CaptureBodies, input.StripParameters, input.Enabled)
+		input.Tokenizer, input.CaptureBodies, input.StripParameters, status, profileJSON, checkedAt, input.Enabled)
 	if err != nil {
 		writeError(w, http.StatusConflict, "model_conflict", "Model alias already exists or provider was not found.")
 		return
 	}
 	s.audit(r.Context(), adminIDFromContext(r.Context()), "model.create", "model", id, map[string]any{"alias": input.PublicAlias})
-	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "capability_status": status, "capability_profile": profile})
 }
 
 func (s *Server) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
@@ -507,31 +517,76 @@ func (s *Server) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_model", err.Error())
 		return
 	}
-	var providerID, currentUpstream string
-	if err := s.db.QueryRow(r.Context(), `SELECT provider_id, upstream_model FROM model_routes WHERE id=$1`, r.PathValue("id")).Scan(&providerID, &currentUpstream); err != nil {
+	var providerID, currentUpstream, capabilityStatus string
+	var capabilityProfile []byte
+	var checkedAt *time.Time
+	if err := s.db.QueryRow(r.Context(), `SELECT provider_id, upstream_model, capability_status, capability_profile, capabilities_checked_at FROM model_routes WHERE id=$1`, r.PathValue("id")).Scan(&providerID, &currentUpstream, &capabilityStatus, &capabilityProfile, &checkedAt); err != nil {
 		writeError(w, http.StatusNotFound, "model_not_found", "Model was not found.")
 		return
 	}
 	if input.UpstreamModel != currentUpstream {
-		if err := s.validateAnthropicModel(r.Context(), providerID, input.UpstreamModel); err != nil {
+		var profile map[string]string
+		var err error
+		capabilityStatus, profile, checkedAt, err = s.probeProviderModel(r.Context(), providerID, &input)
+		if err != nil {
 			writeError(w, http.StatusUnprocessableEntity, "model_validation_failed", err.Error())
 			return
 		}
+		capabilityProfile, _ = json.Marshal(profile)
 	}
 	tag, err := s.db.Exec(r.Context(), `
 		UPDATE model_routes SET public_alias=$2, upstream_model=$3, supports_chat=$4,
 		    supports_responses=$5, supports_messages=$6, default_max_output_tokens=$7, tokenizer=$8,
-		    capture_bodies=$9, strip_parameters=$10, enabled=$11, updated_at=NOW()
+		    capture_bodies=$9, strip_parameters=$10, capability_status=$11,
+		    capability_profile=$12, capabilities_checked_at=$13, capability_error='', enabled=$14, updated_at=NOW()
 		WHERE id=$1
 	`, r.PathValue("id"), input.PublicAlias, input.UpstreamModel, input.SupportsChat,
 		input.SupportsResponses, input.SupportsMessages, input.DefaultMaxOutputTokens, input.Tokenizer,
-		input.CaptureBodies, input.StripParameters, input.Enabled)
+		input.CaptureBodies, input.StripParameters, capabilityStatus, capabilityProfile, checkedAt, input.Enabled)
 	if err != nil || tag.RowsAffected() == 0 {
 		writeError(w, http.StatusConflict, "model_update_failed", "Model could not be updated.")
 		return
 	}
 	s.audit(r.Context(), adminIDFromContext(r.Context()), "model.update", "model", r.PathValue("id"), map[string]any{"alias": input.PublicAlias})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleProbeModel(w http.ResponseWriter, r *http.Request) {
+	var providerID string
+	var input modelInput
+	if err := s.db.QueryRow(r.Context(), `
+		SELECT provider_id, public_alias, upstream_model, supports_chat, supports_responses,
+		       supports_messages, default_max_output_tokens, tokenizer, capture_bodies,
+		       strip_parameters, enabled
+		FROM model_routes WHERE id=$1
+	`, r.PathValue("id")).Scan(
+		&providerID, &input.PublicAlias, &input.UpstreamModel, &input.SupportsChat,
+		&input.SupportsResponses, &input.SupportsMessages, &input.DefaultMaxOutputTokens,
+		&input.Tokenizer, &input.CaptureBodies, &input.StripParameters, &input.Enabled,
+	); err != nil {
+		writeError(w, http.StatusNotFound, "model_not_found", "Model was not found.")
+		return
+	}
+	status, profile, checkedAt, err := s.probeProviderModel(r.Context(), providerID, &input)
+	if err != nil {
+		_, _ = s.db.Exec(r.Context(), `UPDATE model_routes SET capability_status='failed', capability_error=$2, capabilities_checked_at=NOW(), updated_at=NOW() WHERE id=$1`, r.PathValue("id"), err.Error())
+		writeError(w, http.StatusUnprocessableEntity, "model_validation_failed", err.Error())
+		return
+	}
+	profileJSON, _ := json.Marshal(profile)
+	_, err = s.db.Exec(r.Context(), `
+		UPDATE model_routes SET supports_chat=$2, supports_responses=$3, supports_messages=$4,
+		       capability_status=$5, capability_profile=$6, capabilities_checked_at=$7,
+		       capability_error='', updated_at=NOW()
+		WHERE id=$1
+	`, r.PathValue("id"), input.SupportsChat, input.SupportsResponses, input.SupportsMessages,
+		status, profileJSON, checkedAt)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "model_probe_save_failed", "Capability result could not be saved.")
+		return
+	}
+	s.audit(r.Context(), adminIDFromContext(r.Context()), "model.probe", "model", r.PathValue("id"), map[string]any{"status": status})
+	writeJSON(w, http.StatusOK, map[string]any{"capability_status": status, "capability_profile": profile, "checked_at": checkedAt})
 }
 
 func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {

@@ -62,3 +62,20 @@ func TestMergeDiscoveredModels(t *testing.T) {
 		t.Fatalf("models = %#v", models)
 	}
 }
+
+func TestModelCapabilityProfileUsesProtocolTranslation(t *testing.T) {
+	anthropicInput := modelInput{SupportsChat: false, SupportsResponses: true, SupportsMessages: false}
+	anthropic := modelCapabilityProfile(Provider{APIFormat: "anthropic"}, &anthropicInput, "probe")
+	if !anthropicInput.SupportsChat || !anthropicInput.SupportsMessages || anthropicInput.SupportsResponses {
+		t.Fatalf("Anthropic route flags = %#v", anthropicInput)
+	}
+	if anthropic["chat"] != "translated" || anthropic["messages"] != "native" || anthropic["streaming"] != "gateway_normalized" {
+		t.Fatalf("Anthropic capabilities = %#v", anthropic)
+	}
+
+	openAIInput := modelInput{SupportsChat: true, SupportsResponses: false, SupportsMessages: false}
+	openAI := modelCapabilityProfile(Provider{APIFormat: "openai"}, &openAIInput, "catalog")
+	if !openAIInput.SupportsMessages || openAI["chat"] != "native" || openAI["messages"] != "translated" || openAI["availability"] != "catalog_visible" {
+		t.Fatalf("OpenAI capabilities = %#v / %#v", openAI, openAIInput)
+	}
+}

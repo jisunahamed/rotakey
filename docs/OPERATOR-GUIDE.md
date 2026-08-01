@@ -137,11 +137,25 @@ Every public `model` field is a Rotakey alias, never an upstream model ID.
 
 Provider protocol is selected during onboarding. Anthropic-compatible providers default to `x-api-key` and version `2023-06-01`. Redirects and proxy instructions remain blocked. For a `305`, `404`, `405`, or non-standard model catalog: verify the base URL, keep redirects disabled, use **Manual model ID**, and save. Rotakey makes a minimal `/messages` probe with the chosen model. A failed probe leaves the route unsaved and shows the provider error.
 
+### Model capability verification
+
+Every new route receives a server-owned capability profile:
+
+- **Catalog verified** means the configured API key returned the model in its authenticated catalog. This avoids one paid inference probe for every model in a large bulk selection.
+- **Probe verified** means a manually entered or individually created model completed a bounded real core request before save. Invalid, inaccessible, retired, or malformed models are rejected.
+- The profile distinguishes `native`, `translated`, `gateway_normalized`, `off`, `unknown`, and `native_unverified`. Unknown is intentional: provider catalogs rarely publish reliable per-model tool, JSON, thinking, and streaming capabilities, and Rotakey does not claim support without evidence.
+- Anthropic-native routes expose Messages natively and Chat/Responses through translation. OpenAI Chat routes expose Chat natively and the supported Messages/Responses subsets through translation. Responses-only routes are not falsely exposed through Chat.
+- The Model route inspector shows verification state and the effective Chat, Responses, Messages, streaming, tools, and thinking path. Use **Recheck model** to run the bounded core probe again for an existing route; a failed probe is stored and shown without deleting the route.
+
+Model probing is deliberately small and bounded to 15 seconds or the provider timeout, whichever is lower. It uses the primary/first healthy credential and never stores or displays that secret.
+
 Files are pinned to the default Anthropic resource provider and the selected credential. A Message containing a File reference is forced onto that same provider/key; conflicting references return `400 resource_affinity_conflict`. Message Batches must resolve every model alias to one native Anthropic provider and are pinned to one eligible credential. Mixed-provider Batches return `400`. A credential with live Files or Batches cannot be deleted (`409`) until those resources are removed.
 
 Batch reservations count every item against shared request/token buckets and against each item's model-specific buckets in one atomic reservation. Anthropic usage reconciliation includes input, output, cache-create, and cache-read tokens. Streaming without final usage remains conservatively reserved. Upload/download content is streamed, and captured-body logging never stores File binary content. Default request ceilings are 32 MB for Messages/token count, 256 MB for Batches, and 500 MB for Files.
 
 Providers do not all accept the same optional fields. A model route can strip known unsupported parameters and Rotakey records removed or replaced fields in the request attempt log. For example, one upstream may reject `thinking`, while another requires `max_completion_tokens` instead of `max_tokens`. Configure adaptation narrowly for the affected route. Responses or cross-protocol features that cannot be translated faithfully return `400 unsupported_feature` instead of being silently discarded.
+
+For streaming cross-protocol calls, Rotakey also handles providers that ignore `stream:true` and return a regular Anthropic JSON Message: it synthesizes named Anthropic SSE events and then emits the requested public protocol. Empty, malformed, or non-Message HTTP `200` responses return/log `502 upstream_stream_invalid`; they are no longer recorded as successful blank responses.
 
 ## 8. Reading statuses and logs
 
@@ -169,6 +183,7 @@ Reset labels count down once per second in the inspector. Capacity values use co
 - `404 DeploymentNotFound`: the upstream model/deployment ID does not exist at that provider or region. Correct the upstream ID; the public alias may stay unchanged.
 - `429 rate_limit_exceeded`: all eligible keys are full or upstream reported a limit that is stricter than configured. Inspect the limiting bucket and `Retry-After`.
 - `503`: Redis/database/readiness dependency is unavailable, or no safe routing decision can be made.
+- `502 upstream_stream_invalid`: the provider returned HTTP `200` for a streaming request but supplied neither valid Anthropic SSE nor a valid JSON Message. Test the provider/model and inspect the upstream request ID.
 - High latency: compare P50/P95, inspect attempts for waits/retries, and test the provider directly from the console.
 
 Always include the request/trace ID when investigating an error. Do not paste upstream secrets into issues or logs.

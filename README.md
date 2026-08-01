@@ -192,6 +192,8 @@ message = client.messages.create(
 
 Public Anthropic endpoints include Messages, token counting, models, Message Batches, and Files. Native Anthropic routes preserve thinking, prompt caching, citations, client/server tools, beta headers, and unknown future SSE events. Cross-protocol routes translate the lossless text, image, and client-function-tool subset; unsupported features return `400 unsupported_feature` instead of being dropped.
 
+Model onboarding creates a capability profile. Catalog-selected models are marked `catalog verified`; manually entered/single routes must pass a real bounded core inference probe before they are saved. The profile records native versus translated Chat, Responses, Messages, streaming normalization, tools, thinking, and unknown/unverified optional features. Rotakey uses that profile to expose both public protocols without pretending an untested feature is supported.
+
 Files use the **Default Anthropic resource provider** selected in System settings. Rotakey exposes opaque file/batch IDs pinned to their original provider and API key, so later retrieve, content, cancel, results, and delete calls remain consistent. A pinned credential cannot be deleted until its resources are removed.
 
 ## Routing and limits
@@ -205,6 +207,7 @@ Files use the **Default Anthropic resource provider** selected in System setting
 - Non-streaming usage is reconciled to actual upstream usage. Streaming without final usage retains the conservative reservation.
 - When every key is full and the earliest reset is within the configured wait ceiling, the request waits with cancellation support. Otherwise it returns OpenAI-style `429` and `Retry-After`.
 - Before response bytes begin, credential-specific failures can fail over across every other eligible key for up to 60 seconds: connection/pre-response timeout, `401/403`, `429`, `529`, and selected `5xx`. Deterministic payload `400` errors are not replayed across keys. Streaming is never retried after response bytes begin.
+- If an Anthropic-compatible upstream accepts `stream:true` but returns a normal JSON Message, Rotakey converts it into protocol-correct SSE before translating it to the OpenAI client. An empty or malformed HTTP `200` is reported as `502 upstream_stream_invalid` instead of a false success.
 - Upstream `401/403` quarantines a credential, `429` starts its `Retry-After` cooldown, and repeated transport/`5xx` failures open a short circuit.
 - Redis failure returns `503`; limits are never bypassed.
 

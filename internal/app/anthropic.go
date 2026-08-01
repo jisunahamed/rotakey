@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"strconv"
@@ -219,8 +220,53 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 			}
 			break
 		}
-		s.markCredentialSuccess(r.Context(), selected.ID)
 		if stream {
+			streamSource := io.Reader(response.Body)
+			if !strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
+				body, wasTruncated, readErr := boundedBody(response.Body, s.cfg.MaxResponseBytes)
+				_ = response.Body.Close()
+				if readErr != nil || wasTruncated {
+					finalStatus, finalCode, finalMessage, truncated = http.StatusBadGateway, "upstream_stream_invalid", "The upstream returned an unreadable non-SSE response for a streaming request.", wasTruncated
+					s.markCredentialFailure(r.Context(), selected.ID, http.StatusBadGateway, 0)
+					attempts[len(attempts)-1].Error, attempts[len(attempts)-1].ErrorMessage = finalCode, finalMessage
+					if retryContext.Err() == nil && attempt+1 < maxAttempts {
+						attempts[len(attempts)-1].Retryable = true
+						continue
+					}
+					s.writeMessageProxyError(w, r, publicMode, finalStatus, "api_error", finalMessage)
+					break
+				}
+				synthetic, syntheticErr := anthropicJSONToSSE(body)
+				if syntheticErr != nil {
+					finalStatus, finalCode, finalMessage = http.StatusBadGateway, "upstream_stream_invalid", "The upstream returned HTTP 200 without a valid Anthropic stream or Message response."
+					finalResponse = body
+					s.markCredentialFailure(r.Context(), selected.ID, http.StatusBadGateway, 0)
+					attempts[len(attempts)-1].Error, attempts[len(attempts)-1].ErrorMessage = finalCode, finalMessage
+					if retryContext.Err() == nil && attempt+1 < maxAttempts {
+						attempts[len(attempts)-1].Retryable = true
+						continue
+					}
+					s.writeMessageProxyError(w, r, publicMode, finalStatus, "api_error", finalMessage)
+					break
+				}
+				streamSource = bytes.NewReader(synthetic)
+			} else {
+				prepared, prepareErr := prepareAnthropicSSE(streamSource)
+				if prepareErr != nil {
+					_ = response.Body.Close()
+					finalStatus, finalCode, finalMessage = http.StatusBadGateway, "upstream_stream_invalid", "The upstream returned HTTP 200 without a valid Anthropic SSE event."
+					s.markCredentialFailure(r.Context(), selected.ID, http.StatusBadGateway, 0)
+					attempts[len(attempts)-1].Error, attempts[len(attempts)-1].ErrorMessage = finalCode, finalMessage
+					if retryContext.Err() == nil && attempt+1 < maxAttempts {
+						attempts[len(attempts)-1].Retryable = true
+						continue
+					}
+					s.writeMessageProxyError(w, r, publicMode, finalStatus, "api_error", finalMessage)
+					break
+				}
+				streamSource = prepared
+			}
+			s.markCredentialSuccess(r.Context(), selected.ID)
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Cache-Control", "no-cache")
 			w.Header().Set("X-Accel-Buffering", "no")
@@ -233,11 +279,11 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 			var streamErr error
 			switch publicMode {
 			case messageModeAnthropic:
-				streamCode, streamErr = rewriteAnthropicStream(response.Body, w, route.Model.PublicAlias, capture)
+				streamCode, streamErr = rewriteAnthropicStream(streamSource, w, route.Model.PublicAlias, capture)
 			case messageModeResponses:
-				streamCode, streamErr = translateAnthropicStreamToResponses(response.Body, w, route.Model.PublicAlias, capture)
+				streamCode, streamErr = translateAnthropicStreamToResponses(streamSource, w, route.Model.PublicAlias, capture)
 			default:
-				streamCode, streamErr = translateAnthropicStreamToOpenAI(response.Body, w, route.Model.PublicAlias, capture, includeOpenAIUsage)
+				streamCode, streamErr = translateAnthropicStreamToOpenAI(streamSource, w, route.Model.PublicAlias, capture, includeOpenAIUsage)
 			}
 			_ = response.Body.Close()
 			if streamCode != "" {
@@ -253,6 +299,7 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 			s.storeRequestLog(r.Context(), logInput{RequestID: requestID, Route: route, Credential: finalCredential, Endpoint: protocolEndpoint(publicMode), Attempts: attempts, RoutingDecisions: decisions, Started: started, StatusCode: finalStatus, InputTokens: inputEstimate, ErrorCode: finalCode, ErrorMessage: finalMessage, RequestBody: raw, ResponseBody: finalResponse, Capture: route.Model.CaptureBodies, Truncated: truncated, PublicProtocol: protocolName(publicMode), UpstreamProtocol: "anthropic", UpstreamRequestID: upstreamRequestID})
 			return
 		}
+		s.markCredentialSuccess(r.Context(), selected.ID)
 		body, wasTruncated, readErr := boundedBody(response.Body, s.cfg.MaxResponseBytes)
 		_ = response.Body.Close()
 		if readErr != nil || wasTruncated {

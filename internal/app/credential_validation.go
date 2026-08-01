@@ -250,16 +250,36 @@ func (s *Server) handleCreateModelsBulk(w http.ResponseWriter, r *http.Request) 
 		}
 		aliases[input.Models[index].PublicAlias] = true
 	}
-	validatedManualModels := map[string]bool{}
-	for _, model := range input.Models {
-		if !model.Manual || validatedManualModels[model.UpstreamModel] {
+	provider, err := scanProvider(s.db.QueryRow(r.Context(), `SELECT `+providerColumns+` FROM providers WHERE id=$1`, r.PathValue("id")))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "provider_not_found", "Provider was not found.")
+		return
+	}
+	type capabilityResult struct {
+		Status    string
+		Profile   map[string]string
+		CheckedAt *time.Time
+	}
+	capabilities := map[string]capabilityResult{}
+	for index := range input.Models {
+		model := &input.Models[index]
+		if existing, ok := capabilities[model.UpstreamModel]; ok {
+			model.SupportsChat = existing.Profile["chat"] != "off"
+			model.SupportsMessages = existing.Profile["messages"] != "off"
 			continue
 		}
-		if err := s.validateAnthropicModel(r.Context(), r.PathValue("id"), model.UpstreamModel); err != nil {
-			writeError(w, http.StatusUnprocessableEntity, "model_validation_failed", err.Error())
-			return
+		if model.Manual {
+			status, profile, checkedAt, probeErr := s.probeProviderModel(r.Context(), provider.ID, model)
+			if probeErr != nil {
+				writeError(w, http.StatusUnprocessableEntity, "model_validation_failed", probeErr.Error())
+				return
+			}
+			capabilities[model.UpstreamModel] = capabilityResult{Status: status, Profile: profile, CheckedAt: checkedAt}
+			continue
 		}
-		validatedManualModels[model.UpstreamModel] = true
+		profile := modelCapabilityProfile(provider, model, "catalog")
+		now := time.Now().UTC()
+		capabilities[model.UpstreamModel] = capabilityResult{Status: "catalog_verified", Profile: profile, CheckedAt: &now}
 	}
 
 	tx, err := s.db.Begin(r.Context())
@@ -300,15 +320,18 @@ func (s *Server) handleCreateModelsBulk(w http.ResponseWriter, r *http.Request) 
 			continue
 		}
 		id, _ := newID("mdl")
+		capability := capabilities[model.UpstreamModel]
+		profileJSON, _ := json.Marshal(capability.Profile)
 		if _, err := tx.Exec(r.Context(), `
 			INSERT INTO model_routes
 			    (id, provider_id, public_alias, upstream_model, supports_chat,
 			     supports_responses, supports_messages, default_max_output_tokens, tokenizer,
-			     capture_bodies, strip_parameters, enabled)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+			     capture_bodies, strip_parameters, capability_status, capability_profile,
+			     capabilities_checked_at, capability_error, enabled)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'',$15)
 		`, id, r.PathValue("id"), model.PublicAlias, model.UpstreamModel,
 			model.SupportsChat, model.SupportsResponses, model.SupportsMessages, model.DefaultMaxOutputTokens,
-			model.Tokenizer, model.CaptureBodies, model.StripParameters, model.Enabled); err != nil {
+			model.Tokenizer, model.CaptureBodies, model.StripParameters, capability.Status, profileJSON, capability.CheckedAt, model.Enabled); err != nil {
 			writeError(w, http.StatusConflict, "model_conflict", "A public model alias is already in use.")
 			return
 		}
@@ -370,41 +393,120 @@ func mergeDiscoveredModels(results []credentialInspection) []DiscoveredModel {
 	return models
 }
 
-func (s *Server) validateAnthropicModel(ctx context.Context, providerID, modelID string) error {
+func modelCapabilityProfile(provider Provider, input *modelInput, source string) map[string]string {
+	profile := map[string]string{
+		"availability":      map[bool]string{true: "verified", false: "unknown"}[source == "probe"],
+		"verification":      source,
+		"upstream_protocol": provider.APIFormat,
+		"streaming":         "gateway_normalized",
+		"json_output":       "unknown",
+	}
+	if provider.APIFormat == "anthropic" {
+		input.SupportsChat = true
+		input.SupportsMessages = true
+		input.SupportsResponses = false
+		profile["chat"] = "translated"
+		profile["responses"] = "translated"
+		profile["messages"] = "native"
+		profile["tools"] = "native"
+		profile["thinking"] = "native_unverified"
+	} else {
+		if input.SupportsChat {
+			input.SupportsMessages = true
+			profile["chat"] = "native"
+			profile["messages"] = "translated"
+			profile["tools"] = "native_unverified"
+		} else {
+			input.SupportsMessages = false
+			profile["chat"] = "off"
+			profile["messages"] = "off"
+			profile["tools"] = "unknown"
+		}
+		if input.SupportsResponses {
+			profile["responses"] = "native"
+		} else if input.SupportsChat {
+			profile["responses"] = "translated"
+		} else {
+			profile["responses"] = "off"
+		}
+		profile["thinking"] = "unsupported_cross_protocol"
+	}
+	if source == "catalog" {
+		profile["availability"] = "catalog_visible"
+	}
+	return profile
+}
+
+func (s *Server) probeProviderModel(ctx context.Context, providerID string, input *modelInput) (string, map[string]string, *time.Time, error) {
 	provider, err := scanProvider(s.db.QueryRow(ctx, `SELECT `+providerColumns+` FROM providers WHERE id=$1`, providerID))
-	if err != nil || provider.APIFormat != "anthropic" {
-		return nil
+	if err != nil {
+		return "failed", nil, nil, fmt.Errorf("provider was not found")
 	}
 	var ciphertext []byte
 	if err := s.db.QueryRow(ctx, `SELECT secret_cipher FROM credentials WHERE provider_id=$1 AND enabled=TRUE AND status<>'quarantined' ORDER BY is_primary DESC, created_at, id LIMIT 1`, providerID).Scan(&ciphertext); err != nil {
-		return fmt.Errorf("add a healthy API key before validating an Anthropic model")
+		return "failed", nil, nil, fmt.Errorf("add a healthy API key before validating this model")
 	}
 	secret, err := s.vault.Decrypt(ciphertext)
 	if err != nil {
-		return fmt.Errorf("API key could not be decrypted")
+		return "failed", nil, nil, fmt.Errorf("API key could not be decrypted")
 	}
-	body, _ := json.Marshal(map[string]any{
-		"model": modelID, "max_tokens": 1,
+	probeContext, cancel := context.WithTimeout(ctx, minDuration(time.Duration(provider.TimeoutSeconds)*time.Second, 15*time.Second))
+	defer cancel()
+	path := "/chat/completions"
+	payload := map[string]any{
+		"model":    input.UpstreamModel,
 		"messages": []any{map[string]any{"role": "user", "content": "Reply with one character."}},
-	})
-	request, _ := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(provider.BaseURL, "/")+"/messages", strings.NewReader(string(body)))
+	}
+	if provider.APIFormat == "anthropic" {
+		path = "/messages"
+		payload["max_tokens"] = 1
+	} else if !input.SupportsChat && input.SupportsResponses {
+		path = "/responses"
+		payload = map[string]any{"model": input.UpstreamModel, "input": "Reply with one character."}
+	}
+	body, _ := json.Marshal(payload)
+	request, _ := http.NewRequestWithContext(probeContext, http.MethodPost, strings.TrimRight(provider.BaseURL, "/")+path, strings.NewReader(string(body)))
 	applyProviderHeaders(request, provider, secret)
 	client, err := upstreamClient(provider)
 	if err != nil {
-		return err
+		return "failed", nil, nil, err
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return fmt.Errorf("provider could not be reached for the Messages probe")
+		return "failed", nil, nil, fmt.Errorf("provider could not be reached for the model capability probe")
 	}
 	defer response.Body.Close()
-	if response.StatusCode >= 200 && response.StatusCode < 300 {
-		return nil
+	raw, _, readErr := boundedBody(response.Body, 1<<20)
+	if readErr != nil {
+		return "failed", nil, nil, fmt.Errorf("model probe response could not be read")
 	}
-	raw, _, _ := boundedBody(response.Body, 1<<20)
+	if response.StatusCode >= 200 && response.StatusCode < 300 {
+		var decoded map[string]any
+		if json.Unmarshal(raw, &decoded) != nil {
+			return "failed", nil, nil, fmt.Errorf("model probe returned an invalid response")
+		}
+		if provider.APIFormat == "anthropic" && decoded["type"] != "message" {
+			return "failed", nil, nil, fmt.Errorf("Messages probe did not return an Anthropic Message")
+		}
+		if provider.APIFormat == "openai" && path == "/chat/completions" {
+			if choices, ok := decoded["choices"].([]any); !ok || len(choices) == 0 {
+				return "failed", nil, nil, fmt.Errorf("Chat probe did not return a completion choice")
+			}
+		}
+		now := time.Now().UTC()
+		profile := modelCapabilityProfile(provider, input, "probe")
+		return "probe_verified", profile, &now, nil
+	}
 	message := upstreamErrorMessage(raw, secret)
 	if message == "" {
 		message = fmt.Sprintf("provider returned HTTP %d", response.StatusCode)
 	}
-	return fmt.Errorf("Messages probe failed: %s", message)
+	return "failed", nil, nil, fmt.Errorf("model capability probe failed: %s", message)
+}
+
+func minDuration(left, right time.Duration) time.Duration {
+	if left <= 0 || left > right {
+		return right
+	}
+	return left
 }
