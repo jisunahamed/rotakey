@@ -22,7 +22,7 @@ The gateway serves:
 
 The admin console is served at `/admin/`.
 
-New to gateway operations? Read the [Rotakey Operator Guide](docs/OPERATOR-GUIDE.md) for setup, dashboard metrics, every rate-limit dimension, routing behavior, errors, security, backup, and troubleshooting.
+New to gateway operations? Read the [Rotakey Operator Guide](docs/OPERATOR-GUIDE.md) for setup, dashboard metrics, every rate-limit dimension, routing behavior, errors, security, backup, and troubleshooting. For model discovery, role mapping, native/translated routes, Windows setup, and troubleshooting, see [Connect Claude Code to Rotakey](docs/CLAUDE-CODE.md).
 
 ## Run locally with any coding agent
 
@@ -170,6 +170,8 @@ result = client.chat.completions.create(
 
 ### Anthropic SDK and Claude Code
 
+For the complete Claude Code guide—including how to list and select every enabled Rotakey model—see [Connect Claude Code to Rotakey](docs/CLAUDE-CODE.md).
+
 Anthropic clients use the Rotakey host root; the SDK appends `/v1/messages`. The same Rotakey gateway key works as `x-api-key`:
 
 ```bash
@@ -202,7 +204,7 @@ Files use the **Default Anthropic resource provider** selected in System setting
 - Input estimate plus the requested output ceiling is reserved before the upstream call. Missing output ceilings use the model default.
 - Non-streaming usage is reconciled to actual upstream usage. Streaming without final usage retains the conservative reservation.
 - When every key is full and the earliest reset is within the configured wait ceiling, the request waits with cancellation support. Otherwise it returns OpenAI-style `429` and `Retry-After`.
-- One safe retry may use a different credential for connection failures, pre-response timeouts, `429`, and selected `5xx` responses. Streaming is never retried after response bytes begin.
+- Before response bytes begin, credential-specific failures can fail over across every other eligible key for up to 60 seconds: connection/pre-response timeout, `401/403`, `429`, `529`, and selected `5xx`. Deterministic payload `400` errors are not replayed across keys. Streaming is never retried after response bytes begin.
 - Upstream `401/403` quarantines a credential, `429` starts its `Retry-After` cooldown, and repeated transport/`5xx` failures open a short circuit.
 - Redis failure returns `503`; limits are never bypassed.
 

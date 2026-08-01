@@ -62,7 +62,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 	if route.Provider.APIFormat == "anthropic" {
 		upstream := cloneMap(payload)
 		upstream["model"] = route.Model.UpstreamModel
-		s.proxyAnthropicUpstream(w, r, raw, upstream, route, started, requestID, messageModeAnthropic, forcedCredential)
+		s.proxyAnthropicUpstream(w, r, raw, upstream, route, started, requestID, messageModeAnthropic, forcedCredential, false)
 		return
 	}
 	if forcedCredential != "" {
@@ -94,14 +94,18 @@ func (s *Server) handleOpenAIThroughAnthropic(w http.ResponseWriter, r *http.Req
 		return
 	}
 	upstream["model"] = route.Model.UpstreamModel
+	includeUsage := false
+	if options, ok := chat["stream_options"].(map[string]any); ok {
+		includeUsage, _ = options["include_usage"].(bool)
+	}
 	mode := messageModeChat
 	if endpoint == "responses" {
 		mode = messageModeResponses
 	}
-	s.proxyAnthropicUpstream(w, r, raw, upstream, route, started, requestID, mode, "")
+	s.proxyAnthropicUpstream(w, r, raw, upstream, route, started, requestID, mode, "", includeUsage)
 }
 
-func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, raw []byte, payload map[string]any, route routeRuntime, started time.Time, requestID, publicMode, forcedCredential string) {
+func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, raw []byte, payload map[string]any, route routeRuntime, started time.Time, requestID, publicMode, forcedCredential string, includeOpenAIUsage bool) {
 	if numberAsInt64(payload["max_tokens"]) <= 0 {
 		payload["max_tokens"] = route.Model.DefaultMaxOutputTokens
 	}
@@ -148,8 +152,11 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 	var finalCode, finalMessage, upstreamRequestID string
 	var inputTokens, outputTokens int64
 	var truncated bool
-	for attempt := 0; attempt < 2; attempt++ {
-		selected, reservation, retryAfter, routing, selectErr := s.selectCredentialWithDiagnostics(r.Context(), route.Model.ID, credentials, tokenCost, skipped, time.Duration(settings.MaxWaitMS)*time.Millisecond)
+	retryContext, cancelRetries := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancelRetries()
+	maxAttempts := len(credentials)
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		selected, reservation, retryAfter, routing, selectErr := s.selectCredentialWithDiagnostics(retryContext, route.Model.ID, credentials, tokenCost, skipped, time.Duration(settings.MaxWaitMS)*time.Millisecond)
 		decisions = append(decisions, routing...)
 		if selectErr != nil {
 			finalStatus, finalCode, finalMessage = http.StatusServiceUnavailable, "limiter_unavailable", "Rate limiter is unavailable."
@@ -167,7 +174,7 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 		skipped[selected.ID] = true
 		s.updateActiveRequest(requestID, func(log *RequestLog) { log.CredentialLabel = selected.Label })
 		target := strings.TrimRight(route.Provider.BaseURL, "/") + "/messages"
-		upstreamRequest, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, target, bytes.NewReader(encoded))
+		upstreamRequest, _ := http.NewRequestWithContext(retryContext, http.MethodPost, target, bytes.NewReader(encoded))
 		applyProviderHeaders(upstreamRequest, route.Provider, selected.Secret)
 		forwardAnthropicHeaders(upstreamRequest.Header, r.Header)
 		attemptStarted := time.Now()
@@ -175,7 +182,7 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 		if requestErr != nil {
 			attempts = append(attempts, AttemptRecord{CredentialID: selected.ID, CredentialLabel: selected.Label, Error: "connection_error", ErrorMessage: "The upstream connection failed before a response started.", Retryable: true, DurationMS: time.Since(attemptStarted).Milliseconds()})
 			s.markCredentialFailure(r.Context(), selected.ID, 0, 0)
-			if attempt == 0 {
+			if retryContext.Err() == nil && attempt+1 < maxAttempts {
 				continue
 			}
 			finalStatus, finalCode, finalMessage = http.StatusBadGateway, "upstream_unavailable", "The upstream provider could not be reached."
@@ -184,7 +191,7 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 		}
 		upstreamRequestID = response.Header.Get("Request-Id")
 		retryable := anthropicRetryableStatus(response.StatusCode)
-		if retryable && attempt == 0 {
+		if retryable && retryContext.Err() == nil && attempt+1 < maxAttempts {
 			body, _, _ := boundedBody(response.Body, 1<<20)
 			_ = response.Body.Close()
 			attempts = append(attempts, AttemptRecord{CredentialID: selected.ID, CredentialLabel: selected.Label, StatusCode: response.StatusCode, Error: upstreamErrorCode(body), ErrorMessage: upstreamErrorMessage(body, selected.Secret), Retryable: true, DurationMS: time.Since(attemptStarted).Milliseconds()})
@@ -230,7 +237,7 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 			case messageModeResponses:
 				streamCode, streamErr = translateAnthropicStreamToResponses(response.Body, w, route.Model.PublicAlias, capture)
 			default:
-				streamCode, streamErr = translateAnthropicStreamToOpenAI(response.Body, w, route.Model.PublicAlias, capture)
+				streamCode, streamErr = translateAnthropicStreamToOpenAI(response.Body, w, route.Model.PublicAlias, capture, includeOpenAIUsage)
 			}
 			_ = response.Body.Close()
 			if streamCode != "" {
@@ -304,8 +311,11 @@ func (s *Server) proxyOpenAIUpstreamForAnthropic(w http.ResponseWriter, r *http.
 	var finalCode, finalMessage, upstreamRequestID string
 	var inputTokens, outputTokens int64
 	stream, _ := payload["stream"].(bool)
-	for attempt := 0; attempt < 2; attempt++ {
-		selected, reservation, retryAfter, routing, selectErr := s.selectCredentialWithDiagnostics(r.Context(), route.Model.ID, credentials, tokenCost, skipped, time.Duration(settings.MaxWaitMS)*time.Millisecond)
+	retryContext, cancelRetries := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancelRetries()
+	maxAttempts := len(credentials)
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		selected, reservation, retryAfter, routing, selectErr := s.selectCredentialWithDiagnostics(retryContext, route.Model.ID, credentials, tokenCost, skipped, time.Duration(settings.MaxWaitMS)*time.Millisecond)
 		decisions = append(decisions, routing...)
 		if selectErr != nil {
 			finalStatus, finalCode, finalMessage = http.StatusServiceUnavailable, "limiter_unavailable", "Rate limiter is unavailable."
@@ -322,13 +332,13 @@ func (s *Server) proxyOpenAIUpstreamForAnthropic(w http.ResponseWriter, r *http.
 		finalCredential = *selected
 		skipped[selected.ID] = true
 		target := strings.TrimRight(route.Provider.BaseURL, "/") + "/chat/completions"
-		upstreamRequest, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, target, bytes.NewReader(encoded))
+		upstreamRequest, _ := http.NewRequestWithContext(retryContext, http.MethodPost, target, bytes.NewReader(encoded))
 		applyProviderHeaders(upstreamRequest, route.Provider, selected.Secret)
 		response, requestErr := client.Do(upstreamRequest)
 		if requestErr != nil {
 			attempts = append(attempts, AttemptRecord{CredentialID: selected.ID, CredentialLabel: selected.Label, Error: "connection_error", Retryable: true})
 			s.markCredentialFailure(r.Context(), selected.ID, 0, 0)
-			if attempt == 0 {
+			if retryContext.Err() == nil && attempt+1 < maxAttempts {
 				continue
 			}
 			finalStatus, finalCode, finalMessage = http.StatusBadGateway, "upstream_unavailable", "The upstream provider could not be reached."
@@ -337,7 +347,7 @@ func (s *Server) proxyOpenAIUpstreamForAnthropic(w http.ResponseWriter, r *http.
 		}
 		upstreamRequestID = valueOr(response.Header.Get("Request-Id"), response.Header.Get("X-Request-Id"))
 		retryable := anthropicRetryableStatus(response.StatusCode)
-		if retryable && attempt == 0 {
+		if retryable && retryContext.Err() == nil && attempt+1 < maxAttempts {
 			body, _, _ := boundedBody(response.Body, 1<<20)
 			_ = response.Body.Close()
 			attempts = append(attempts, AttemptRecord{CredentialID: selected.ID, CredentialLabel: selected.Label, StatusCode: response.StatusCode, Error: upstreamErrorCode(body), Retryable: true})

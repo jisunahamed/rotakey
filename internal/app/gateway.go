@@ -278,9 +278,11 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 		})
 		return
 	}
-	maxAttempts := 4
-	transientRetriesRemaining := 1
 	compatibilityRetriesRemaining := 2
+	maxAttempts := len(credentials) + compatibilityRetriesRemaining
+	transientRetriesRemaining := max(0, len(credentials)-1)
+	retryContext, cancelRetries := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancelRetries()
 	compatibilityRemoved := append([]string(nil), strippedParameters...)
 	compatibilityReplaced := cloneStringMap(replacedParameters)
 	skipped := map[string]bool{}
@@ -299,7 +301,7 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 
 	for attemptNumber := 0; attemptNumber < maxAttempts; attemptNumber++ {
 		selected, reservation, retryAfter, decisions, selectErr := s.selectCredentialWithDiagnostics(
-			r.Context(), route.Model.ID, credentials, totalReservation, skipped, time.Duration(settings.MaxWaitMS)*time.Millisecond,
+			retryContext, route.Model.ID, credentials, totalReservation, skipped, time.Duration(settings.MaxWaitMS)*time.Millisecond,
 		)
 		routingDecisions = append(routingDecisions, decisions...)
 		if selectErr != nil {
@@ -332,7 +334,7 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 			path = "/responses"
 		}
 		target := strings.TrimRight(route.Provider.BaseURL, "/") + path
-		upstreamRequest, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, target, bytes.NewReader(encodedUpstream))
+		upstreamRequest, _ := http.NewRequestWithContext(retryContext, http.MethodPost, target, bytes.NewReader(encodedUpstream))
 		applyProviderHeaders(upstreamRequest, route.Provider, selected.Secret)
 		attemptStarted := time.Now()
 		response, requestErr := client.Do(upstreamRequest)
@@ -343,7 +345,7 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 				Retryable: true, DurationMS: time.Since(attemptStarted).Milliseconds(),
 			})
 			s.markCredentialFailure(r.Context(), selected.ID, 0, 0)
-			if transientRetriesRemaining > 0 && attemptNumber+1 < maxAttempts {
+			if retryContext.Err() == nil && transientRetriesRemaining > 0 && attemptNumber+1 < maxAttempts {
 				transientRetriesRemaining--
 				continue
 			}

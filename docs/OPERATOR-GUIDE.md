@@ -88,7 +88,7 @@ Healthy keys are balanced with an ordered round-robin cursor. A primary key, whe
 
 If all keys are full and the earliest reset is within five seconds, Rotakey waits while respecting client cancellation. Otherwise it returns OpenAI-style `429` with `Retry-After`.
 
-Rotakey can retry once on another key for a connection failure, timeout before response headers, upstream `429`, and selected `5xx` errors. It never retries after response bytes or SSE events have started.
+Before response headers/body begin, Rotakey can try every other eligible key for up to 60 seconds after a connection failure, timeout, `401/403`, upstream `429`/`529`, or selected `5xx`. It stops when one key succeeds, every eligible key has failed, the client cancels, or the 60-second failover window closes. Deterministic request-shape `400` errors are not replayed across keys. Rotakey never retries after response bytes or SSE events have started.
 
 - Upstream `429`: key enters cooldown until `Retry-After`.
 - Upstream `401/403`: key is quarantined and shown as invalid.
@@ -183,7 +183,7 @@ Always include the request/trace ID when investigating an error. Do not paste up
 - Review captured-body settings before sending personal or confidential data.
 - Keep the VPS, Docker images, and Rotakey release current after testing backups.
 
-See [Deployment](DEPLOYMENT.md) for Compose, domain, backup/restore, and GitHub CI/CD instructions. See [API examples](../README.md#call-any-configured-model) for client calls.
+See [Deployment](DEPLOYMENT.md) for Compose, domain, backup/restore, and GitHub CI/CD instructions. See [API examples](../README.md#call-any-configured-model) for client calls and [Claude Code](CLAUDE-CODE.md) for gateway authentication, every-model selection, role mapping, and troubleshooting.
 
 ## 11. Fast troubleshooting checklist
 

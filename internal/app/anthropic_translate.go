@@ -172,8 +172,22 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, err
 }
 
 func translateChatRequestToAnthropic(source map[string]any) (map[string]any, error) {
-	if feature := unsupportedTopLevelField(source, "model", "messages", "max_tokens", "max_completion_tokens", "max_output_tokens", "temperature", "top_p", "stop", "stream", "tools", "tool_choice", "parallel_tool_calls"); feature != "" {
+	if feature := unsupportedTopLevelField(source, "model", "messages", "max_tokens", "max_completion_tokens", "max_output_tokens", "temperature", "top_p", "stop", "stream", "stream_options", "tools", "tool_choice", "parallel_tool_calls"); feature != "" {
 		return nil, anthropicUnsupportedError{Feature: feature}
+	}
+	if options, ok := source["stream_options"]; ok && options != nil {
+		streamOptions, ok := options.(map[string]any)
+		if !ok {
+			return nil, anthropicUnsupportedError{Feature: "stream_options"}
+		}
+		if feature := unsupportedTopLevelField(streamOptions, "include_usage"); feature != "" {
+			return nil, anthropicUnsupportedError{Feature: "stream_options." + feature}
+		}
+		if include, exists := streamOptions["include_usage"]; exists {
+			if _, ok := include.(bool); !ok {
+				return nil, anthropicUnsupportedError{Feature: "stream_options.include_usage"}
+			}
+		}
 	}
 	for _, field := range []string{"response_format", "audio", "modalities", "prediction", "logprobs", "top_logprobs"} {
 		if value, ok := source[field]; ok && value != nil {
@@ -608,11 +622,12 @@ func rewriteAnthropicStream(source io.Reader, destination io.Writer, alias strin
 	}
 }
 
-func translateAnthropicStreamToOpenAI(source io.Reader, destination io.Writer, alias string, capture *limitedCapture) (string, error) {
+func translateAnthropicStreamToOpenAI(source io.Reader, destination io.Writer, alias string, capture *limitedCapture, includeUsage bool) (string, error) {
 	reader := bufio.NewReaderSize(source, 128<<10)
 	id := "chatcmpl_" + strings.TrimPrefix(requestLikeID(), "req_")
 	created := time.Now().Unix()
 	errorCode := ""
+	var inputTokens, outputTokens int64
 	for {
 		line, err := reader.ReadString('\n')
 		if strings.HasPrefix(line, "data:") {
@@ -626,6 +641,10 @@ func translateAnthropicStreamToOpenAI(source io.Reader, destination io.Writer, a
 					if message, ok := event["message"].(map[string]any); ok {
 						if value := fmt.Sprint(message["id"]); value != "" && value != "<nil>" {
 							id = value
+						}
+						if usage, ok := message["usage"].(map[string]any); ok {
+							inputTokens = numberAsInt64(usage["input_tokens"]) + numberAsInt64(usage["cache_creation_input_tokens"]) + numberAsInt64(usage["cache_read_input_tokens"])
+							outputTokens = numberAsInt64(usage["output_tokens"])
 						}
 					}
 					delta["role"] = "assistant"
@@ -650,6 +669,14 @@ func translateAnthropicStreamToOpenAI(source io.Reader, destination io.Writer, a
 				case "message_delta":
 					top, _ := event["delta"].(map[string]any)
 					finish = anthropicStopToOpenAI(fmt.Sprint(top["stop_reason"]))
+					if usage, ok := event["usage"].(map[string]any); ok {
+						if value := numberAsInt64(usage["input_tokens"]); value > 0 {
+							inputTokens = value + numberAsInt64(usage["cache_creation_input_tokens"]) + numberAsInt64(usage["cache_read_input_tokens"])
+						}
+						if value := numberAsInt64(usage["output_tokens"]); value >= 0 {
+							outputTokens = value
+						}
+					}
 				case "error":
 					envelope, _ := event["error"].(map[string]any)
 					errorCode = fmt.Sprint(envelope["type"])
@@ -658,6 +685,15 @@ func translateAnthropicStreamToOpenAI(source io.Reader, destination io.Writer, a
 					writeRaw(destination, capture, append(append([]byte("data: "), encoded...), []byte("\n\n")...))
 					continue
 				case "message_stop":
+					if includeUsage {
+						usageChunk := map[string]any{
+							"id": id, "object": "chat.completion.chunk", "created": created, "model": alias,
+							"choices": []any{},
+							"usage":   map[string]any{"prompt_tokens": inputTokens, "completion_tokens": outputTokens, "total_tokens": inputTokens + outputTokens},
+						}
+						encoded, _ := json.Marshal(usageChunk)
+						writeRaw(destination, capture, append(append([]byte("data: "), encoded...), []byte("\n\n")...))
+					}
 					writeRaw(destination, capture, []byte("data: [DONE]\n\n"))
 					continue
 				default:
@@ -688,7 +724,7 @@ func translateAnthropicStreamToResponses(source io.Reader, destination io.Writer
 	}
 	completed := make(chan result, 1)
 	go func() {
-		code, err := translateAnthropicStreamToOpenAI(source, writer, alias, nil)
+		code, err := translateAnthropicStreamToOpenAI(source, writer, alias, nil, false)
 		_ = writer.CloseWithError(err)
 		completed <- result{code: code, err: err}
 	}()

@@ -2331,7 +2331,7 @@ function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNe
   -d '{"model":"provider/model-alias","messages":[{"role":"user","content":"Hello"}]}'`}</pre>
       </section>
       <section className="section-block code-example">
-        <div className="section-heading"><div><p className="eyebrow">Anthropic lane</p><h2>Messages SDK and Claude Code</h2></div><Button variant="quiet" onClick={() => void copyText(rootURL).then(() => notify("Anthropic base URL copied."))}><Clipboard size={14} /> Copy base URL</Button></div>
+        <div className="section-heading"><div><p className="eyebrow">Anthropic lane</p><h2>Messages SDK and Claude Code</h2></div><div className="button-row"><a className="button button--quiet" href="https://github.com/jisunahamed/rotakey/blob/main/docs/CLAUDE-CODE.md" target="_blank" rel="noreferrer"><BookOpen size={14} /> Full guide</a><Button variant="quiet" onClick={() => void copyText(rootURL).then(() => notify("Anthropic base URL copied."))}><Clipboard size={14} /> Copy base URL</Button></div></div>
         <pre>{`export ANTHROPIC_BASE_URL="${rootURL}"
 export ANTHROPIC_API_KEY="$ROTAKEY_KEY"
 

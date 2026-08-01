@@ -102,6 +102,32 @@ func TestParallelToolSettingTranslatesToAnthropic(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamOptionsTranslateToAnthropic(t *testing.T) {
+	message, err := translateChatRequestToAnthropic(map[string]any{
+		"messages":       []any{map[string]any{"role": "user", "content": "Hi"}},
+		"stream":         true,
+		"stream_options": map[string]any{"include_usage": true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, leaked := message["stream_options"]; leaked {
+		t.Fatal("OpenAI stream_options leaked to Anthropic upstream")
+	}
+}
+
+func TestAnthropicStreamEmulatesOpenAIUsageChunk(t *testing.T) {
+	source := strings.NewReader("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":2,\"output_tokens\":1}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":4}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	destination := &bytes.Buffer{}
+	if _, err := translateAnthropicStreamToOpenAI(source, destination, "public/model", nil, true); err != nil {
+		t.Fatal(err)
+	}
+	output := destination.String()
+	if !strings.Contains(output, `"choices":[],"created"`) || !strings.Contains(output, `"completion_tokens":4`) || !strings.Contains(output, `"prompt_tokens":12`) || !strings.Contains(output, "data: [DONE]") {
+		t.Fatalf("translated stream = %s", output)
+	}
+}
+
 func TestAnthropicUsageIncludesCacheTokens(t *testing.T) {
 	input, output := extractAnthropicUsage(map[string]any{"usage": map[string]any{
 		"input_tokens": json.Number("10"), "cache_creation_input_tokens": json.Number("20"),
