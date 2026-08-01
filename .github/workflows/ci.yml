@@ -55,7 +55,7 @@ jobs:
           BOOTSTRAP_TOKEN: ci-bootstrap-token-at-least-24-characters
         run: docker compose config --quiet
       - name: Production image
-        run: docker build --tag rotakey:ci .
+        run: docker build --build-arg ROTAKEY_COMMIT="$GITHUB_SHA" --build-arg ROTAKEY_BUILD_TIME="$(date -u +%FT%TZ)" --tag rotakey:ci .
 
   deploy:
     name: Deploy production

@@ -368,15 +368,37 @@ func (s *Server) handleUpdateProvider(w http.ResponseWriter, r *http.Request) {
 	if decodeJSON(w, r, 128<<10, &input) != nil {
 		return
 	}
+	current, currentErr := scanProvider(s.db.QueryRow(r.Context(), `SELECT `+providerColumns+` FROM providers WHERE id=$1`, r.PathValue("id")))
+	if currentErr != nil {
+		writeError(w, http.StatusNotFound, "provider_not_found", "Provider was not found.")
+		return
+	}
 	if strings.TrimSpace(input.Slug) == "" {
-		if err := s.db.QueryRow(r.Context(), `SELECT slug FROM providers WHERE id=$1`, r.PathValue("id")).Scan(&input.Slug); err != nil {
-			writeError(w, http.StatusNotFound, "provider_not_found", "Provider was not found.")
-			return
-		}
+		input.Slug = current.Slug
 	}
 	if err := validateProviderInput(&input); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_provider", err.Error())
 		return
+	}
+	candidate := providerFromInput(input)
+	connectionChanged := candidate.BaseURL != current.BaseURL || candidate.APIFormat != current.APIFormat ||
+		candidate.AuthHeader != current.AuthHeader || candidate.AuthScheme != current.AuthScheme ||
+		candidate.AnthropicVersion != current.AnthropicVersion || candidate.AllowPrivateNetwork != current.AllowPrivateNetwork
+	if connectionChanged {
+		var ciphertext []byte
+		err := s.db.QueryRow(r.Context(), `SELECT secret_cipher FROM credentials WHERE provider_id=$1 AND enabled=TRUE ORDER BY is_primary DESC, created_at, id LIMIT 1`, current.ID).Scan(&ciphertext)
+		if err == nil {
+			secret, decryptErr := s.vault.Decrypt(ciphertext)
+			if decryptErr != nil {
+				writeError(w, http.StatusInternalServerError, "credential_unavailable", "API key could not be decrypted for the base URL check.")
+				return
+			}
+			inspection := inspectProviderSecret(r.Context(), candidate, secret)
+			if !inspection.Valid {
+				writeError(w, http.StatusUnprocessableEntity, "provider_contract_mismatch", inspection.Warning+" Provider settings were not changed.")
+				return
+			}
+		}
 	}
 	headers, _ := json.Marshal(input.ExtraHeaders)
 	tag, err := s.db.Exec(r.Context(), `

@@ -8,6 +8,9 @@ COPY web/ ./
 RUN npm run build
 
 FROM golang:1.25-alpine AS go-builder
+ARG ROTAKEY_VERSION=0.1.0
+ARG ROTAKEY_COMMIT=unknown
+ARG ROTAKEY_BUILD_TIME=unknown
 WORKDIR /src
 RUN apk add --no-cache ca-certificates git
 COPY go.mod go.sum ./
@@ -17,7 +20,7 @@ COPY --from=web-builder /src/web/dist /web-dist
 RUN rm -rf internal/app/webdist \
     && mkdir -p internal/app/webdist \
     && cp -R /web-dist/. internal/app/webdist/ \
-    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/rotakey ./cmd/gateway
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X github.com/jisunahamed/rotakey/internal/app.Version=${ROTAKEY_VERSION} -X github.com/jisunahamed/rotakey/internal/app.BuildCommit=${ROTAKEY_COMMIT} -X github.com/jisunahamed/rotakey/internal/app.BuildTime=${ROTAKEY_BUILD_TIME}" -o /out/rotakey ./cmd/gateway
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates tzdata \

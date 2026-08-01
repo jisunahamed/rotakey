@@ -137,6 +137,12 @@ Every public `model` field is a Rotakey alias, never an upstream model ID.
 
 Provider protocol is selected during onboarding. Anthropic-compatible providers default to `x-api-key` and version `2023-06-01`. Redirects and proxy instructions remain blocked. For a `305`, `404`, `405`, or non-standard model catalog: verify the base URL, keep redirects disabled, use **Manual model ID**, and save. Rotakey makes a minimal `/messages` probe with the chosen model. A failed probe leaves the route unsaved and shows the provider error.
 
+Rotakey verifies both parts of provider onboarding: `GET /models` must return a usable catalog and a one-token `POST /chat/completions` or `POST /messages` probe must return the selected protocol's response envelope. This catches a missing `/v1`, an extra path segment, and OpenAI/Anthropic protocol mismatches before the key or changed provider URL is saved. Editing connection settings repeats the same check with an existing enabled key.
+
+## Versions and updates
+
+The sidebar and `GET /api/version` show the installed Rotakey version and build commit. Rotakey checks the public [GitHub Releases page](https://github.com/jisunahamed/rotakey/releases) at most once per hour. When a newer semantic version is published, every running installation shows an **Update available** notice with a link to its release notes. A failed release check never affects gateway traffic. Operators should review the notes, back up Rotakey PostgreSQL, and then follow the deployment upgrade steps.
+
 ### Model capability verification
 
 Every new route receives a server-owned capability profile:

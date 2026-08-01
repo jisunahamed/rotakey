@@ -76,6 +76,7 @@ function App() {
     return stored === "light" || stored === "dark" ? stored : "system";
   });
   const [gatewayKey, setGatewayKey] = useState("");
+  const [version, setVersion] = useState<VersionInfo | null>(null);
   const [toast, setToast] = useState<{ tone: "success" | "danger"; message: string } | null>(null);
 
   const notify = useCallback((message: string, tone: "success" | "danger" = "success") => {
@@ -114,6 +115,13 @@ function App() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("relay-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    const loadVersion = () => void api<VersionInfo>("/api/version").then(setVersion).catch(() => undefined);
+    loadVersion();
+    const timer = window.setInterval(loadVersion, 60 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const onPopState = () => setPage(pageFromLocation());
@@ -195,6 +203,13 @@ function App() {
           ))}
         </nav>
         <div className="sidebar__bottom">
+          {version?.update_available && (
+            <a className="release-notice" href={version.release_url} target="_blank" rel="noreferrer">
+              <span>Update available</span>
+              <strong>Rotakey v{version.latest_version}</strong>
+              <small>View release notes →</small>
+            </a>
+          )}
           <a
             className="sidebar__github"
             href="https://github.com/jisunahamed/rotakey/blob/main/docs/OPERATOR-GUIDE.md"
@@ -224,6 +239,10 @@ function App() {
             <button className="icon-button" onClick={() => void logout()} aria-label="Sign out">
               <LogOut size={17} />
             </button>
+          </div>
+          <div className="sidebar__version" title={version?.commit ? `Commit ${version.commit}` : undefined}>
+            Rotakey v{version?.current_version ?? "0.1.0"}
+            {version?.update_available ? <span>new v{version.latest_version}</span> : <span>up to date</span>}
           </div>
         </div>
       </aside>
@@ -273,6 +292,16 @@ function App() {
     </div>
   );
 }
+
+type VersionInfo = {
+  current_version: string;
+  commit: string;
+  build_time: string;
+  latest_version?: string;
+  update_available: boolean;
+  release_url: string;
+  published_at?: string;
+};
 
 function LoadingScreen() {
   return (
@@ -1590,7 +1619,9 @@ function ModelForm({ provider, model, onClose, onComplete, notify }: { provider:
 type CredentialInspection = {
   valid: boolean;
   catalog_available: boolean;
+  protocol_verified: boolean;
   protocol: "openai" | "anthropic";
+  detected_protocol?: "openai" | "anthropic";
   status_code: number;
   latency_ms: number;
   models: DiscoveredModel[];
@@ -1712,7 +1743,7 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
       {inspection && (
         <InlineNotice tone={inspection.valid ? "success" : "danger"}>
           {inspection.valid
-            ? `API key valid · ${inspection.models.length} models loaded · ${inspection.latency_ms} ms`
+            ? `API key and ${inspection.protocol} base URL verified · ${inspection.models.length} models loaded · ${inspection.latency_ms} ms`
             : inspection.warning || "API key validation failed."}
         </InlineNotice>
       )}

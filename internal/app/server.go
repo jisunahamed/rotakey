@@ -31,6 +31,7 @@ type Server struct {
 	logger         *slog.Logger
 	handler        http.Handler
 	activeRequests sync.Map
+	release        releaseCache
 }
 
 func NewServer(ctx context.Context, cfg Config, logger *slog.Logger) (*Server, error) {
@@ -81,6 +82,7 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", s.handleLive)
 	mux.HandleFunc("GET /health/ready", s.handleReady)
+	mux.HandleFunc("GET /api/version", s.handleVersion)
 	mux.HandleFunc("GET /api/setup/status", s.handleSetupStatus)
 	mux.HandleFunc("POST /api/setup", s.handleSetup)
 	mux.HandleFunc("POST /api/auth/login", s.handleLogin)
@@ -111,7 +113,7 @@ func (s *Server) routes() http.Handler {
 }
 
 func (s *Server) handleLive(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "version": Version, "commit": BuildCommit})
 }
 
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {

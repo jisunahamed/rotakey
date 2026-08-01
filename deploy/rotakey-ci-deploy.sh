@@ -47,7 +47,10 @@ readonly previous_image="$(docker inspect --format '{{.Image}}' "$app_container"
 docker image tag "$previous_image" rotakey-app:predeploy
 
 git merge --ff-only "$expected_sha"
-docker compose -f "$COMPOSE_FILE" build app </dev/null
+docker compose -f "$COMPOSE_FILE" build \
+  --build-arg ROTAKEY_COMMIT="$expected_sha" \
+  --build-arg ROTAKEY_BUILD_TIME="$(date -u +%FT%TZ)" \
+  app </dev/null
 docker compose -f "$COMPOSE_FILE" up -d --no-deps app </dev/null
 
 ready=false

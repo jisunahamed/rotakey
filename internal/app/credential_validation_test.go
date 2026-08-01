@@ -9,14 +9,13 @@ import (
 
 func TestInspectProviderSecretLoadsModels(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/models" {
-			t.Fatalf("path = %q, want /v1/models", r.URL.Path)
-		}
 		if got := r.Header.Get("Authorization"); got != "Bearer valid-key" {
 			t.Fatalf("authorization = %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{
 			"object":"list",
 			"data":[
 				{"id":"z/model","owned_by":"z"},
@@ -24,6 +23,11 @@ func TestInspectProviderSecretLoadsModels(t *testing.T) {
 				{"id":"a/model","owned_by":"duplicate"}
 			]
 		}`))
+		case "/v1/chat/completions":
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"a"}}]}`))
+		default:
+			t.Fatalf("unexpected path = %q", r.URL.Path)
+		}
 	}))
 	defer upstream.Close()
 
@@ -31,11 +35,31 @@ func TestInspectProviderSecretLoadsModels(t *testing.T) {
 		BaseURL: upstream.URL + "/v1", AuthHeader: "Authorization",
 		AuthScheme: "Bearer", TimeoutSeconds: 5, AllowPrivateNetwork: true,
 	}, []byte("valid-key"))
-	if !result.Valid || result.StatusCode != http.StatusOK {
+	if !result.Valid || !result.ProtocolVerified || result.StatusCode != http.StatusOK {
 		t.Fatalf("inspection = %#v", result)
 	}
 	if len(result.Models) != 2 || result.Models[0].ID != "a/model" || result.Models[1].ID != "z/model" {
 		t.Fatalf("models = %#v", result.Models)
+	}
+}
+
+func TestInspectProviderSecretRejectsProtocolMismatch(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1/models" {
+			_, _ = w.Write([]byte(`{"data":[{"id":"claude-test"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"type":"message","content":[{"type":"text","text":"a"}]}`))
+	}))
+	defer upstream.Close()
+
+	result := inspectProviderSecret(context.Background(), Provider{
+		BaseURL: upstream.URL + "/v1", APIFormat: "openai", AuthHeader: "Authorization",
+		AuthScheme: "Bearer", TimeoutSeconds: 5, AllowPrivateNetwork: true,
+	}, []byte("valid-key"))
+	if result.Valid || result.DetectedProtocol != "anthropic" || result.Warning == "" {
+		t.Fatalf("inspection = %#v", result)
 	}
 }
 

@@ -288,6 +288,37 @@ h3 {
   border-color: #2f4350;
 }
 
+.release-notice {
+  display: grid;
+  gap: 2px;
+  padding: 10px;
+  color: #dff8fb;
+  background: #15313a;
+  border: 1px solid #2e6975;
+  border-radius: 7px;
+  text-decoration: none;
+}
+
+.release-notice span,
+.release-notice small,
+.sidebar__version {
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+}
+
+.release-notice span { color: #75d2df; text-transform: uppercase; letter-spacing: 0.06em; }
+.release-notice strong { font-size: 0.78rem; }
+.release-notice small { color: #aeb8c1; }
+
+.sidebar__version {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 8px;
+  color: #74838d;
+}
+
+.sidebar__version span { color: #5faebe; }
+
 .sidebar__footer {
   display: flex;
   align-items: center;

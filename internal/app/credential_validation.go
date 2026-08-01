@@ -15,7 +15,9 @@ import (
 type credentialInspection struct {
 	Valid            bool              `json:"valid"`
 	CatalogAvailable bool              `json:"catalog_available"`
+	ProtocolVerified bool              `json:"protocol_verified"`
 	Protocol         string            `json:"protocol"`
+	DetectedProtocol string            `json:"detected_protocol,omitempty"`
 	StatusCode       int               `json:"status_code"`
 	LatencyMS        int64             `json:"latency_ms"`
 	Models           []DiscoveredModel `json:"models"`
@@ -33,7 +35,11 @@ type providerModelCatalog struct {
 }
 
 func inspectProviderSecret(ctx context.Context, provider Provider, secret []byte) credentialInspection {
-	result := credentialInspection{Models: []DiscoveredModel{}, Protocol: provider.APIFormat}
+	protocol := provider.APIFormat
+	if protocol == "" {
+		protocol = "openai"
+	}
+	result := credentialInspection{Models: []DiscoveredModel{}, Protocol: protocol}
 	client, err := upstreamClient(provider)
 	if err != nil {
 		result.Warning = err.Error()
@@ -131,9 +137,89 @@ func inspectProviderSecret(ctx context.Context, provider Provider, secret []byte
 		})
 	}
 	sort.Slice(result.Models, func(i, j int) bool { return result.Models[i].ID < result.Models[j].ID })
-	result.Valid = true
 	result.CatalogAvailable = true
+	if len(result.Models) == 0 {
+		result.Warning = "The provider returned an empty model catalog. Check that the base URL includes the provider's API prefix (usually /v1)."
+		return result
+	}
+	verified, detected, status, warning := verifyProviderProtocol(ctx, client, provider, secret, result.Models[0].ID)
+	result.ProtocolVerified = verified
+	result.DetectedProtocol = detected
+	if status != 0 {
+		result.StatusCode = status
+	}
+	if !verified {
+		result.Warning = warning
+		return result
+	}
+	result.Valid = true
 	return result
+}
+
+func verifyProviderProtocol(ctx context.Context, client *http.Client, provider Provider, secret []byte, model string) (bool, string, int, string) {
+	protocol := provider.APIFormat
+	if protocol == "" {
+		protocol = "openai"
+	}
+	path := "/chat/completions"
+	payload := map[string]any{
+		"model":      model,
+		"messages":   []any{map[string]any{"role": "user", "content": "Reply with one character."}},
+		"max_tokens": 1,
+	}
+	if protocol == "anthropic" {
+		path = "/messages"
+	}
+	body, _ := json.Marshal(payload)
+	probeCtx, cancel := context.WithTimeout(ctx, minDuration(time.Duration(provider.TimeoutSeconds)*time.Second, 15*time.Second))
+	defer cancel()
+	request, err := http.NewRequestWithContext(probeCtx, http.MethodPost, strings.TrimRight(provider.BaseURL, "/")+path, strings.NewReader(string(body)))
+	if err != nil {
+		return false, "", 0, "The provider base URL could not be checked."
+	}
+	applyProviderHeaders(request, provider, secret)
+	response, err := client.Do(request)
+	if err != nil {
+		return false, "", 0, "The model catalog worked, but the protocol endpoint could not be reached. Check the provider base URL."
+	}
+	defer response.Body.Close()
+	raw, _, readErr := boundedBody(response.Body, 1<<20)
+	if readErr != nil {
+		return false, "", response.StatusCode, "The provider protocol-check response could not be read."
+	}
+	var decoded map[string]any
+	if json.Unmarshal(raw, &decoded) != nil {
+		return false, "", response.StatusCode, fmt.Sprintf("Base URL/API format mismatch: POST %s returned HTTP %d with a non-JSON response. Check the API prefix (usually /v1).", path, response.StatusCode)
+	}
+	detected := detectProviderProtocol(decoded)
+	if detected != "" && detected != protocol {
+		return false, detected, response.StatusCode, fmt.Sprintf("Base URL/API format mismatch: configured as %s-compatible, but POST %s returned a %s response.", protocol, path, detected)
+	}
+	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+		return false, detected, response.StatusCode, fmt.Sprintf("API key was rejected by the provider (HTTP %d).", response.StatusCode)
+	}
+	if detected == protocol {
+		return true, detected, response.StatusCode, ""
+	}
+	return false, detected, response.StatusCode, fmt.Sprintf("Base URL/API format mismatch: POST %s returned HTTP %d without a valid %s response envelope. Check the API prefix and selected protocol.", path, response.StatusCode, protocol)
+}
+
+func detectProviderProtocol(payload map[string]any) string {
+	if payload["type"] == "message" {
+		return "anthropic"
+	}
+	if choices, ok := payload["choices"].([]any); ok && len(choices) > 0 {
+		return "openai"
+	}
+	if rawError, ok := payload["error"].(map[string]any); ok {
+		if payload["type"] == "error" {
+			return "anthropic"
+		}
+		if rawError["message"] != nil || rawError["code"] != nil {
+			return "openai"
+		}
+	}
+	return ""
 }
 
 func providerFromInput(input providerInput) Provider {

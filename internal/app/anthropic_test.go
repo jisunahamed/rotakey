@@ -195,6 +195,10 @@ func TestAnthropicProviderInspectionSendsNativeHeaders(t *testing.T) {
 		if r.Header.Get("X-Api-Key") != "ant-key" || r.Header.Get("Anthropic-Version") != "2023-06-01" {
 			t.Fatalf("headers = %#v", r.Header)
 		}
+		if r.URL.Path == "/messages" {
+			_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"a"}]}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"data":[{"id":"claude-test","display_name":"Claude Test"}],"has_more":false}`))
 	}))
 	defer upstream.Close()
@@ -202,7 +206,7 @@ func TestAnthropicProviderInspectionSendsNativeHeaders(t *testing.T) {
 		BaseURL: upstream.URL, APIFormat: "anthropic", AnthropicVersion: "2023-06-01",
 		AuthHeader: "X-Api-Key", TimeoutSeconds: 5, AllowPrivateNetwork: true,
 	}, []byte("ant-key"))
-	if !result.Valid || !result.CatalogAvailable || len(result.Models) != 1 {
+	if !result.Valid || !result.ProtocolVerified || !result.CatalogAvailable || len(result.Models) != 1 {
 		t.Fatalf("inspection = %#v", result)
 	}
 }
