@@ -12,7 +12,7 @@
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "@fontsource/ibm-plex-sans": "^5.2.7",
-    "lucide-react": "^0.468.0",
+    "lucide-react": "^1.27.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
