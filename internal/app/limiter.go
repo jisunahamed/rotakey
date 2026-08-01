@@ -191,6 +191,10 @@ func buildConstraints(credential credentialRuntime, modelID string, tokenCost in
 }
 
 func buildConstraintsWithDiagnostics(credential credentialRuntime, modelID string, tokenCost int64) ([]limitConstraint, []RoutingDecision) {
+	return buildConstraintsWithCosts(credential, modelID, 1, tokenCost, tokenCost)
+}
+
+func buildConstraintsWithCosts(credential credentialRuntime, modelID string, requestCost, tokenCost, tprCost int64) ([]limitConstraint, []RoutingDecision) {
 	policies := []struct {
 		keyScope string
 		scope    string
@@ -207,11 +211,11 @@ func buildConstraintsWithDiagnostics(credential credentialRuntime, modelID strin
 	constraints := make([]limitConstraint, 0, 12)
 	rejected := make([]RoutingDecision, 0, 2)
 	for _, scoped := range policies {
-		if scoped.policy.TPR != nil && tokenCost > *scoped.policy.TPR {
+		if scoped.policy.TPR != nil && tprCost > *scoped.policy.TPR {
 			rejected = append(rejected, RoutingDecision{
 				CredentialID: credential.ID, CredentialLabel: credential.Label,
 				Reason: "tpr_exceeded", Scope: scoped.scope, Dimension: "tpr",
-				Limit: *scoped.policy.TPR, Remaining: *scoped.policy.TPR, Required: tokenCost,
+				Limit: *scoped.policy.TPR, Remaining: *scoped.policy.TPR, Required: tprCost,
 			})
 		}
 		prefix := "limit:" + credential.ID + ":" + scoped.keyScope + ":"
@@ -223,9 +227,9 @@ func buildConstraintsWithDiagnostics(credential credentialRuntime, modelID strin
 				})
 			}
 		}
-		add("rps", scoped.policy.RPS, time.Second, 1, false)
-		add("rpm", scoped.policy.RPM, time.Minute, 1, false)
-		add("rpd", scoped.policy.RPD, 24*time.Hour, 1, false)
+		add("rps", scoped.policy.RPS, time.Second, requestCost, false)
+		add("rpm", scoped.policy.RPM, time.Minute, requestCost, false)
+		add("rpd", scoped.policy.RPD, 24*time.Hour, requestCost, false)
 		add("tps", scoped.policy.TPS, time.Second, tokenCost, true)
 		add("tpm", scoped.policy.TPM, time.Minute, tokenCost, true)
 		add("tpd", scoped.policy.TPD, 24*time.Hour, tokenCost, true)

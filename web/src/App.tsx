@@ -1112,7 +1112,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                   onClick={() => { setSelectedID(provider.id); setProviderInspectorOpen(true); }}
                 >
                   <StatusDot state={!provider.enabled ? "disabled" : healthy ? "healthy" : "exhausted"} />
-                  <span><strong>{provider.name}</strong><small>{provider.base_url}</small></span>
+                  <span><strong>{provider.name} <em className={`protocol-badge is-${provider.api_format}`}>{provider.api_format}</em></strong><small>{provider.base_url}</small></span>
                   <span className="resource-item__count">{provider.models.length} models</span>
                   <ChevronRight size={15} />
                 </button>
@@ -1128,7 +1128,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
               )}
               <div className="inspector-header">
                 <div>
-                  <p className="eyebrow">OpenAI-compatible upstream</p>
+                  <p className="eyebrow">{selected.api_format === "anthropic" ? "Anthropic-compatible upstream" : "OpenAI-compatible upstream"}</p>
                   <h2>{selected.name}</h2>
                   <code>{selected.base_url}</code>
                 </div>
@@ -1178,6 +1178,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                         <span><code>{model.public_alias}</code><small>→ {model.upstream_model}</small></span>
                         <span>
                           {model.supports_responses ? "Responses native" : "Responses translated"}
+                          {model.supports_messages ? " · Messages" : ""}
                           {model.strip_parameters.length > 0 ? ` · removes ${model.strip_parameters.join(", ")}` : ""}
                         </span>
                         <ChevronRight size={14} />
@@ -1321,8 +1322,9 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [provider, setProvider] = useState({
+  const [provider, setProvider] = useState<ProviderDraft>({
     name: "", base_url: "", auth_header: "Authorization", auth_scheme: "Bearer",
+    api_format: "openai", anthropic_version: "2023-06-01",
     timeout_seconds: 120, enabled: true, allow_private_network: false, extra_headers: {}
   });
   const [credentialDrafts, setCredentialDrafts] = useState<CredentialDraft[]>(() => [newCredentialDraft()]);
@@ -1372,7 +1374,8 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
       const created = await api<{ id: string }>("/api/admin/providers", { method: "POST", json: provider });
       createdID = created.id;
       await api(`/api/admin/providers/${created.id}/credentials`, { method: "POST", json: { credentials } });
-      const routes = routeInputsFromSelection(selectedModels);
+      const catalogIDs = new Set(discoveredModels.map((model) => model.id));
+      const routes = routeInputsFromSelection(selectedModels, catalogIDs);
       if (routes.length > 0) {
         await api(`/api/admin/providers/${created.id}/models/bulk`, { method: "POST", json: { models: routes } });
       }
@@ -1454,18 +1457,38 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
 
 type ProviderDraft = {
   name: string; base_url: string; auth_header: string; auth_scheme: string;
+  api_format: "openai" | "anthropic"; anthropic_version: string;
   timeout_seconds: number; enabled: boolean; allow_private_network: boolean; extra_headers: Record<string, string>;
 };
 
 function ProviderFields({ value, onChange }: { value: ProviderDraft; onChange: (value: ProviderDraft) => void }) {
   return (
     <div className="form-stack">
+      <label className="field"><span>API protocol <small>Controls authentication, validation and upstream request format</small></span><select value={value.api_format} onChange={(event) => {
+        const api_format = event.target.value as "openai" | "anthropic";
+        onChange({
+          ...value,
+          api_format,
+          auth_header: api_format === "anthropic" ? "X-Api-Key" : "Authorization",
+          auth_scheme: api_format === "anthropic" ? "" : "Bearer",
+          anthropic_version: value.anthropic_version || "2023-06-01"
+        });
+      }}><option value="openai">OpenAI-compatible</option><option value="anthropic">Anthropic-compatible</option></select></label>
       <label className="field"><span>Name <small>An internal identifier is generated automatically</small></span><input required placeholder="Groq production" value={value.name} onChange={(e) => onChange({ ...value, name: e.target.value })} /></label>
-      <label className="field"><span>OpenAI-compatible base URL <small>Include /v1 when the provider requires it</small></span><input type="url" required placeholder="https://api.provider.com/v1" value={value.base_url} onChange={(e) => onChange({ ...value, base_url: e.target.value })} /></label>
+      <label className="field"><span>{value.api_format === "anthropic" ? "Anthropic-compatible" : "OpenAI-compatible"} base URL <small>Include /v1 when the provider requires it</small></span><input type="url" required placeholder={value.api_format === "anthropic" ? "https://api.anthropic.com/v1" : "https://api.provider.com/v1"} value={value.base_url} onChange={(e) => onChange({ ...value, base_url: e.target.value })} /></label>
       <div className="field-pair">
         <label className="field"><span>Authentication header</span><input value={value.auth_header} onChange={(e) => onChange({ ...value, auth_header: e.target.value })} /></label>
-        <label className="field"><span>Authentication scheme</span><input placeholder="Bearer" value={value.auth_scheme} onChange={(e) => onChange({ ...value, auth_scheme: e.target.value })} /></label>
+        <label className="field">
+          <span>Authentication scheme</span>
+          <input
+            placeholder={value.api_format === "anthropic" ? "Leave blank" : "Bearer"}
+            value={value.auth_scheme}
+            disabled={value.api_format === "anthropic"}
+            onChange={(e) => onChange({ ...value, auth_scheme: e.target.value })}
+          />
+        </label>
       </div>
+      {value.api_format === "anthropic" && <label className="field"><span>Anthropic API version <small>Sent upstream with every request</small></span><input value={value.anthropic_version} onChange={(e) => onChange({ ...value, anthropic_version: e.target.value })} /></label>}
       <label className="field"><span>Timeout seconds</span><input type="number" min={1} max={900} value={value.timeout_seconds} onChange={(e) => onChange({ ...value, timeout_seconds: Number(e.target.value) })} /></label>
       <Toggle checked={value.enabled} onChange={(enabled) => onChange({ ...value, enabled })} label="Enable provider" description="Disabled providers are never considered for routing." />
       <Toggle checked={value.allow_private_network} onChange={(allow_private_network) => onChange({ ...value, allow_private_network })} label="Allow private-network target" description="Also permits HTTP. Enable only for a provider you operate on this VPS or LAN." />
@@ -1477,6 +1500,7 @@ function ProviderForm({ provider, onClose, onComplete, notify }: { provider: Pro
   const [draft, setDraft] = useState<ProviderDraft>({
     name: provider.name, base_url: provider.base_url,
     auth_header: provider.auth_header, auth_scheme: provider.auth_scheme,
+    api_format: provider.api_format ?? "openai", anthropic_version: provider.anthropic_version ?? "2023-06-01",
     timeout_seconds: provider.timeout_seconds, enabled: provider.enabled,
     allow_private_network: provider.allow_private_network, extra_headers: provider.extra_headers
   });
@@ -1495,7 +1519,7 @@ function ProviderForm({ provider, onClose, onComplete, notify }: { provider: Pro
   );
 }
 
-type ModelDraft = Omit<ModelRoute, "id" | "provider_id" | "created_at" | "updated_at">;
+type ModelDraft = Omit<ModelRoute, "id" | "provider_id" | "created_at" | "updated_at"> & { manual?: boolean };
 
 function ModelFields({ value, onChange }: { value: ModelDraft; onChange: (value: ModelDraft) => void }) {
   return (
@@ -1508,6 +1532,7 @@ function ModelFields({ value, onChange }: { value: ModelDraft; onChange: (value:
       </div>
       <Toggle checked={value.supports_chat} onChange={(supports_chat) => onChange({ ...value, supports_chat })} label="Upstream supports Chat Completions" />
       <Toggle checked={value.supports_responses} onChange={(supports_responses) => onChange({ ...value, supports_responses })} label="Upstream supports Responses natively" description="When off, the gateway translates the supported Responses subset to Chat Completions." />
+      <Toggle checked={value.supports_messages} onChange={(supports_messages) => onChange({ ...value, supports_messages })} label="Expose through Anthropic Messages" description="Allows this public alias on /v1/messages. Cross-protocol routes support the lossless text, image and client-tool subset." />
       <label className="field">
         <span>Remove unsupported request fields <small>Top-level names, comma separated. Changes apply only to this route.</small></span>
         <input
@@ -1528,12 +1553,12 @@ function ModelFields({ value, onChange }: { value: ModelDraft; onChange: (value:
 function ModelForm({ provider, model, onClose, onComplete, notify }: { provider: Provider; model?: ModelRoute; onClose: () => void; onComplete: (message: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
   const [draft, setDraft] = useState<ModelDraft>(model ? {
     public_alias: model.public_alias, upstream_model: model.upstream_model,
-    supports_chat: model.supports_chat, supports_responses: model.supports_responses,
+    supports_chat: model.supports_chat, supports_responses: model.supports_responses, supports_messages: model.supports_messages,
     default_max_output_tokens: model.default_max_output_tokens, tokenizer: model.tokenizer,
     capture_bodies: model.capture_bodies, strip_parameters: model.strip_parameters ?? [], enabled: model.enabled
   } : {
     public_alias: `${provider.slug}/`, upstream_model: "", supports_chat: true,
-    supports_responses: false, default_max_output_tokens: 1024,
+    supports_responses: false, supports_messages: true, default_max_output_tokens: 1024,
     tokenizer: "heuristic", capture_bodies: false, strip_parameters: [], enabled: true
   });
   const [busy, setBusy] = useState(false);
@@ -1564,6 +1589,8 @@ function ModelForm({ provider, model, onClose, onComplete, notify }: { provider:
 
 type CredentialInspection = {
   valid: boolean;
+  catalog_available: boolean;
+  protocol: "openai" | "anthropic";
   status_code: number;
   latency_ms: number;
   models: DiscoveredModel[];
@@ -1643,9 +1670,7 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
         discovered = result.models ?? discovered;
       }
       const discoveredIDs = new Set(discovered.map((model) => model.id));
-      const routes = routeInputsFromSelection(
-        Object.fromEntries(Object.entries(selectedModels).filter(([id]) => discoveredIDs.has(id)))
-      );
+      const routes = routeInputsFromSelection(selectedModels, discoveredIDs);
       if (routes.length > 0) {
         await api(`/api/admin/providers/${provider.id}/models/bulk`, {
           method: "POST",
@@ -1747,7 +1772,7 @@ function ModelImportForm({ provider, onClose, onComplete, notify }: { provider: 
   useEffect(() => { void load(); }, []);
 
   const save = async () => {
-    const routes = routeInputsFromSelection(selected);
+    const routes = routeInputsFromSelection(selected, new Set((inspection?.models ?? []).map((model) => model.id)));
     if (routes.length === 0) {
       notify("Select at least one new model route.", "danger");
       return;
@@ -1808,8 +1833,14 @@ function ModelCatalog({
   onChange: (selected: Record<string, string>) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [manualModel, setManualModel] = useState("");
   const existingIDs = useMemo(() => new Set(existing.map((model) => model.upstream_model)), [existing]);
-  const visible = models.filter((model) => {
+  const catalogModels = useMemo(() => {
+    const known = new Map(models.map((model) => [model.id, model]));
+    Object.keys(selected).forEach((id) => { if (!known.has(id)) known.set(id, { id, owned_by: "Manual model ID" }); });
+    return [...known.values()];
+  }, [models, selected]);
+  const visible = catalogModels.filter((model) => {
     const needle = query.trim().toLowerCase();
     return !needle || model.id.toLowerCase().includes(needle) || model.owned_by?.toLowerCase().includes(needle);
   });
@@ -1832,6 +1863,15 @@ function ModelCatalog({
         <Search size={15} />
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter model IDs" />
       </label>
+      <div className="manual-model-entry">
+        <label className="field"><span>Manual model ID <small>Use this when the provider does not expose a model catalog</small></span><input value={manualModel} onChange={(event) => setManualModel(event.target.value)} placeholder="claude-model-id" /></label>
+        <Button type="button" variant="quiet" disabled={!manualModel.trim() || existingIDs.has(manualModel.trim())} onClick={() => {
+          const upstream = manualModel.trim();
+          if (!upstream) return;
+          onChange({ ...selected, [upstream]: defaultPublicAlias(provider.slug, upstream) });
+          setManualModel("");
+        }}><Plus size={14} /> Add model ID</Button>
+      </div>
       <div className="model-catalog__list">
         {visible.map((model) => {
           const alreadyRouted = existingIDs.has(model.id);
@@ -2274,19 +2314,32 @@ function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNe
       .then((result) => { onNewKey(result.gateway_key); notify("Gateway key rotated."); })
       .catch((caught) => notify(errorMessage(caught), "danger"));
   };
+  const rootURL = (settings?.base_url || location.origin).replace(/\/$/, "");
+  const openAIURL = `${rootURL}/v1`;
   return (
     <>
-      <PageHeader eyebrow="Unified authentication" title="Access key" description="One active Bearer key can call every enabled model alias. Upstream provider secrets never leave this control plane." />
+      <PageHeader eyebrow="Unified authentication" title="Access key" description="One active key works with OpenAI SDKs, Anthropic SDKs and Claude Code. Upstream provider secrets never leave Rotakey." />
       <section className="access-key-panel">
         <div className="key-prefix"><ShieldCheck size={20} /><span><small>Active key prefix</small><code>{settings?.gateway_key_prefix ? `${settings.gateway_key_prefix}••••••••••••` : "Loading…"}</code></span></div>
         <div><strong>Immediate rotation</strong><p>Rotating revokes the current key in the same database transaction. Update every application immediately.</p></div>
       </section>
       <section className="section-block code-example">
-        <div className="section-heading"><div><p className="eyebrow">Client contract</p><h2>Use any configured model</h2></div></div>
-        <pre>{`curl "$BASE_URL/chat/completions" \\
+        <div className="section-heading"><div><p className="eyebrow">OpenAI lane</p><h2>Chat Completions and Responses</h2></div><Button variant="quiet" onClick={() => void copyText(openAIURL).then(() => notify("OpenAI base URL copied."))}><Clipboard size={14} /> Copy base URL</Button></div>
+        <pre>{`curl "${openAIURL}/chat/completions" \\
   -H "Authorization: Bearer $ROTAKEY_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"model":"provider/model-alias","messages":[{"role":"user","content":"Hello"}]}'`}</pre>
+      </section>
+      <section className="section-block code-example">
+        <div className="section-heading"><div><p className="eyebrow">Anthropic lane</p><h2>Messages SDK and Claude Code</h2></div><Button variant="quiet" onClick={() => void copyText(rootURL).then(() => notify("Anthropic base URL copied."))}><Clipboard size={14} /> Copy base URL</Button></div>
+        <pre>{`export ANTHROPIC_BASE_URL="${rootURL}"
+export ANTHROPIC_API_KEY="$ROTAKEY_KEY"
+
+curl "${rootURL}/v1/messages" \\
+  -H "x-api-key: $ROTAKEY_KEY" \\
+  -H "anthropic-version: 2023-06-01" \\
+  -H "content-type: application/json" \\
+  -d '{"model":"provider/model-alias","max_tokens":1024,"messages":[{"role":"user","content":"Hello"}]}'`}</pre>
       </section>
       <div className="page-actions console-actionbar">
         <span>Rotation immediately revokes the current client credential.</span>
@@ -2298,13 +2351,22 @@ function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNe
 
 function SettingsPage({ notify }: { notify: (message: string, tone?: "success" | "danger") => void }) {
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [providers, setProviders] = useState<Provider[]>([]);
   const [busy, setBusy] = useState(false);
-  useEffect(() => { void api<Settings>("/api/admin/settings").then(setSettings).catch((caught) => notify(errorMessage(caught), "danger")); }, [notify]);
+  useEffect(() => {
+    void Promise.all([api<Settings>("/api/admin/settings"), api<{ providers: Provider[] }>("/api/admin/providers")])
+      .then(([nextSettings, result]) => {
+        setSettings(nextSettings);
+        setProviders(normalizeProviders(result.providers));
+      })
+      .catch((caught) => notify(errorMessage(caught), "danger"));
+  }, [notify]);
   if (!settings) return <PageSkeleton />;
   return (
     <>
       <PageHeader eyebrow="Control plane policy" title="System" description="Bound waiting and retention so the gateway stays predictable on a small VPS." />
       <section className="settings-list">
+        <label className="settings-row"><span><strong>Default Anthropic resource provider</strong><small>Files have no model field, so uploads need one native Anthropic provider. Batches remain model-routed.</small></span><div><select value={settings.default_anthropic_provider_id || ""} onChange={(event) => setSettings({ ...settings, default_anthropic_provider_id: event.target.value })}><option value="">Not configured</option>{providers.filter((provider) => provider.api_format === "anthropic" && provider.enabled).map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></div></label>
         <label className="settings-row"><span><strong>Capacity wait ceiling</strong><small>Requests wait only when capacity can return within this deadline.</small></span><div><input type="number" min={0} max={30000} step={100} value={settings.max_wait_ms} onChange={(e) => setSettings({ ...settings, max_wait_ms: Number(e.target.value) })} /><code>ms</code></div></label>
         <label className="settings-row"><span><strong>Metadata retention</strong><small>Request IDs, routing attempts, status, latency and usage.</small></span><div><input type="number" min={1} max={3650} value={settings.metadata_retention_days} onChange={(e) => setSettings({ ...settings, metadata_retention_days: Number(e.target.value) })} /><code>days</code></div></label>
         <label className="settings-row"><span><strong>Captured body retention</strong><small>Only applies to model routes where encrypted body capture is enabled.</small></span><div><input type="number" min={1} max={365} value={settings.body_retention_days} onChange={(e) => setSettings({ ...settings, body_retention_days: Number(e.target.value) })} /><code>days</code></div></label>
@@ -2432,12 +2494,14 @@ function providerSlugForUI(name: string) {
   return slug.length >= 2 ? slug : "provider";
 }
 
-function routeInputsFromSelection(selected: Record<string, string>): ModelDraft[] {
+function routeInputsFromSelection(selected: Record<string, string>, catalogIDs = new Set<string>()): ModelDraft[] {
   return Object.entries(selected).map(([upstreamModel, publicAlias]) => ({
     public_alias: publicAlias.trim(),
     upstream_model: upstreamModel,
+    manual: !catalogIDs.has(upstreamModel),
     supports_chat: true,
     supports_responses: false,
+    supports_messages: true,
     default_max_output_tokens: 1024,
     tokenizer: "heuristic",
     capture_bodies: false,
@@ -2449,8 +2513,10 @@ function routeInputsFromSelection(selected: Record<string, string>): ModelDraft[
 function normalizeProviders(providers: Provider[] | null | undefined): Provider[] {
   return (providers ?? []).map((provider) => ({
     ...provider,
+    api_format: provider.api_format ?? "openai",
+    anthropic_version: provider.anthropic_version ?? "2023-06-01",
     extra_headers: provider.extra_headers ?? {},
-    models: (provider.models ?? []).map((model) => ({ ...model, strip_parameters: model.strip_parameters ?? [] })),
+    models: (provider.models ?? []).map((model) => ({ ...model, supports_messages: model.supports_messages ?? true, strip_parameters: model.strip_parameters ?? [] })),
     credentials: (provider.credentials ?? []).map((credential) => ({
       ...credential,
       validation_error: credential.validation_error ?? "",

@@ -40,7 +40,7 @@ type compatibilityReplacement struct {
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.Query(r.Context(), `
-		SELECT m.public_alias, m.created_at
+		SELECT m.public_alias, m.created_at, m.supports_messages
 		FROM model_routes m JOIN providers p ON p.id=m.provider_id
 		WHERE m.enabled=TRUE AND p.enabled=TRUE
 		  AND EXISTS (
@@ -58,13 +58,51 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var alias string
 		var created time.Time
-		if rows.Scan(&alias, &created) == nil {
+		var supportsMessages bool
+		if rows.Scan(&alias, &created, &supportsMessages) == nil {
+			if isAnthropicRequest(r) && !supportsMessages {
+				continue
+			}
+			if isAnthropicRequest(r) {
+				data = append(data, map[string]any{
+					"id": alias, "type": "model", "display_name": alias,
+					"created_at": created.UTC().Format(time.RFC3339),
+				})
+				continue
+			}
 			data = append(data, map[string]any{
 				"id": alias, "object": "model", "created": created.Unix(), "owned_by": "rotakey",
 			})
 		}
 	}
+	if isAnthropicRequest(r) {
+		var firstID, lastID any
+		if len(data) > 0 {
+			firstID = data[0].(map[string]any)["id"]
+			lastID = data[len(data)-1].(map[string]any)["id"]
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": data, "has_more": false, "first_id": firstID, "last_id": lastID})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
+}
+
+func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
+	route, err := s.loadRoute(r.Context(), r.PathValue("id"))
+	if err != nil || (isAnthropicRequest(r) && !route.Model.SupportsMessages) {
+		writeProtocolError(w, r, http.StatusNotFound, "not_found_error", "The requested model alias is not enabled.")
+		return
+	}
+	if isAnthropicRequest(r) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id": route.Model.PublicAlias, "type": "model", "display_name": route.Model.PublicAlias,
+			"created_at": route.Model.CreatedAt.UTC().Format(time.RFC3339),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id": route.Model.PublicAlias, "object": "model", "created": route.Model.CreatedAt.Unix(), "owned_by": "rotakey",
+	})
 }
 
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -123,6 +161,17 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 			RequestID: requestID, Route: route, Endpoint: endpoint, Started: started,
 			RequestBody: raw, Capture: route.Model.CaptureBodies,
 		})
+		return
+	}
+	if route.Provider.APIFormat == "anthropic" {
+		if endpoint == "responses" && !route.Model.SupportsResponses && !route.Model.SupportsChat {
+			s.rejectGatewayRequest(w, r, http.StatusBadRequest, "unsupported_endpoint", "This model route does not support Responses.", logInput{
+				RequestID: requestID, Route: route, Endpoint: endpoint, Started: started,
+				RequestBody: raw, Capture: route.Model.CaptureBodies, PublicProtocol: "openai", UpstreamProtocol: "anthropic",
+			})
+			return
+		}
+		s.handleOpenAIThroughAnthropic(w, r, raw, publicPayload, route, endpoint, started, requestID)
 		return
 	}
 
@@ -396,6 +445,7 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 		}
 
 		retryable := response.StatusCode == http.StatusTooManyRequests ||
+			response.StatusCode == 529 ||
 			response.StatusCode == http.StatusInternalServerError ||
 			response.StatusCode == http.StatusBadGateway ||
 			response.StatusCode == http.StatusServiceUnavailable ||
@@ -885,6 +935,19 @@ func (s *Server) selectCredentialWithDiagnostics(
 	skipped map[string]bool,
 	maxWait time.Duration,
 ) (*credentialRuntime, reservation, time.Duration, []RoutingDecision, error) {
+	return s.selectCredentialWithCosts(ctx, modelID, credentials, 1, tokenCost, tokenCost, skipped, maxWait)
+}
+
+func (s *Server) selectCredentialWithCosts(
+	ctx context.Context,
+	modelID string,
+	credentials []credentialRuntime,
+	requestCost int64,
+	tokenCost int64,
+	tprCost int64,
+	skipped map[string]bool,
+	maxWait time.Duration,
+) (*credentialRuntime, reservation, time.Duration, []RoutingDecision, error) {
 	deadline := time.Now().Add(maxWait)
 	for {
 		cursor, err := s.redis.Incr(ctx, "rr:"+modelID).Result()
@@ -924,7 +987,7 @@ func (s *Server) selectCredentialWithDiagnostics(
 				}
 				continue
 			}
-			constraints, rejected := buildConstraintsWithDiagnostics(*candidate, modelID, tokenCost)
+			constraints, rejected := buildConstraintsWithCosts(*candidate, modelID, requestCost, tokenCost, tprCost)
 			if len(rejected) > 0 {
 				decisions = append(decisions, rejected...)
 				continue
@@ -968,6 +1031,104 @@ func (s *Server) selectCredentialWithDiagnostics(
 		case <-ctx.Done():
 			timer.Stop()
 			return nil, reservation{}, 0, decisions, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+type modelReservationCost struct {
+	Requests int64
+	Tokens   int64
+	TPR      int64
+}
+
+func buildBatchConstraints(credential credentialRuntime, costs map[string]modelReservationCost) ([]limitConstraint, []RoutingDecision, int64) {
+	var totalRequests, totalTokens, maxTPR int64
+	modelIDs := make([]string, 0, len(costs))
+	for modelID, cost := range costs {
+		modelIDs = append(modelIDs, modelID)
+		totalRequests += cost.Requests
+		totalTokens += cost.Tokens
+		if cost.TPR > maxTPR {
+			maxTPR = cost.TPR
+		}
+	}
+	slices.Sort(modelIDs)
+	shared := credential
+	shared.ModelLimits = nil
+	constraints, rejected := buildConstraintsWithCosts(shared, "", totalRequests, totalTokens, maxTPR)
+	for _, modelID := range modelIDs {
+		policy, ok := credential.ModelLimits[modelID]
+		if !ok {
+			continue
+		}
+		modelOnly := credential
+		modelOnly.Limits = RatePolicy{}
+		modelOnly.ModelLimits = map[string]RatePolicy{modelID: policy}
+		cost := costs[modelID]
+		modelConstraints, modelRejected := buildConstraintsWithCosts(modelOnly, modelID, cost.Requests, cost.Tokens, cost.TPR)
+		constraints = append(constraints, modelConstraints...)
+		rejected = append(rejected, modelRejected...)
+	}
+	return constraints, rejected, totalTokens
+}
+
+func (s *Server) selectBatchCredential(
+	ctx context.Context,
+	providerID string,
+	credentials []credentialRuntime,
+	costs map[string]modelReservationCost,
+	maxWait time.Duration,
+) (*credentialRuntime, reservation, time.Duration, error) {
+	deadline := time.Now().Add(maxWait)
+	for {
+		cursor, err := s.redis.Incr(ctx, "rr:batch:"+providerID).Result()
+		if err != nil {
+			return nil, reservation{}, 0, err
+		}
+		minRetry := time.Duration(math.MaxInt64)
+		for _, index := range credentialSelectionOrder(credentials, cursor) {
+			candidate := &credentials[index]
+			if !candidate.Enabled || candidate.Status == "quarantined" {
+				continue
+			}
+			cooldown, err := s.redis.TTL(ctx, "cooldown:"+candidate.ID).Result()
+			if err != nil {
+				return nil, reservation{}, 0, err
+			}
+			if cooldown > 0 {
+				if cooldown < minRetry {
+					minRetry = cooldown
+				}
+				continue
+			}
+			constraints, rejected, totalTokens := buildBatchConstraints(*candidate, costs)
+			if len(rejected) > 0 {
+				continue
+			}
+			result, err := s.limiter.Reserve(ctx, constraints)
+			if err != nil {
+				return nil, reservation{}, 0, err
+			}
+			if result.Allowed {
+				return candidate, reservation{constraints: constraints, tokenCost: totalTokens, reservedAt: result.ReservedAt}, 0, nil
+			}
+			if result.Retry < minRetry {
+				minRetry = result.Retry
+			}
+		}
+		if minRetry == time.Duration(math.MaxInt64) {
+			return nil, reservation{}, time.Minute, nil
+		}
+		remaining := time.Until(deadline)
+		if maxWait <= 0 || minRetry > remaining {
+			return nil, reservation{}, minRetry, nil
+		}
+		timer := time.NewTimer(minRetry)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, reservation{}, 0, ctx.Err()
 		case <-timer.C:
 		}
 	}
@@ -1100,7 +1261,7 @@ func upstreamErrorMessage(body, secret []byte) string {
 }
 
 func copyUpstreamHeaders(destination, source http.Header) {
-	for _, header := range []string{"Content-Type", "Cache-Control", "Retry-After", "Openai-Processing-Ms"} {
+	for _, header := range []string{"Content-Type", "Cache-Control", "Retry-After", "Openai-Processing-Ms", "Request-Id", "X-Request-Id"} {
 		if value := source.Get(header); value != "" {
 			destination.Set(header, value)
 		}
@@ -1156,22 +1317,25 @@ func (s *Server) activeRequestLogs(query string) []RequestLog {
 }
 
 type logInput struct {
-	RequestID        string
-	Route            routeRuntime
-	Credential       credentialRuntime
-	Endpoint         string
-	Attempts         []AttemptRecord
-	RoutingDecisions []RoutingDecision
-	Started          time.Time
-	StatusCode       int
-	InputTokens      int64
-	OutputTokens     int64
-	ErrorCode        string
-	ErrorMessage     string
-	RequestBody      []byte
-	ResponseBody     []byte
-	Capture          bool
-	Truncated        bool
+	RequestID         string
+	Route             routeRuntime
+	Credential        credentialRuntime
+	Endpoint          string
+	PublicProtocol    string
+	UpstreamProtocol  string
+	UpstreamRequestID string
+	Attempts          []AttemptRecord
+	RoutingDecisions  []RoutingDecision
+	Started           time.Time
+	StatusCode        int
+	InputTokens       int64
+	OutputTokens      int64
+	ErrorCode         string
+	ErrorMessage      string
+	RequestBody       []byte
+	ResponseBody      []byte
+	Capture           bool
+	Truncated         bool
 }
 
 func (s *Server) rejectGatewayRequest(
@@ -1238,17 +1402,26 @@ func (s *Server) storeRequestLog(ctx context.Context, input logInput) {
 		    (id, request_id, model_id, model_alias, provider_id, provider_name,
 		     credential_id, credential_label, endpoint, attempts, routing_decisions, status_code,
 		     latency_ms, input_tokens, output_tokens, error_code, error_message,
-		     request_body_cipher, response_body_cipher, body_truncated)
+		     request_body_cipher, response_body_cipher, body_truncated,
+		     public_protocol, upstream_protocol, upstream_request_id)
 		VALUES ($1,$2,NULLIF($3,''),$4,NULLIF($5,''),$6,NULLIF($7,''),$8,$9,$10,$11,$12,$13,$14,$15,
-		        NULLIF($16,''),$17,$18,$19,$20)
+		        NULLIF($16,''),$17,$18,$19,$20,$21,$22,$23)
 	`, id, input.RequestID, input.Route.Model.ID, modelAlias,
 		input.Route.Provider.ID, providerName, input.Credential.ID,
 		input.Credential.Label, input.Endpoint, attempts, routingDecisions, input.StatusCode,
 		time.Since(input.Started).Milliseconds(), input.InputTokens, input.OutputTokens,
-		input.ErrorCode, input.ErrorMessage, requestCipher, responseCipher, truncated)
+		input.ErrorCode, input.ErrorMessage, requestCipher, responseCipher, truncated,
+		protocolOrDefault(input.PublicProtocol), protocolOrDefault(input.UpstreamProtocol), input.UpstreamRequestID)
 	if err != nil {
 		s.logger.Warn("request log write failed", "request_id", input.RequestID, "error", err)
 	}
+}
+
+func protocolOrDefault(value string) string {
+	if value == "" {
+		return "openai"
+	}
+	return value
 }
 
 func minInt64(left, right int64) int64 {

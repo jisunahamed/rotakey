@@ -3,7 +3,7 @@
 [![CI](https://github.com/jisunahamed/rotakey/actions/workflows/ci.yml/badge.svg)](https://github.com/jisunahamed/rotakey/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-147D92.svg)](LICENSE)
 
-Rotakey is a single-owner, self-hosted AI gateway. Providers are configured provider-wise, while applications use one OpenAI-compatible base URL, one gateway key, and a public model alias.
+Rotakey is a single-owner, self-hosted AI gateway. Providers are configured provider-wise as OpenAI-compatible or Anthropic-compatible, while applications use one gateway key and a public model alias through either SDK contract.
 
 ```text
 Application ── Bearer gateway key ──> Rotakey /v1
@@ -15,9 +15,8 @@ Application ── Bearer gateway key ──> Rotakey /v1
 
 The gateway serves:
 
-- `GET /v1/models`
-- `POST /v1/chat/completions`
-- `POST /v1/responses`
+- OpenAI: `GET /v1/models`, `POST /v1/chat/completions`, and `POST /v1/responses`
+- Anthropic: Models, `POST /v1/messages`, token counting, Message Batches, and Files
 - `GET /health/live`
 - `GET /health/ready`
 
@@ -125,9 +124,9 @@ Providers, Model routes, and Request logs use the same dense resource/inspector 
 
 In **Providers → Add provider**:
 
-1. Enter the provider's OpenAI-compatible base URL and authentication header.
+1. Choose **OpenAI-compatible** or **Anthropic-compatible**, then enter the provider base URL. The Anthropic preset uses `x-api-key` and `anthropic-version: 2023-06-01`.
 2. Enter API keys in separate fields. Use **Add another API key** for more keys, and optionally mark one key as **Primary**.
-3. Choose **Check keys & load models**. Rotakey validates every key against the upstream `/models` endpoint and loads the provider's model catalog.
+3. Choose **Check keys & load models**. Rotakey validates every key against the protocol-aware upstream `/models` endpoint. If an Anthropic-compatible catalog returns `305`, `404`, `405`, or a non-standard response, add the model ID manually; Rotakey validates manually created routes with a minimal Messages probe.
 4. Select the models to expose and edit their globally unique public aliases, such as `groq/llama-3.3-70b`.
 5. Set any combination of RPS, RPM, RPD, TPS, TPM, TPD, and TPR. Blank fields are unlimited. An API key's shared limits are consumed by every model under that provider; optional model-specific limits add a narrower limit for that model.
 6. Review and create the provider. Keys are validated again before they are encrypted and saved.
@@ -168,6 +167,30 @@ result = client.chat.completions.create(
     messages=[{"role": "user", "content": "Hello"}],
 )
 ```
+
+### Anthropic SDK and Claude Code
+
+Anthropic clients use the Rotakey host root; the SDK appends `/v1/messages`. The same Rotakey gateway key works as `x-api-key`:
+
+```bash
+export ANTHROPIC_BASE_URL="https://ai.example.com"
+export ANTHROPIC_API_KEY="gw_..."
+```
+
+```python
+from anthropic import Anthropic
+
+client = Anthropic(api_key="gw_...", base_url="https://ai.example.com")
+message = client.messages.create(
+    model="anthropic/claude-sonnet",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Hello"}],
+)
+```
+
+Public Anthropic endpoints include Messages, token counting, models, Message Batches, and Files. Native Anthropic routes preserve thinking, prompt caching, citations, client/server tools, beta headers, and unknown future SSE events. Cross-protocol routes translate the lossless text, image, and client-function-tool subset; unsupported features return `400 unsupported_feature` instead of being dropped.
+
+Files use the **Default Anthropic resource provider** selected in System settings. Rotakey exposes opaque file/batch IDs pinned to their original provider and API key, so later retrieve, content, cancel, results, and delete calls remain consistent. A pinned credential cannot be deleted until its resources are removed.
 
 ## Routing and limits
 

@@ -88,8 +88,22 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("POST /api/auth/logout", s.requireAdmin(http.HandlerFunc(s.handleLogout)))
 
 	mux.Handle("GET /v1/models", s.requireGatewayKey(http.HandlerFunc(s.handleModels)))
+	mux.Handle("GET /v1/models/{id...}", s.requireGatewayKey(http.HandlerFunc(s.handleModel)))
 	mux.Handle("POST /v1/chat/completions", s.requireGatewayKey(http.HandlerFunc(s.handleChatCompletions)))
 	mux.Handle("POST /v1/responses", s.requireGatewayKey(http.HandlerFunc(s.handleResponses)))
+	mux.Handle("POST /v1/messages", s.requireGatewayKey(http.HandlerFunc(s.handleAnthropicMessages)))
+	mux.Handle("POST /v1/messages/count_tokens", s.requireGatewayKey(http.HandlerFunc(s.handleAnthropicCountTokens)))
+	mux.Handle("POST /v1/messages/batches", s.requireGatewayKey(http.HandlerFunc(s.handleAnthropicBatchCreate)))
+	mux.Handle("GET /v1/messages/batches", s.requireGatewayKey(http.HandlerFunc(s.handleAnthropicBatchList)))
+	mux.Handle("GET /v1/messages/batches/{id}", s.requireGatewayKey(http.HandlerFunc(s.handleAnthropicBatchGet)))
+	mux.Handle("DELETE /v1/messages/batches/{id}", s.requireGatewayKey(http.HandlerFunc(s.handleAnthropicBatchDelete)))
+	mux.Handle("POST /v1/messages/batches/{id}/cancel", s.requireGatewayKey(http.HandlerFunc(s.handleAnthropicBatchCancel)))
+	mux.Handle("GET /v1/messages/batches/{id}/results", s.requireGatewayKey(http.HandlerFunc(s.handleAnthropicBatchResults)))
+	mux.Handle("POST /v1/files", s.requireGatewayKey(http.HandlerFunc(s.handleAnthropicFileCreate)))
+	mux.Handle("GET /v1/files", s.requireGatewayKey(http.HandlerFunc(s.handleAnthropicFileList)))
+	mux.Handle("GET /v1/files/{id}", s.requireGatewayKey(http.HandlerFunc(s.handleAnthropicFileGet)))
+	mux.Handle("DELETE /v1/files/{id}", s.requireGatewayKey(http.HandlerFunc(s.handleAnthropicFileDelete)))
+	mux.Handle("GET /v1/files/{id}/content", s.requireGatewayKey(http.HandlerFunc(s.handleAnthropicFileContent)))
 
 	s.registerAdminRoutes(mux)
 	mux.HandleFunc("GET /", s.serveWeb)
@@ -122,6 +136,7 @@ func (s *Server) requestIDMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		w.Header().Set("X-Request-ID", requestID)
+		w.Header().Set("Request-Id", requestID)
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestIDContextKey{}, requestID)))
 	})
 }

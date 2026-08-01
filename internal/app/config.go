@@ -19,6 +19,9 @@ type Config struct {
 	PublicBaseURL       string
 	SessionCookieSecure bool
 	MaxRequestBytes     int64
+	MaxMessageBytes     int64
+	MaxBatchBytes       int64
+	MaxFileBytes        int64
 	MaxResponseBytes    int64
 	CaptureBytes        int64
 	SessionTTL          time.Duration
@@ -33,6 +36,9 @@ func LoadConfig() (Config, error) {
 		PublicBaseURL:       strings.TrimRight(os.Getenv("PUBLIC_BASE_URL"), "/"),
 		SessionCookieSecure: envBool("SESSION_COOKIE_SECURE", false),
 		MaxRequestBytes:     envInt64("MAX_REQUEST_BYTES", 8<<20),
+		MaxMessageBytes:     envInt64("MAX_MESSAGE_BYTES", 32<<20),
+		MaxBatchBytes:       envInt64("MAX_BATCH_BYTES", 256<<20),
+		MaxFileBytes:        envInt64("MAX_FILE_BYTES", 500_000_000),
 		MaxResponseBytes:    envInt64("MAX_RESPONSE_BYTES", 16<<20),
 		CaptureBytes:        envInt64("CAPTURE_BYTES", 1<<20),
 		SessionTTL:          time.Duration(envInt64("SESSION_TTL_HOURS", 12)) * time.Hour,

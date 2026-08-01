@@ -1179,7 +1179,8 @@ fieldset legend {
 .field select,
 .filter-bar input,
 .filter-bar select,
-.settings-row input {
+.settings-row input,
+.settings-row select {
   width: 100%;
   min-height: 40px;
   padding: 9px 10px;

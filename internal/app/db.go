@@ -80,6 +80,8 @@ func scanProvider(row pgx.Row) (Provider, error) {
 		&provider.TimeoutSeconds,
 		&provider.Enabled,
 		&provider.AllowPrivateNetwork,
+		&provider.APIFormat,
+		&provider.AnthropicVersion,
 		&provider.CreatedAt,
 		&provider.UpdatedAt,
 	)
@@ -94,17 +96,19 @@ func scanProvider(row pgx.Row) (Provider, error) {
 
 const providerColumns = `
 	id, name, slug, base_url, auth_header, auth_scheme, extra_headers,
-	timeout_seconds, enabled, allow_private_network, created_at, updated_at
+	timeout_seconds, enabled, allow_private_network, api_format, anthropic_version,
+	created_at, updated_at
 `
 
 func (s *Server) loadRoute(ctx context.Context, alias string) (routeRuntime, error) {
 	row := s.db.QueryRow(ctx, `
 		SELECT
 			m.id, m.provider_id, m.public_alias, m.upstream_model, m.supports_chat,
-			m.supports_responses, m.default_max_output_tokens, m.tokenizer,
+			m.supports_responses, m.supports_messages, m.default_max_output_tokens, m.tokenizer,
 			m.capture_bodies, m.strip_parameters, m.enabled, m.created_at, m.updated_at,
 			p.id, p.name, p.slug, p.base_url, p.auth_header, p.auth_scheme,
 			p.extra_headers, p.timeout_seconds, p.enabled, p.allow_private_network,
+			p.api_format, p.anthropic_version,
 			p.created_at, p.updated_at
 		FROM model_routes m
 		JOIN providers p ON p.id = m.provider_id
@@ -120,6 +124,7 @@ func (s *Server) loadRoute(ctx context.Context, alias string) (routeRuntime, err
 		&route.Model.UpstreamModel,
 		&route.Model.SupportsChat,
 		&route.Model.SupportsResponses,
+		&route.Model.SupportsMessages,
 		&route.Model.DefaultMaxOutputTokens,
 		&route.Model.Tokenizer,
 		&route.Model.CaptureBodies,
@@ -137,6 +142,8 @@ func (s *Server) loadRoute(ctx context.Context, alias string) (routeRuntime, err
 		&route.Provider.TimeoutSeconds,
 		&route.Provider.Enabled,
 		&route.Provider.AllowPrivateNetwork,
+		&route.Provider.APIFormat,
+		&route.Provider.AnthropicVersion,
 		&route.Provider.CreatedAt,
 		&route.Provider.UpdatedAt,
 	)
@@ -150,6 +157,10 @@ func (s *Server) loadRoute(ctx context.Context, alias string) (routeRuntime, err
 }
 
 func (s *Server) loadCredentials(ctx context.Context, providerID, modelID string) ([]credentialRuntime, error) {
+	return s.loadCredentialsForModels(ctx, providerID, []string{modelID})
+}
+
+func (s *Server) loadCredentialsForModels(ctx context.Context, providerID string, modelIDs []string) ([]credentialRuntime, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT
 			c.id, c.provider_id, c.label, c.secret_cipher, c.secret_suffix,
@@ -158,10 +169,10 @@ func (s *Server) loadCredentials(ctx context.Context, providerID, modelID string
 			r.scope_key, r.rps, r.rpm, r.rpd, r.tps, r.tpm, r.tpd, r.tpr
 		FROM credentials c
 		LEFT JOIN rate_policies r
-			ON r.credential_id = c.id AND (r.scope_key = '*' OR r.scope_key = $2)
+			ON r.credential_id = c.id AND (r.scope_key = '*' OR r.scope_key = ANY($2::text[]))
 		WHERE c.provider_id = $1 AND c.enabled = TRUE AND c.status <> 'quarantined'
 		ORDER BY c.is_primary DESC, c.created_at, c.id, r.scope_key
-	`, providerID, modelID)
+	`, providerID, modelIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -239,13 +250,14 @@ func (s *Server) settings(ctx context.Context) (AppSettings, []byte, error) {
 	var keyHash []byte
 	err := s.db.QueryRow(ctx, `
 		SELECT gateway_key_prefix, metadata_retention_days, body_retention_days,
-		       max_wait_ms, gateway_key_hash
+		       max_wait_ms, COALESCE(default_anthropic_provider_id, ''), gateway_key_hash
 		FROM app_settings WHERE id = 1
 	`).Scan(
 		&settings.GatewayKeyPrefix,
 		&settings.MetadataRetentionDays,
 		&settings.BodyRetentionDays,
 		&settings.MaxWaitMS,
+		&settings.DefaultAnthropicProviderID,
 		&keyHash,
 	)
 	return settings, keyHash, err

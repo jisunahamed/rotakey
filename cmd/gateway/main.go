@@ -34,10 +34,13 @@ func main() {
 		Addr:              cfg.Addr,
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       2 * time.Minute,
-		WriteTimeout:      15 * time.Minute,
-		IdleTimeout:       2 * time.Minute,
-		MaxHeaderBytes:    32 << 10,
+		// File uploads are streamed and may approach the configured 500 MB ceiling.
+		// Header time remains tightly bounded while authenticated bodies get a
+		// deliberate transfer window.
+		ReadTimeout:    15 * time.Minute,
+		WriteTimeout:   15 * time.Minute,
+		IdleTimeout:    2 * time.Minute,
+		MaxHeaderBytes: 32 << 10,
 	}
 
 	go func() {

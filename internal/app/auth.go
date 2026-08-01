@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -228,17 +229,72 @@ func (s *Server) requireAdmin(next http.Handler) http.Handler {
 
 func (s *Server) requireGatewayKey(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
-		if !strings.HasPrefix(auth, "Bearer ") {
-			writeError(w, http.StatusUnauthorized, "invalid_api_key", "A valid gateway Bearer key is required.")
+		bearer, anthropicKey, parseErr := gatewayKeysFromHeaders(r.Header)
+		if parseErr != nil {
+			writeProtocolError(w, r, http.StatusUnauthorized, "authentication_error", parseErr.Error())
 			return
+		}
+		if bearer != "" && anthropicKey != "" && bearer != anthropicKey {
+			writeProtocolError(w, r, http.StatusUnauthorized, "authentication_error", "Authorization and x-api-key contain different gateway keys.")
+			return
+		}
+		key := bearer
+		if key == "" {
+			key = anthropicKey
 		}
 		_, expected, err := s.settings(r.Context())
-		if err != nil || len(expected) == 0 || !secureEqual(hashAPIKey(strings.TrimPrefix(auth, "Bearer ")), expected) {
-			writeError(w, http.StatusUnauthorized, "invalid_api_key", "A valid gateway Bearer key is required.")
+		if err != nil || len(expected) == 0 || key == "" || !secureEqual(hashAPIKey(key), expected) {
+			writeProtocolError(w, r, http.StatusUnauthorized, "authentication_error", "A valid Rotakey gateway key is required.")
 			return
 		}
+		if isAnthropicRequest(r) {
+			version := strings.TrimSpace(r.Header.Get("Anthropic-Version"))
+			if version == "" {
+				writeAnthropicError(w, r, http.StatusBadRequest, "invalid_request_error", "The anthropic-version header is required.")
+				return
+			}
+			if version != "2023-06-01" {
+				writeAnthropicError(w, r, http.StatusBadRequest, "invalid_request_error", "Rotakey currently supports anthropic-version 2023-06-01.")
+				return
+			}
+		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+func gatewayKeysFromHeaders(headers http.Header) (string, string, error) {
+	auth := strings.TrimSpace(headers.Get("Authorization"))
+	bearer := ""
+	if auth != "" {
+		parts := strings.Fields(auth)
+		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+			return "", "", errors.New("Authorization must use a single Bearer gateway key.")
+		}
+		bearer = parts[1]
+	}
+	return bearer, strings.TrimSpace(headers.Get("X-Api-Key")), nil
+}
+
+func isAnthropicRequest(r *http.Request) bool {
+	return strings.HasPrefix(r.URL.Path, "/v1/messages") ||
+		strings.HasPrefix(r.URL.Path, "/v1/files") ||
+		r.Header.Get("Anthropic-Version") != "" || r.Header.Get("X-Api-Key") != ""
+}
+
+func writeProtocolError(w http.ResponseWriter, r *http.Request, status int, code, message string) {
+	if isAnthropicRequest(r) {
+		writeAnthropicError(w, r, status, code, message)
+		return
+	}
+	writeError(w, status, code, message)
+}
+
+func writeAnthropicError(w http.ResponseWriter, r *http.Request, status int, code, message string) {
+	requestID := requestIDFromContext(r.Context())
+	writeJSON(w, status, map[string]any{
+		"type":       "error",
+		"error":      map[string]any{"type": code, "message": message},
+		"request_id": requestID,
 	})
 }
 

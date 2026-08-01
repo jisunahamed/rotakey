@@ -20,9 +20,9 @@ Client -> Rotakey /v1 -> public model alias -> provider -> eligible API key -> u
 
 1. Open `/admin/` and complete the one-time owner setup.
 2. Copy the gateway key when it is shown. Rotakey stores only its hash and cannot show the secret again.
-3. Add a provider and enter its OpenAI-compatible base URL.
+3. Add a provider, choose OpenAI-compatible or Anthropic-compatible, and enter its protocol base URL.
 4. Add API keys one at a time or in bulk. Primary is optional.
-5. Let Rotakey validate the keys and discover the provider's model list.
+5. Let Rotakey validate the keys and discover the provider's model list. If an Anthropic catalog is unavailable, enter a model ID manually; Rotakey probes Messages before saving it.
 6. Select the models to expose, choose globally unique public aliases, and configure limits.
 7. Test the provider, enable it, and copy the unified `/v1` base URL.
 
@@ -97,11 +97,51 @@ Rotakey can retry once on another key for a connection failure, timeout before r
 
 ## 7. Compatibility and parameter adaptation
 
-Rotakey exposes `GET /v1/models`, `POST /v1/chat/completions`, and `POST /v1/responses`. Chat streaming, tools/function calls, JSON mode, and compatible multimodal bodies pass through.
+OpenAI clients use the `/v1` base URL. Anthropic SDKs and Claude Code use the host root because they append `/v1/messages` themselves. Both protocols use the same Rotakey gateway key.
 
-Providers do not all accept the same optional fields. A model route can strip known unsupported parameters and Rotakey records removed or replaced fields in the request attempt log. For example, one upstream may reject `thinking`, while another requires `max_completion_tokens` instead of `max_tokens`. Configure adaptation narrowly for the affected route; do not silently remove features globally.
+| Client contract | Base URL | Authentication | Required version header |
+| --- | --- | --- | --- |
+| OpenAI | `https://ai.example.com/v1` | `Authorization: Bearer gw_...` | None |
+| Anthropic | `https://ai.example.com` | `x-api-key: gw_...` or `Authorization: Bearer gw_...` | `anthropic-version: 2023-06-01` |
 
-Responses API features that cannot be translated faithfully return `400 unsupported_feature` instead of being silently discarded.
+If both authentication headers are present they must contain the same key. A mismatch returns an Anthropic-shaped `401 authentication_error`. Anthropic errors use the native `{type:"error", error:{type,message}, request_id}` envelope and the public `request-id` header. Upstream request IDs are kept separately in Request Logs.
+
+### Public endpoints
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /v1/models` | OpenAI list shape by default; Anthropic list shape when Anthropic headers are present. |
+| `GET /v1/models/{model_alias}` | Retrieve one public alias. Aliases containing `/` are supported. |
+| `POST /v1/chat/completions` | OpenAI Chat Completions, including streaming and client tools. |
+| `POST /v1/responses` | Native Responses or the documented core translation subset. |
+| `POST /v1/messages` | Anthropic Messages, including named SSE events. |
+| `POST /v1/messages/count_tokens` | Exact native Anthropic token count. It consumes request-limit capacity. |
+| `POST` or `GET /v1/messages/batches` | Create or list Message Batches. |
+| `GET` or `DELETE /v1/messages/batches/{id}` | Retrieve or remove a mapped Batch. |
+| `POST /v1/messages/batches/{id}/cancel` | Cancel a Batch on its pinned upstream credential. |
+| `GET /v1/messages/batches/{id}/results` | Stream JSONL results with public model aliases restored. |
+| `POST` or `GET /v1/files` | Upload or list Files. Uploads stream through Rotakey. |
+| `GET` or `DELETE /v1/files/{id}` | Retrieve metadata or delete a mapped File. |
+| `GET /v1/files/{id}/content` | Stream File content from its pinned upstream credential. |
+
+Every public `model` field is a Rotakey alias, never an upstream model ID.
+
+### Compatibility matrix
+
+| Public request → upstream provider | Behavior |
+| --- | --- |
+| Anthropic → Anthropic | Native pass-through. Content blocks, thinking, prompt caching, citations, Files, server/client tools, safe `anthropic-*` headers, and unknown SSE event types are preserved. |
+| Anthropic → OpenAI | Text, images, system prompts, tool calls/results, tool choice, stop sequences, and streaming are translated. Thinking, caching, citations, Files, and server tools return `400 unsupported_feature`. |
+| OpenAI Chat/Responses → OpenAI | Existing OpenAI-compatible behavior is unchanged. |
+| OpenAI Chat/Responses → Anthropic | Core text, images, JSON function tools, tool results, stop controls, usage, and streaming are translated to Messages. Use `/v1/messages` for the full Anthropic feature surface. |
+
+Provider protocol is selected during onboarding. Anthropic-compatible providers default to `x-api-key` and version `2023-06-01`. Redirects and proxy instructions remain blocked. For a `305`, `404`, `405`, or non-standard model catalog: verify the base URL, keep redirects disabled, use **Manual model ID**, and save. Rotakey makes a minimal `/messages` probe with the chosen model. A failed probe leaves the route unsaved and shows the provider error.
+
+Files are pinned to the default Anthropic resource provider and the selected credential. A Message containing a File reference is forced onto that same provider/key; conflicting references return `400 resource_affinity_conflict`. Message Batches must resolve every model alias to one native Anthropic provider and are pinned to one eligible credential. Mixed-provider Batches return `400`. A credential with live Files or Batches cannot be deleted (`409`) until those resources are removed.
+
+Batch reservations count every item against shared request/token buckets and against each item's model-specific buckets in one atomic reservation. Anthropic usage reconciliation includes input, output, cache-create, and cache-read tokens. Streaming without final usage remains conservatively reserved. Upload/download content is streamed, and captured-body logging never stores File binary content. Default request ceilings are 32 MB for Messages/token count, 256 MB for Batches, and 500 MB for Files.
+
+Providers do not all accept the same optional fields. A model route can strip known unsupported parameters and Rotakey records removed or replaced fields in the request attempt log. For example, one upstream may reject `thinking`, while another requires `max_completion_tokens` instead of `max_tokens`. Configure adaptation narrowly for the affected route. Responses or cross-protocol features that cannot be translated faithfully return `400 unsupported_feature` instead of being silently discarded.
 
 ## 8. Reading statuses and logs
 
@@ -122,7 +162,10 @@ Reset labels count down once per second in the inspector. Capacity values use co
 ## 9. Common errors
 
 - `400 unsupported_parameter` or `unrecognized_request_argument`: the chosen upstream model rejected a field. Add a route-specific strip or replacement rule after confirming the provider contract.
+- `400 invalid_request_error` mentioning `anthropic-version`: send `anthropic-version: 2023-06-01` on Anthropic endpoints.
+- `400 resource_affinity_conflict`: a File or Batch does not belong to the model route's provider/credential path.
 - `401/403`: upstream key is invalid, expired, or lacks model permission. Rotakey quarantines it.
+- `409` while deleting a key: a live File or Batch is pinned to it. Delete the mapped resources first.
 - `404 DeploymentNotFound`: the upstream model/deployment ID does not exist at that provider or region. Correct the upstream ID; the public alias may stay unchanged.
 - `429 rate_limit_exceeded`: all eligible keys are full or upstream reported a limit that is stricter than configured. Inspect the limiting bucket and `Retry-After`.
 - `503`: Redis/database/readiness dependency is unavailable, or no safe routing decision can be made.

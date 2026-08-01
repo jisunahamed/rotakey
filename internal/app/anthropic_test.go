@@ -1,0 +1,249 @@
+package app
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestTranslateAnthropicRequestToChatCoreSurface(t *testing.T) {
+	source := map[string]any{
+		"model": "claude", "max_tokens": json.Number("128"),
+		"system": "Be concise.",
+		"messages": []any{
+			map[string]any{"role": "user", "content": []any{
+				map[string]any{"type": "text", "text": "Hello"},
+				map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": "image/png", "data": "AAAA"}},
+			}},
+			map[string]any{"role": "assistant", "content": []any{
+				map[string]any{"type": "tool_use", "id": "tool_1", "name": "weather", "input": map[string]any{"city": "Dhaka"}},
+			}},
+			map[string]any{"role": "user", "content": []any{
+				map[string]any{"type": "tool_result", "tool_use_id": "tool_1", "content": "Sunny"},
+			}},
+		},
+		"tools": []any{map[string]any{"name": "weather", "description": "Weather", "input_schema": map[string]any{"type": "object"}}},
+	}
+	chat, err := translateAnthropicRequestToChat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, _ := chat["messages"].([]any)
+	if len(messages) != 4 || numberAsInt64(chat["max_tokens"]) != 128 {
+		t.Fatalf("translated chat = %#v", chat)
+	}
+	toolMessage, _ := messages[3].(map[string]any)
+	if toolMessage["role"] != "tool" || toolMessage["tool_call_id"] != "tool_1" {
+		t.Fatalf("tool result = %#v", toolMessage)
+	}
+}
+
+func TestAnthropicOnlyFeaturesAreRejectedCrossProtocol(t *testing.T) {
+	for _, payload := range []map[string]any{
+		{"thinking": map[string]any{"type": "enabled"}, "messages": []any{map[string]any{"role": "user", "content": "Hi"}}},
+		{"messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "Hi", "cache_control": map[string]any{"type": "ephemeral"}}}}}},
+	} {
+		if _, err := translateAnthropicRequestToChat(payload); err == nil {
+			t.Fatalf("unsupported payload was accepted: %#v", payload)
+		}
+	}
+}
+
+func TestTranslateChatRequestToAnthropicTools(t *testing.T) {
+	source := map[string]any{
+		"max_completion_tokens": json.Number("64"),
+		"messages": []any{
+			map[string]any{"role": "system", "content": "Use tools."},
+			map[string]any{"role": "assistant", "content": "", "tool_calls": []any{map[string]any{
+				"id": "call_1", "type": "function", "function": map[string]any{"name": "lookup", "arguments": `{"id":1}`},
+			}}},
+			map[string]any{"role": "tool", "tool_call_id": "call_1", "content": "done"},
+		},
+	}
+	message, err := translateChatRequestToAnthropic(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message["system"] != "Use tools." || numberAsInt64(message["max_tokens"]) != 64 {
+		t.Fatalf("translated message = %#v", message)
+	}
+}
+
+func TestCrossProtocolTranslationRejectsUnknownFields(t *testing.T) {
+	if _, err := translateAnthropicRequestToChat(map[string]any{
+		"messages": []any{map[string]any{"role": "user", "content": "Hi"}},
+		"metadata": map[string]any{"user_id": "u1"},
+	}); err == nil {
+		t.Fatal("Anthropic metadata was silently dropped")
+	}
+	if _, err := translateChatRequestToAnthropic(map[string]any{
+		"messages":         []any{map[string]any{"role": "user", "content": "Hi"}},
+		"reasoning_effort": "high",
+	}); err == nil {
+		t.Fatal("OpenAI reasoning field was silently dropped")
+	}
+}
+
+func TestParallelToolSettingTranslatesToAnthropic(t *testing.T) {
+	message, err := translateChatRequestToAnthropic(map[string]any{
+		"messages":            []any{map[string]any{"role": "user", "content": "Hi"}},
+		"parallel_tool_calls": false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	choice, _ := message["tool_choice"].(map[string]any)
+	if choice["type"] != "auto" || choice["disable_parallel_tool_use"] != true {
+		t.Fatalf("tool choice = %#v", choice)
+	}
+}
+
+func TestAnthropicUsageIncludesCacheTokens(t *testing.T) {
+	input, output := extractAnthropicUsage(map[string]any{"usage": map[string]any{
+		"input_tokens": json.Number("10"), "cache_creation_input_tokens": json.Number("20"),
+		"cache_read_input_tokens": json.Number("30"), "output_tokens": json.Number("4"),
+	}})
+	if input != 60 || output != 4 {
+		t.Fatalf("usage = %d/%d", input, output)
+	}
+}
+
+func TestRewriteAnthropicStreamPreservesUnknownEvents(t *testing.T) {
+	source := strings.NewReader("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"upstream\"}}\n\nevent: future_event\ndata: {\"type\":\"future_event\",\"value\":1}\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\n\n")
+	destination := &bytes.Buffer{}
+	code, err := rewriteAnthropicStream(source, destination, "public/alias", nil)
+	if err != nil || code != "overloaded_error" {
+		t.Fatalf("stream result = %q %v", code, err)
+	}
+	if !strings.Contains(destination.String(), `"model":"public/alias"`) || !strings.Contains(destination.String(), "future_event") {
+		t.Fatalf("stream output = %s", destination.String())
+	}
+}
+
+func TestAnthropicProviderInspectionSendsNativeHeaders(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Api-Key") != "ant-key" || r.Header.Get("Anthropic-Version") != "2023-06-01" {
+			t.Fatalf("headers = %#v", r.Header)
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"claude-test","display_name":"Claude Test"}],"has_more":false}`))
+	}))
+	defer upstream.Close()
+	result := inspectProviderSecret(context.Background(), Provider{
+		BaseURL: upstream.URL, APIFormat: "anthropic", AnthropicVersion: "2023-06-01",
+		AuthHeader: "X-Api-Key", TimeoutSeconds: 5, AllowPrivateNetwork: true,
+	}, []byte("ant-key"))
+	if !result.Valid || !result.CatalogAvailable || len(result.Models) != 1 {
+		t.Fatalf("inspection = %#v", result)
+	}
+}
+
+func TestAnthropicCatalog305AllowsManualFallback(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUseProxy) }))
+	defer upstream.Close()
+	result := inspectProviderSecret(context.Background(), Provider{
+		BaseURL: upstream.URL, APIFormat: "anthropic", AuthHeader: "X-Api-Key",
+		AnthropicVersion: "2023-06-01", TimeoutSeconds: 5, AllowPrivateNetwork: true,
+	}, []byte("ant-key"))
+	if !result.Valid || result.CatalogAvailable || !strings.Contains(result.Warning, "manually") {
+		t.Fatalf("inspection = %#v", result)
+	}
+}
+
+func TestBatchConstraintsAggregateSharedAndPerModelLimits(t *testing.T) {
+	sharedRPM, sharedTPM := int64(100), int64(1000)
+	modelARPM, modelATPM, modelATPR := int64(2), int64(100), int64(60)
+	modelBRPD, modelBTPR := int64(3), int64(20)
+	credential := credentialRuntime{CredentialView: CredentialView{
+		ID:     "cred_1",
+		Limits: RatePolicy{RPM: &sharedRPM, TPM: &sharedTPM},
+		ModelLimits: map[string]RatePolicy{
+			"model_a": {RPM: &modelARPM, TPM: &modelATPM, TPR: &modelATPR},
+			"model_b": {RPD: &modelBRPD, TPR: &modelBTPR},
+		},
+	}}
+	costs := map[string]modelReservationCost{
+		"model_a": {Requests: 2, Tokens: 90, TPR: 50},
+		"model_b": {Requests: 3, Tokens: 50, TPR: 15},
+	}
+	constraints, rejected, totalTokens := buildBatchConstraints(credential, costs)
+	if len(rejected) != 0 || totalTokens != 140 {
+		t.Fatalf("batch reservation = rejected %#v, tokens %d", rejected, totalTokens)
+	}
+	wantCosts := map[string]int64{
+		"limit:cred_1:all:rpm":           5,
+		"limit:cred_1:all:tpm":           140,
+		"limit:cred_1:model:model_a:rpm": 2,
+		"limit:cred_1:model:model_a:tpm": 90,
+		"limit:cred_1:model:model_b:rpd": 3,
+	}
+	for _, constraint := range constraints {
+		if want, ok := wantCosts[constraint.Key]; ok {
+			if constraint.Cost != want {
+				t.Fatalf("%s cost = %d, want %d", constraint.Key, constraint.Cost, want)
+			}
+			delete(wantCosts, constraint.Key)
+		}
+	}
+	if len(wantCosts) != 0 {
+		t.Fatalf("missing constraints: %#v", wantCosts)
+	}
+	costs["model_b"] = modelReservationCost{Requests: 1, Tokens: 25, TPR: 25}
+	_, rejected, _ = buildBatchConstraints(credential, costs)
+	if len(rejected) != 1 || rejected[0].Scope != "model" || rejected[0].Dimension != "tpr" {
+		t.Fatalf("model TPR rejection = %#v", rejected)
+	}
+}
+
+func TestAnthropicResponseHeadersKeepGatewayRequestID(t *testing.T) {
+	destination := http.Header{"Request-Id": []string{"req_gateway"}}
+	source := http.Header{
+		"Request-Id":                           []string{"req_upstream"},
+		"Anthropic-Ratelimit-Tokens-Remaining": []string{"42"},
+	}
+	copyAnthropicHeaders(destination, source)
+	if destination.Get("Request-Id") != "req_gateway" {
+		t.Fatalf("public request id = %q", destination.Get("Request-Id"))
+	}
+	if destination.Get("Anthropic-Ratelimit-Tokens-Remaining") != "42" {
+		t.Fatalf("rate header was not forwarded")
+	}
+}
+
+func TestGatewayHeaderParsingIsStrictAndCaseInsensitive(t *testing.T) {
+	bearer, anthropicKey, err := gatewayKeysFromHeaders(http.Header{
+		"Authorization": []string{"bearer gateway-key"},
+		"X-Api-Key":     []string{"gateway-key"},
+	})
+	if err != nil || bearer != "gateway-key" || anthropicKey != "gateway-key" {
+		t.Fatalf("parsed headers = %q/%q, %v", bearer, anthropicKey, err)
+	}
+	for _, value := range []string{"Basic gateway-key", "Bearer", "Bearer one two"} {
+		if _, _, err := gatewayKeysFromHeaders(http.Header{"Authorization": []string{value}}); err == nil {
+			t.Fatalf("malformed Authorization %q was accepted", value)
+		}
+	}
+}
+
+func TestProviderHeadersRejectHopByHopAndInvalidNames(t *testing.T) {
+	base := providerInput{
+		Name: "Test provider", BaseURL: "http://127.0.0.1:9000/v1",
+		APIFormat: "openai", AuthHeader: "Authorization", AuthScheme: "Bearer",
+		TimeoutSeconds: 5, AllowPrivateNetwork: true,
+	}
+	for _, header := range []string{"Host", "Content-Length", "Transfer-Encoding", "Bad Header"} {
+		candidate := base
+		candidate.AuthHeader = header
+		if err := validateProviderInput(&candidate); err == nil {
+			t.Fatalf("unsafe auth header %q was accepted", header)
+		}
+	}
+	candidate := base
+	candidate.ExtraHeaders = map[string]string{"Connection": "keep-alive"}
+	if err := validateProviderInput(&candidate); err == nil {
+		t.Fatal("hop-by-hop extra header was accepted")
+	}
+}

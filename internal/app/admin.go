@@ -21,7 +21,14 @@ var (
 	slugSeparatorPattern = regexp.MustCompile(`[^a-z0-9]+`)
 	aliasPattern         = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{1,127}$`)
 	parameterPattern     = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,63}$`)
+	headerNamePattern    = regexp.MustCompile("^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$")
 )
+
+var forbiddenProviderHeaders = map[string]bool{
+	"Connection": true, "Content-Length": true, "Host": true,
+	"Proxy-Authenticate": true, "Proxy-Authorization": true,
+	"Te": true, "Trailer": true, "Transfer-Encoding": true, "Upgrade": true,
+}
 
 func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	admin := func(handler http.HandlerFunc) http.Handler { return s.requireAdmin(handler) }
@@ -89,7 +96,7 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 
 	modelRows, err := s.db.Query(ctx, `
 		SELECT id, provider_id, public_alias, upstream_model, supports_chat,
-		       supports_responses, default_max_output_tokens, tokenizer,
+		       supports_responses, supports_messages, default_max_output_tokens, tokenizer,
 		       capture_bodies, strip_parameters, enabled, created_at, updated_at
 		FROM model_routes ORDER BY created_at, id
 	`)
@@ -100,7 +107,8 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 		var model ModelRoute
 		if err := modelRows.Scan(
 			&model.ID, &model.ProviderID, &model.PublicAlias, &model.UpstreamModel,
-			&model.SupportsChat, &model.SupportsResponses, &model.DefaultMaxOutputTokens,
+			&model.SupportsChat, &model.SupportsResponses, &model.SupportsMessages,
+			&model.DefaultMaxOutputTokens,
 			&model.Tokenizer, &model.CaptureBodies, &model.StripParameters, &model.Enabled,
 			&model.CreatedAt, &model.UpdatedAt,
 		); err != nil {
@@ -205,6 +213,8 @@ type providerInput struct {
 	TimeoutSeconds      int               `json:"timeout_seconds"`
 	Enabled             bool              `json:"enabled"`
 	AllowPrivateNetwork bool              `json:"allow_private_network"`
+	APIFormat           string            `json:"api_format"`
+	AnthropicVersion    string            `json:"anthropic_version"`
 }
 
 func validateProviderInput(input *providerInput) error {
@@ -216,14 +226,35 @@ func validateProviderInput(input *providerInput) error {
 	input.BaseURL = strings.TrimSpace(input.BaseURL)
 	input.AuthHeader = http.CanonicalHeaderKey(strings.TrimSpace(input.AuthHeader))
 	input.AuthScheme = strings.TrimSpace(input.AuthScheme)
+	input.APIFormat = strings.ToLower(strings.TrimSpace(input.APIFormat))
+	input.AnthropicVersion = strings.TrimSpace(input.AnthropicVersion)
 	if len(input.Name) < 2 || len(input.Name) > 100 {
 		return fmt.Errorf("provider name must be between 2 and 100 characters")
 	}
 	if !slugPattern.MatchString(input.Slug) {
 		return fmt.Errorf("provider identifier is invalid")
 	}
+	if input.APIFormat == "" {
+		input.APIFormat = "openai"
+	}
+	if input.APIFormat != "openai" && input.APIFormat != "anthropic" {
+		return fmt.Errorf("provider protocol must be openai or anthropic")
+	}
+	if input.AnthropicVersion == "" {
+		input.AnthropicVersion = "2023-06-01"
+	}
+	if input.APIFormat == "anthropic" && !regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`).MatchString(input.AnthropicVersion) {
+		return fmt.Errorf("Anthropic version must use YYYY-MM-DD")
+	}
 	if input.AuthHeader == "" {
-		input.AuthHeader = "Authorization"
+		if input.APIFormat == "anthropic" {
+			input.AuthHeader = "X-Api-Key"
+		} else {
+			input.AuthHeader = "Authorization"
+		}
+	}
+	if !headerNamePattern.MatchString(input.AuthHeader) || forbiddenProviderHeaders[input.AuthHeader] {
+		return fmt.Errorf("authentication header is not allowed")
 	}
 	if input.TimeoutSeconds == 0 {
 		input.TimeoutSeconds = 120
@@ -236,8 +267,9 @@ func validateProviderInput(input *providerInput) error {
 	}
 	for key, value := range input.ExtraHeaders {
 		canonical := http.CanonicalHeaderKey(key)
-		if canonical == "" || strings.ContainsAny(key+value, "\r\n") ||
-			canonical == "Host" || canonical == "Content-Length" || canonical == "Authorization" {
+		if canonical == "" || !headerNamePattern.MatchString(key) || strings.ContainsAny(key+value, "\r\n") ||
+			forbiddenProviderHeaders[canonical] || canonical == "Authorization" ||
+			canonical == "X-Api-Key" {
 			return fmt.Errorf("extra header %q is not allowed", key)
 		}
 	}
@@ -311,10 +343,11 @@ func (s *Server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 	_, err = s.db.Exec(r.Context(), `
 		INSERT INTO providers
 		    (id, name, slug, base_url, auth_header, auth_scheme, extra_headers,
-		     timeout_seconds, enabled, allow_private_network)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		     timeout_seconds, enabled, allow_private_network, api_format, anthropic_version)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 	`, id, input.Name, input.Slug, input.BaseURL, input.AuthHeader, input.AuthScheme,
-		headers, input.TimeoutSeconds, input.Enabled, input.AllowPrivateNetwork)
+		headers, input.TimeoutSeconds, input.Enabled, input.AllowPrivateNetwork,
+		input.APIFormat, input.AnthropicVersion)
 	if err != nil {
 		writeError(w, http.StatusConflict, "provider_conflict", "Provider slug already exists or the provider is invalid.")
 		return
@@ -342,10 +375,11 @@ func (s *Server) handleUpdateProvider(w http.ResponseWriter, r *http.Request) {
 	tag, err := s.db.Exec(r.Context(), `
 		UPDATE providers SET name=$2, slug=$3, base_url=$4, auth_header=$5,
 		    auth_scheme=$6, extra_headers=$7, timeout_seconds=$8, enabled=$9,
-		    allow_private_network=$10, updated_at=NOW()
+		    allow_private_network=$10, api_format=$11, anthropic_version=$12, updated_at=NOW()
 		WHERE id=$1
 	`, r.PathValue("id"), input.Name, input.Slug, input.BaseURL, input.AuthHeader,
-		input.AuthScheme, headers, input.TimeoutSeconds, input.Enabled, input.AllowPrivateNetwork)
+		input.AuthScheme, headers, input.TimeoutSeconds, input.Enabled, input.AllowPrivateNetwork,
+		input.APIFormat, input.AnthropicVersion)
 	if err != nil || tag.RowsAffected() == 0 {
 		writeError(w, http.StatusConflict, "provider_update_failed", "Provider could not be updated.")
 		return
@@ -355,6 +389,15 @@ func (s *Server) handleUpdateProvider(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteProvider(w http.ResponseWriter, r *http.Request) {
+	var hasResources bool
+	if err := s.db.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM anthropic_resources WHERE provider_id=$1)`, r.PathValue("id")).Scan(&hasResources); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Provider dependencies could not be checked.")
+		return
+	}
+	if hasResources {
+		writeError(w, http.StatusConflict, "resource_affinity_conflict", "Delete this provider's Files and Batches before removing it.")
+		return
+	}
 	tag, err := s.db.Exec(r.Context(), `DELETE FROM providers WHERE id=$1`, r.PathValue("id"))
 	if err != nil || tag.RowsAffected() == 0 {
 		writeError(w, http.StatusNotFound, "provider_not_found", "Provider was not found.")
@@ -367,8 +410,10 @@ func (s *Server) handleDeleteProvider(w http.ResponseWriter, r *http.Request) {
 type modelInput struct {
 	PublicAlias            string   `json:"public_alias"`
 	UpstreamModel          string   `json:"upstream_model"`
+	Manual                 bool     `json:"manual,omitempty"`
 	SupportsChat           bool     `json:"supports_chat"`
 	SupportsResponses      bool     `json:"supports_responses"`
+	SupportsMessages       bool     `json:"supports_messages"`
 	DefaultMaxOutputTokens int      `json:"default_max_output_tokens"`
 	Tokenizer              string   `json:"tokenizer"`
 	CaptureBodies          bool     `json:"capture_bodies"`
@@ -383,7 +428,7 @@ func validateModelInput(input *modelInput) error {
 	if !aliasPattern.MatchString(input.PublicAlias) || input.UpstreamModel == "" || len(input.UpstreamModel) > 255 {
 		return fmt.Errorf("model alias or upstream model is invalid")
 	}
-	if !input.SupportsChat && !input.SupportsResponses {
+	if !input.SupportsChat && !input.SupportsResponses && !input.SupportsMessages {
 		return fmt.Errorf("at least one upstream endpoint must be supported")
 	}
 	if input.DefaultMaxOutputTokens == 0 {
@@ -431,15 +476,19 @@ func (s *Server) handleCreateModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_model", err.Error())
 		return
 	}
+	if err := s.validateAnthropicModel(r.Context(), r.PathValue("id"), input.UpstreamModel); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "model_validation_failed", err.Error())
+		return
+	}
 	id, _ := newID("mdl")
 	_, err := s.db.Exec(r.Context(), `
 		INSERT INTO model_routes
 		    (id, provider_id, public_alias, upstream_model, supports_chat,
-		     supports_responses, default_max_output_tokens, tokenizer,
+		     supports_responses, supports_messages, default_max_output_tokens, tokenizer,
 		     capture_bodies, strip_parameters, enabled)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 	`, id, r.PathValue("id"), input.PublicAlias, input.UpstreamModel,
-		input.SupportsChat, input.SupportsResponses, input.DefaultMaxOutputTokens,
+		input.SupportsChat, input.SupportsResponses, input.SupportsMessages, input.DefaultMaxOutputTokens,
 		input.Tokenizer, input.CaptureBodies, input.StripParameters, input.Enabled)
 	if err != nil {
 		writeError(w, http.StatusConflict, "model_conflict", "Model alias already exists or provider was not found.")
@@ -458,13 +507,24 @@ func (s *Server) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_model", err.Error())
 		return
 	}
+	var providerID, currentUpstream string
+	if err := s.db.QueryRow(r.Context(), `SELECT provider_id, upstream_model FROM model_routes WHERE id=$1`, r.PathValue("id")).Scan(&providerID, &currentUpstream); err != nil {
+		writeError(w, http.StatusNotFound, "model_not_found", "Model was not found.")
+		return
+	}
+	if input.UpstreamModel != currentUpstream {
+		if err := s.validateAnthropicModel(r.Context(), providerID, input.UpstreamModel); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, "model_validation_failed", err.Error())
+			return
+		}
+	}
 	tag, err := s.db.Exec(r.Context(), `
 		UPDATE model_routes SET public_alias=$2, upstream_model=$3, supports_chat=$4,
-		    supports_responses=$5, default_max_output_tokens=$6, tokenizer=$7,
-		    capture_bodies=$8, strip_parameters=$9, enabled=$10, updated_at=NOW()
+		    supports_responses=$5, supports_messages=$6, default_max_output_tokens=$7, tokenizer=$8,
+		    capture_bodies=$9, strip_parameters=$10, enabled=$11, updated_at=NOW()
 		WHERE id=$1
 	`, r.PathValue("id"), input.PublicAlias, input.UpstreamModel, input.SupportsChat,
-		input.SupportsResponses, input.DefaultMaxOutputTokens, input.Tokenizer,
+		input.SupportsResponses, input.SupportsMessages, input.DefaultMaxOutputTokens, input.Tokenizer,
 		input.CaptureBodies, input.StripParameters, input.Enabled)
 	if err != nil || tag.RowsAffected() == 0 {
 		writeError(w, http.StatusConflict, "model_update_failed", "Model could not be updated.")
@@ -736,6 +796,11 @@ func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleDeleteCredential(w http.ResponseWriter, r *http.Request) {
+	var resources int
+	if err := s.db.QueryRow(r.Context(), `SELECT COUNT(*) FROM anthropic_resources WHERE credential_id=$1`, r.PathValue("id")).Scan(&resources); err == nil && resources > 0 {
+		writeError(w, http.StatusConflict, "credential_has_resources", "Delete the Anthropic files or batches pinned to this API key first.")
+		return
+	}
 	tag, err := s.db.Exec(r.Context(), `DELETE FROM credentials WHERE id=$1`, r.PathValue("id"))
 	if err != nil || tag.RowsAffected() == 0 {
 		writeError(w, http.StatusNotFound, "credential_not_found", "Credential was not found.")
@@ -874,7 +939,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		SELECT id, request_id, model_alias, provider_name, credential_label, endpoint,
 		       attempts, routing_decisions, status_code, latency_ms, input_tokens, output_tokens,
 		       COALESCE(error_code,''), COALESCE(error_message,''), request_body_cipher IS NOT NULL,
-		       body_truncated, created_at
+		       body_truncated, public_protocol, upstream_protocol, upstream_request_id, created_at
 		FROM request_logs
 		WHERE ($1 = '' OR model_alias ILIKE '%' || $1 || '%' OR request_id ILIKE '%' || $1 || '%')
 		  AND ($2 = 0 OR status_code = $2)
@@ -893,7 +958,9 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 			&log.ID, &log.RequestID, &log.ModelAlias, &log.ProviderName,
 			&log.CredentialLabel, &log.Endpoint, &log.Attempts, &log.RoutingDecisions, &log.StatusCode,
 			&log.LatencyMS, &log.InputTokens, &log.OutputTokens, &log.ErrorCode, &log.ErrorMessage,
-			&log.BodyCaptured, &log.BodyTruncated, &log.CreatedAt,
+			&log.BodyCaptured, &log.BodyTruncated,
+			&log.PublicProtocol, &log.UpstreamProtocol, &log.UpstreamRequestID,
+			&log.CreatedAt,
 		); err != nil {
 			writeError(w, http.StatusInternalServerError, "logs_unavailable", "Request logs could not be decoded.")
 			return
@@ -959,6 +1026,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "settings_unavailable", "Settings could not be loaded.")
 		return
 	}
+	settings.BaseURL = strings.TrimRight(s.cfg.PublicBaseURL, "/")
 	writeJSON(w, http.StatusOK, settings)
 }
 
@@ -973,18 +1041,26 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_settings", "Retention or wait settings are outside allowed ranges.")
 		return
 	}
+	if input.DefaultAnthropicProviderID != "" {
+		var valid bool
+		if err := s.db.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM providers WHERE id=$1 AND api_format='anthropic' AND enabled=TRUE)`, input.DefaultAnthropicProviderID).Scan(&valid); err != nil || !valid {
+			writeError(w, http.StatusBadRequest, "invalid_anthropic_provider", "Choose an enabled Anthropic-compatible provider.")
+			return
+		}
+	}
 	_, err := s.db.Exec(r.Context(), `
 		UPDATE app_settings SET metadata_retention_days=$1, body_retention_days=$2,
-		    max_wait_ms=$3, updated_at=NOW() WHERE id=1
-	`, input.MetadataRetentionDays, input.BodyRetentionDays, input.MaxWaitMS)
+		    max_wait_ms=$3, default_anthropic_provider_id=NULLIF($4,''), updated_at=NOW() WHERE id=1
+	`, input.MetadataRetentionDays, input.BodyRetentionDays, input.MaxWaitMS, input.DefaultAnthropicProviderID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "settings_update_failed", "Settings could not be updated.")
 		return
 	}
 	s.audit(r.Context(), adminIDFromContext(r.Context()), "settings.update", "system", "", map[string]any{
-		"metadata_retention_days": input.MetadataRetentionDays,
-		"body_retention_days":     input.BodyRetentionDays,
-		"max_wait_ms":             input.MaxWaitMS,
+		"metadata_retention_days":       input.MetadataRetentionDays,
+		"body_retention_days":           input.BodyRetentionDays,
+		"max_wait_ms":                   input.MaxWaitMS,
+		"default_anthropic_provider_id": input.DefaultAnthropicProviderID,
 	})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -1001,6 +1077,13 @@ func applyProviderHeaders(request *http.Request, provider Provider, secret []byt
 	request.Header.Set(header, value)
 	for key, value := range provider.ExtraHeaders {
 		request.Header.Set(key, value)
+	}
+	if provider.APIFormat == "anthropic" {
+		version := provider.AnthropicVersion
+		if version == "" {
+			version = "2023-06-01"
+		}
+		request.Header.Set("Anthropic-Version", version)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json, text/event-stream")

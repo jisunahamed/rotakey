@@ -25,6 +25,7 @@ export type ModelRoute = {
   upstream_model: string;
   supports_chat: boolean;
   supports_responses: boolean;
+  supports_messages: boolean;
   default_max_output_tokens: number;
   tokenizer: string;
   capture_bodies: boolean;
@@ -62,6 +63,8 @@ export type Provider = {
   timeout_seconds: number;
   enabled: boolean;
   allow_private_network: boolean;
+  api_format: "openai" | "anthropic";
+  anthropic_version: string;
   created_at: string;
   updated_at: string;
   models: ModelRoute[];
@@ -203,6 +206,9 @@ export type RequestLog = {
   provider_name: string;
   credential_label: string;
   endpoint: string;
+  public_protocol: "openai" | "anthropic";
+  upstream_protocol: "openai" | "anthropic";
+  upstream_request_id?: string;
   attempts: Array<{
     credential_id: string;
     credential_label: string;
@@ -244,4 +250,6 @@ export type Settings = {
   metadata_retention_days: number;
   body_retention_days: number;
   max_wait_ms: number;
+  default_anthropic_provider_id: string;
+  base_url: string;
 };
