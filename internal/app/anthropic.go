@@ -107,6 +107,8 @@ func (s *Server) handleOpenAIThroughAnthropic(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, raw []byte, payload map[string]any, route routeRuntime, started time.Time, requestID, publicMode, forcedCredential string, includeOpenAIUsage bool) {
+	compatibilityRemoved := stripTopLevelParameters(payload, route.Model.StripParameters)
+	compatibilityRemoved = appendUniqueStrings(compatibilityRemoved, stripTopLevelParameters(payload, s.learnedCompatibilityParameters(r.Context(), route.Model.ID))...)
 	if numberAsInt64(payload["max_tokens"]) <= 0 {
 		payload["max_tokens"] = route.Model.DefaultMaxOutputTokens
 	}
@@ -155,7 +157,8 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 	var truncated bool
 	retryContext, cancelRetries := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancelRetries()
-	maxAttempts := len(credentials)
+	compatibilityRetriesRemaining := 2
+	maxAttempts := len(credentials) + compatibilityRetriesRemaining
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		selected, reservation, retryAfter, routing, selectErr := s.selectCredentialWithDiagnostics(retryContext, route.Model.ID, credentials, tokenCost, skipped, time.Duration(settings.MaxWaitMS)*time.Millisecond)
 		decisions = append(decisions, routing...)
@@ -183,7 +186,7 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 		if requestErr != nil {
 			attempts = append(attempts, AttemptRecord{CredentialID: selected.ID, CredentialLabel: selected.Label, Error: "connection_error", ErrorMessage: "The upstream connection failed before a response started.", Retryable: true, DurationMS: time.Since(attemptStarted).Milliseconds()})
 			s.markCredentialFailure(r.Context(), selected.ID, 0, 0)
-			if retryContext.Err() == nil && attempt+1 < maxAttempts {
+			if retryContext.Err() == nil && len(skipped) < len(credentials) {
 				continue
 			}
 			finalStatus, finalCode, finalMessage = http.StatusBadGateway, "upstream_unavailable", "The upstream provider could not be reached."
@@ -191,8 +194,38 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 			break
 		}
 		upstreamRequestID = response.Header.Get("Request-Id")
+		if response.StatusCode == http.StatusBadRequest && compatibilityRetriesRemaining > 0 {
+			body, wasTruncated, readErr := boundedBody(response.Body, minInt64(s.cfg.MaxResponseBytes, 2<<20))
+			_ = response.Body.Close()
+			if readErr == nil && !wasTruncated {
+				parameters := unsupportedCompatibilityParameters(body, payload)
+				if len(parameters) > 0 {
+					for _, parameter := range parameters {
+						delete(payload, parameter)
+					}
+					encoded, err = json.Marshal(payload)
+					if err != nil {
+						finalStatus, finalCode, finalMessage = http.StatusBadRequest, "invalid_request_error", "Request could not be prepared after compatibility repair."
+						s.writeMessageProxyError(w, r, publicMode, finalStatus, "invalid_request_error", finalMessage)
+						break
+					}
+					attempts = append(attempts, AttemptRecord{
+						CredentialID: selected.ID, CredentialLabel: selected.Label,
+						StatusCode: response.StatusCode, Error: upstreamErrorCode(body),
+						ErrorMessage: upstreamErrorMessage(body, selected.Secret), Retryable: true,
+						DurationMS: time.Since(attemptStarted).Milliseconds(), RemovedParameters: parameters,
+					})
+					compatibilityRetriesRemaining--
+					compatibilityRemoved = appendUniqueStrings(compatibilityRemoved, parameters...)
+					s.rememberCompatibilityParameters(r.Context(), route.Model.ID, parameters)
+					skipped = map[string]bool{}
+					continue
+				}
+			}
+			response.Body = io.NopCloser(bytes.NewReader(body))
+		}
 		retryable := anthropicRetryableStatus(response.StatusCode)
-		if retryable && retryContext.Err() == nil && attempt+1 < maxAttempts {
+		if retryable && retryContext.Err() == nil && len(skipped) < len(credentials) {
 			body, _, _ := boundedBody(response.Body, 1<<20)
 			_ = response.Body.Close()
 			attempts = append(attempts, AttemptRecord{CredentialID: selected.ID, CredentialLabel: selected.Label, StatusCode: response.StatusCode, Error: upstreamErrorCode(body), ErrorMessage: upstreamErrorMessage(body, selected.Secret), Retryable: true, DurationMS: time.Since(attemptStarted).Milliseconds()})
@@ -229,7 +262,7 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 					finalStatus, finalCode, finalMessage, truncated = http.StatusBadGateway, "upstream_stream_invalid", "The upstream returned an unreadable non-SSE response for a streaming request.", wasTruncated
 					s.markCredentialFailure(r.Context(), selected.ID, http.StatusBadGateway, 0)
 					attempts[len(attempts)-1].Error, attempts[len(attempts)-1].ErrorMessage = finalCode, finalMessage
-					if retryContext.Err() == nil && attempt+1 < maxAttempts {
+					if retryContext.Err() == nil && len(skipped) < len(credentials) {
 						attempts[len(attempts)-1].Retryable = true
 						continue
 					}
@@ -242,7 +275,7 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 					finalResponse = body
 					s.markCredentialFailure(r.Context(), selected.ID, http.StatusBadGateway, 0)
 					attempts[len(attempts)-1].Error, attempts[len(attempts)-1].ErrorMessage = finalCode, finalMessage
-					if retryContext.Err() == nil && attempt+1 < maxAttempts {
+					if retryContext.Err() == nil && len(skipped) < len(credentials) {
 						attempts[len(attempts)-1].Retryable = true
 						continue
 					}
@@ -257,7 +290,7 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 					finalStatus, finalCode, finalMessage = http.StatusBadGateway, "upstream_stream_invalid", "The upstream returned HTTP 200 without a valid Anthropic SSE event."
 					s.markCredentialFailure(r.Context(), selected.ID, http.StatusBadGateway, 0)
 					attempts[len(attempts)-1].Error, attempts[len(attempts)-1].ErrorMessage = finalCode, finalMessage
-					if retryContext.Err() == nil && attempt+1 < maxAttempts {
+					if retryContext.Err() == nil && len(skipped) < len(credentials) {
 						attempts[len(attempts)-1].Retryable = true
 						continue
 					}
@@ -267,6 +300,9 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 				streamSource = prepared
 			}
 			s.markCredentialSuccess(r.Context(), selected.ID)
+			if len(compatibilityRemoved) > 0 {
+				w.Header().Set("X-Rotakey-Removed-Parameters", strings.Join(compatibilityRemoved, ","))
+			}
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Cache-Control", "no-cache")
 			w.Header().Set("X-Accel-Buffering", "no")
@@ -300,6 +336,9 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		s.markCredentialSuccess(r.Context(), selected.ID)
+		if len(compatibilityRemoved) > 0 {
+			w.Header().Set("X-Rotakey-Removed-Parameters", strings.Join(compatibilityRemoved, ","))
+		}
 		body, wasTruncated, readErr := boundedBody(response.Body, s.cfg.MaxResponseBytes)
 		_ = response.Body.Close()
 		if readErr != nil || wasTruncated {
@@ -332,6 +371,8 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) proxyOpenAIUpstreamForAnthropic(w http.ResponseWriter, r *http.Request, raw []byte, payload map[string]any, route routeRuntime, started time.Time, requestID string) {
+	compatibilityRemoved := stripTopLevelParameters(payload, route.Model.StripParameters)
+	compatibilityRemoved = appendUniqueStrings(compatibilityRemoved, stripTopLevelParameters(payload, s.learnedCompatibilityParameters(r.Context(), route.Model.ID))...)
 	if numberAsInt64(payload["max_tokens"]) <= 0 {
 		payload["max_tokens"] = route.Model.DefaultMaxOutputTokens
 	}
@@ -360,7 +401,8 @@ func (s *Server) proxyOpenAIUpstreamForAnthropic(w http.ResponseWriter, r *http.
 	stream, _ := payload["stream"].(bool)
 	retryContext, cancelRetries := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancelRetries()
-	maxAttempts := len(credentials)
+	compatibilityRetriesRemaining := 2
+	maxAttempts := len(credentials) + compatibilityRetriesRemaining
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		selected, reservation, retryAfter, routing, selectErr := s.selectCredentialWithDiagnostics(retryContext, route.Model.ID, credentials, tokenCost, skipped, time.Duration(settings.MaxWaitMS)*time.Millisecond)
 		decisions = append(decisions, routing...)
@@ -385,7 +427,7 @@ func (s *Server) proxyOpenAIUpstreamForAnthropic(w http.ResponseWriter, r *http.
 		if requestErr != nil {
 			attempts = append(attempts, AttemptRecord{CredentialID: selected.ID, CredentialLabel: selected.Label, Error: "connection_error", Retryable: true})
 			s.markCredentialFailure(r.Context(), selected.ID, 0, 0)
-			if retryContext.Err() == nil && attempt+1 < maxAttempts {
+			if retryContext.Err() == nil && len(skipped) < len(credentials) {
 				continue
 			}
 			finalStatus, finalCode, finalMessage = http.StatusBadGateway, "upstream_unavailable", "The upstream provider could not be reached."
@@ -393,8 +435,38 @@ func (s *Server) proxyOpenAIUpstreamForAnthropic(w http.ResponseWriter, r *http.
 			break
 		}
 		upstreamRequestID = valueOr(response.Header.Get("Request-Id"), response.Header.Get("X-Request-Id"))
+		if response.StatusCode == http.StatusBadRequest && compatibilityRetriesRemaining > 0 {
+			body, wasTruncated, readErr := boundedBody(response.Body, minInt64(s.cfg.MaxResponseBytes, 2<<20))
+			_ = response.Body.Close()
+			if readErr == nil && !wasTruncated {
+				parameters := unsupportedCompatibilityParameters(body, payload)
+				if len(parameters) > 0 {
+					for _, parameter := range parameters {
+						delete(payload, parameter)
+					}
+					encoded, err = json.Marshal(payload)
+					if err != nil {
+						finalStatus, finalCode, finalMessage = http.StatusBadRequest, "invalid_request_error", "Request could not be prepared after compatibility repair."
+						writeAnthropicError(w, r, finalStatus, "invalid_request_error", finalMessage)
+						break
+					}
+					attempts = append(attempts, AttemptRecord{
+						CredentialID: selected.ID, CredentialLabel: selected.Label,
+						StatusCode: response.StatusCode, Error: upstreamErrorCode(body),
+						ErrorMessage: upstreamErrorMessage(body, selected.Secret), Retryable: true,
+						RemovedParameters: parameters,
+					})
+					compatibilityRetriesRemaining--
+					compatibilityRemoved = appendUniqueStrings(compatibilityRemoved, parameters...)
+					s.rememberCompatibilityParameters(r.Context(), route.Model.ID, parameters)
+					skipped = map[string]bool{}
+					continue
+				}
+			}
+			response.Body = io.NopCloser(bytes.NewReader(body))
+		}
 		retryable := anthropicRetryableStatus(response.StatusCode)
-		if retryable && retryContext.Err() == nil && attempt+1 < maxAttempts {
+		if retryable && retryContext.Err() == nil && len(skipped) < len(credentials) {
 			body, _, _ := boundedBody(response.Body, 1<<20)
 			_ = response.Body.Close()
 			attempts = append(attempts, AttemptRecord{CredentialID: selected.ID, CredentialLabel: selected.Label, StatusCode: response.StatusCode, Error: upstreamErrorCode(body), Retryable: true})
@@ -413,6 +485,9 @@ func (s *Server) proxyOpenAIUpstreamForAnthropic(w http.ResponseWriter, r *http.
 			break
 		}
 		s.markCredentialSuccess(r.Context(), selected.ID)
+		if len(compatibilityRemoved) > 0 {
+			w.Header().Set("X-Rotakey-Removed-Parameters", strings.Join(compatibilityRemoved, ","))
+		}
 		if stream {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Cache-Control", "no-cache")
