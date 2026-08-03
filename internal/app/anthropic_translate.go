@@ -449,8 +449,18 @@ func translateAnthropicResponseToChat(body []byte, alias string) ([]byte, int64,
 	if err := json.Unmarshal(body, &message); err != nil {
 		return nil, 0, 0, err
 	}
+	// A few nominally Anthropic-compatible gateways return an OpenAI Chat
+	// envelope. Preserve that valid response instead of translating it into an
+	// empty assistant message.
+	if choices, ok := message["choices"].([]any); ok && len(choices) > 0 {
+		encoded, input, output := replaceResponseModel(body, alias)
+		return encoded, input, output, nil
+	}
 	content := strings.Builder{}
 	toolCalls := make([]any, 0)
+	if text, ok := message["content"].(string); ok {
+		content.WriteString(text)
+	}
 	if blocks, ok := message["content"].([]any); ok {
 		for _, raw := range blocks {
 			block, _ := raw.(map[string]any)
@@ -465,6 +475,9 @@ func translateAnthropicResponseToChat(body []byte, alias string) ([]byte, int64,
 				})
 			}
 		}
+	}
+	if content.Len() == 0 && len(toolCalls) == 0 {
+		return nil, 0, 0, fmt.Errorf("Anthropic response contained no text or tool calls")
 	}
 	outputMessage := map[string]any{"role": "assistant", "content": content.String()}
 	if len(toolCalls) > 0 {
@@ -723,16 +736,38 @@ func anthropicJSONToSSE(body []byte) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
-func translateAnthropicStreamToOpenAI(source io.Reader, destination io.Writer, alias string, capture *limitedCapture, includeUsage bool) (string, error) {
+type anthropicStreamStats struct {
+	InputTokens  int64
+	OutputTokens int64
+	ContentParts int
+	SawStop      bool
+}
+
+func translateAnthropicStreamToOpenAI(source io.Reader, destination io.Writer, alias string, capture *limitedCapture, includeUsage bool, stats *anthropicStreamStats) (string, error) {
 	reader := bufio.NewReaderSize(source, 128<<10)
 	id := "chatcmpl_" + strings.TrimPrefix(requestLikeID(), "req_")
 	created := time.Now().Unix()
 	errorCode := ""
 	var inputTokens, outputTokens int64
+	contentParts := 0
+	outputBytes := 0
+	sawStop := false
+	defer func() {
+		if outputTokens == 0 && outputBytes > 0 {
+			outputTokens = int64((outputBytes + 3) / 4)
+		}
+		if stats != nil {
+			stats.InputTokens = inputTokens
+			stats.OutputTokens = outputTokens
+			stats.ContentParts = contentParts
+			stats.SawStop = sawStop
+		}
+	}()
 	for {
 		line, err := reader.ReadString('\n')
-		if strings.HasPrefix(line, "data:") {
-			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		trimmedLine := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmedLine, "data:") {
+			data := strings.TrimSpace(strings.TrimPrefix(trimmedLine, "data:"))
 			var event map[string]any
 			if json.Unmarshal([]byte(data), &event) == nil {
 				delta := map[string]any{}
@@ -756,16 +791,48 @@ func translateAnthropicStreamToOpenAI(source io.Reader, destination io.Writer, a
 							"index": event["index"], "id": block["id"], "type": "function",
 							"function": map[string]any{"name": block["name"], "arguments": ""},
 						}}
+						contentParts++
+					} else if text, ok := block["text"].(string); ok && text != "" {
+						delta["content"] = text
+						contentParts++
+						outputBytes += len(text)
+					} else if thinking, ok := block["thinking"].(string); ok && thinking != "" {
+						delta["reasoning_content"] = thinking
+						contentParts++
+						outputBytes += len(thinking)
 					}
 				case "content_block_delta":
 					blockDelta, _ := event["delta"].(map[string]any)
 					switch blockDelta["type"] {
 					case "text_delta":
-						delta["content"] = blockDelta["text"]
+						if text, ok := blockDelta["text"].(string); ok && text != "" {
+							delta["content"] = text
+							contentParts++
+							outputBytes += len(text)
+						}
+					case "thinking_delta":
+						delta["reasoning_content"] = blockDelta["thinking"]
+						contentParts++
+						outputBytes += len(fmt.Sprint(blockDelta["thinking"]))
 					case "input_json_delta":
 						delta["tool_calls"] = []any{map[string]any{
 							"index": event["index"], "function": map[string]any{"arguments": blockDelta["partial_json"]},
 						}}
+						contentParts++
+						outputBytes += len(fmt.Sprint(blockDelta["partial_json"]))
+					}
+					if _, exists := delta["content"]; !exists {
+						if text, ok := blockDelta["text"].(string); ok && text != "" {
+							delta["content"] = text
+							contentParts++
+							outputBytes += len(text)
+						}
+					}
+				case "completion":
+					if text, ok := event["completion"].(string); ok && text != "" {
+						delta["content"] = text
+						contentParts++
+						outputBytes += len(text)
 					}
 				case "message_delta":
 					top, _ := event["delta"].(map[string]any)
@@ -786,6 +853,16 @@ func translateAnthropicStreamToOpenAI(source io.Reader, destination io.Writer, a
 					writeRaw(destination, capture, append(append([]byte("data: "), encoded...), []byte("\n\n")...))
 					continue
 				case "message_stop":
+					sawStop = true
+					if contentParts == 0 && errorCode == "" {
+						errorCode = "upstream_stream_empty"
+						payload := map[string]any{"error": map[string]any{
+							"type": errorCode, "code": errorCode,
+							"message": "The upstream completed without any text or tool output.",
+						}}
+						encoded, _ := json.Marshal(payload)
+						writeRaw(destination, capture, append(append([]byte("data: "), encoded...), []byte("\n\n")...))
+					}
 					if includeUsage {
 						usageChunk := map[string]any{
 							"id": id, "object": "chat.completion.chunk", "created": created, "model": alias,
@@ -810,6 +887,9 @@ func translateAnthropicStreamToOpenAI(source io.Reader, destination io.Writer, a
 		}
 		if err != nil {
 			if err == io.EOF {
+				if !sawStop && errorCode == "" {
+					return "stream_interrupted", io.ErrUnexpectedEOF
+				}
 				return errorCode, nil
 			}
 			return errorCode, err
@@ -825,7 +905,7 @@ func translateAnthropicStreamToResponses(source io.Reader, destination io.Writer
 	}
 	completed := make(chan result, 1)
 	go func() {
-		code, err := translateAnthropicStreamToOpenAI(source, writer, alias, nil, false)
+		code, err := translateAnthropicStreamToOpenAI(source, writer, alias, nil, false, nil)
 		_ = writer.CloseWithError(err)
 		completed <- result{code: code, err: err}
 	}()

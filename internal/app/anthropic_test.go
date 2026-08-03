@@ -118,14 +118,51 @@ func TestOpenAIStreamOptionsTranslateToAnthropic(t *testing.T) {
 }
 
 func TestAnthropicStreamEmulatesOpenAIUsageChunk(t *testing.T) {
-	source := strings.NewReader("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":2,\"output_tokens\":1}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":4}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	source := strings.NewReader("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":2,\"output_tokens\":1}}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hi\"}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":4}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 	destination := &bytes.Buffer{}
-	if _, err := translateAnthropicStreamToOpenAI(source, destination, "public/model", nil, true); err != nil {
+	if _, err := translateAnthropicStreamToOpenAI(source, destination, "public/model", nil, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	output := destination.String()
 	if !strings.Contains(output, `"choices":[],"created"`) || !strings.Contains(output, `"completion_tokens":4`) || !strings.Contains(output, `"prompt_tokens":12`) || !strings.Contains(output, "data: [DONE]") {
 		t.Fatalf("translated stream = %s", output)
+	}
+}
+
+func TestAnthropicStreamNormalizesCompatibleVariantsAndTracksUsage(t *testing.T) {
+	source := strings.NewReader("  data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":7}}}\n\n  data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"Hello\"}}\n\n  data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"Reason\"}}\n\n  data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n  data: {\"type\":\"message_stop\"}\n\n")
+	destination := &bytes.Buffer{}
+	stats := &anthropicStreamStats{}
+	code, err := translateAnthropicStreamToOpenAI(source, destination, "public/model", nil, true, stats)
+	if err != nil || code != "" {
+		t.Fatalf("stream result = %q, %v", code, err)
+	}
+	output := destination.String()
+	if !strings.Contains(output, `"content":"Hello"`) || !strings.Contains(output, `"reasoning_content":"Reason"`) {
+		t.Fatalf("translated variants = %s", output)
+	}
+	if stats.InputTokens != 7 || stats.OutputTokens != 3 || stats.ContentParts != 2 || !stats.SawStop {
+		t.Fatalf("stream stats = %#v", stats)
+	}
+}
+
+func TestAnthropicStreamRejectsEmptySuccess(t *testing.T) {
+	source := strings.NewReader("data: {\"type\":\"message_start\",\"message\":{}}\n\ndata: {\"type\":\"message_stop\"}\n\n")
+	destination := &bytes.Buffer{}
+	code, err := translateAnthropicStreamToOpenAI(source, destination, "public/model", nil, false, nil)
+	if err != nil || code != "upstream_stream_empty" || !strings.Contains(destination.String(), "completed without any text or tool output") {
+		t.Fatalf("empty stream = %q, %v, %s", code, err, destination.String())
+	}
+}
+
+func TestAnthropicResponseRejectsEmptyAndPreservesOpenAIEnvelope(t *testing.T) {
+	if _, _, _, err := translateAnthropicResponseToChat([]byte(`{"type":"message","content":[]}`), "public/model"); err == nil {
+		t.Fatal("empty Anthropic response was accepted")
+	}
+	input := []byte(`{"id":"chat_1","object":"chat.completion","model":"upstream","choices":[{"message":{"role":"assistant","content":"Hello"}}],"usage":{"prompt_tokens":2,"completion_tokens":1}}`)
+	output, in, out, err := translateAnthropicResponseToChat(input, "public/model")
+	if err != nil || in != 2 || out != 1 || !strings.Contains(string(output), `"model":"public/model"`) || !strings.Contains(string(output), `"content":"Hello"`) {
+		t.Fatalf("OpenAI envelope = %s, %d/%d, %v", output, in, out, err)
 	}
 }
 
@@ -136,7 +173,7 @@ func TestAnthropicJSONResponseCanBecomeOpenAIStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	destination := &bytes.Buffer{}
-	if _, err := translateAnthropicStreamToOpenAI(bytes.NewReader(synthetic), destination, "public/model", nil, true); err != nil {
+	if _, err := translateAnthropicStreamToOpenAI(bytes.NewReader(synthetic), destination, "public/model", nil, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	output := destination.String()

@@ -319,7 +319,16 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 			case messageModeResponses:
 				streamCode, streamErr = translateAnthropicStreamToResponses(streamSource, w, route.Model.PublicAlias, capture)
 			default:
-				streamCode, streamErr = translateAnthropicStreamToOpenAI(streamSource, w, route.Model.PublicAlias, capture, includeOpenAIUsage)
+				stats := &anthropicStreamStats{}
+				streamCode, streamErr = translateAnthropicStreamToOpenAI(streamSource, w, route.Model.PublicAlias, capture, includeOpenAIUsage, stats)
+				inputTokens, outputTokens = stats.InputTokens, stats.OutputTokens
+				actualInput := inputTokens
+				if actualInput == 0 {
+					actualInput = inputEstimate
+				}
+				if actualInput+outputTokens > 0 {
+					_ = s.limiter.AdjustTokens(r.Context(), reservation, actualInput+outputTokens)
+				}
 			}
 			_ = response.Body.Close()
 			if streamCode != "" {
@@ -332,7 +341,7 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 				finalResponse = append([]byte(nil), capture.Bytes()...)
 				truncated = capture.truncated
 			}
-			s.storeRequestLog(r.Context(), logInput{RequestID: requestID, Route: route, Credential: finalCredential, Endpoint: protocolEndpoint(publicMode), Attempts: attempts, RoutingDecisions: decisions, Started: started, StatusCode: finalStatus, InputTokens: inputEstimate, ErrorCode: finalCode, ErrorMessage: finalMessage, RequestBody: raw, ResponseBody: finalResponse, Capture: route.Model.CaptureBodies, Truncated: truncated, PublicProtocol: protocolName(publicMode), UpstreamProtocol: "anthropic", UpstreamRequestID: upstreamRequestID})
+			s.storeRequestLog(r.Context(), logInput{RequestID: requestID, Route: route, Credential: finalCredential, Endpoint: protocolEndpoint(publicMode), Attempts: attempts, RoutingDecisions: decisions, Started: started, StatusCode: finalStatus, InputTokens: inputEstimate, OutputTokens: outputTokens, ErrorCode: finalCode, ErrorMessage: finalMessage, RequestBody: raw, ResponseBody: finalResponse, Capture: route.Model.CaptureBodies, Truncated: truncated, PublicProtocol: protocolName(publicMode), UpstreamProtocol: "anthropic", UpstreamRequestID: upstreamRequestID})
 			return
 		}
 		s.markCredentialSuccess(r.Context(), selected.ID)
