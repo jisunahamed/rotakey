@@ -221,3 +221,7 @@ See [Deployment](DEPLOYMENT.md) for Compose, domain, backup/restore, and GitHub 
 7. Verify shared and model-specific limits against the upstream account's real quota.
 8. For dependency errors, inspect only Rotakey app/PostgreSQL/Redis status before restarting anything.
 9. Preserve logs and take a PostgreSQL backup before changing production configuration.
+
+## 12. Google Gemini
+
+Gemini's native REST root (`https://generativelanguage.googleapis.com/v1beta`) is not an OpenAI-compatible base URL. Configure the provider as **OpenAI-compatible** and use `https://generativelanguage.googleapis.com/v1beta/openai/` with `Authorization: Bearer`. Rotakey recognizes the native root and normalizes it to the compatibility endpoint when saving.

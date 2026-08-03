@@ -8,7 +8,7 @@ COPY web/ ./
 RUN npm run build
 
 FROM golang:1.25-alpine AS go-builder
-ARG ROTAKEY_VERSION=0.1.3
+ARG ROTAKEY_VERSION=0.1.4
 ARG ROTAKEY_COMMIT=unknown
 ARG ROTAKEY_BUILD_TIME=unknown
 WORKDIR /src

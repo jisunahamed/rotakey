@@ -40,6 +40,25 @@ func TestProviderSlugCandidate(t *testing.T) {
 	}
 }
 
+func TestNormalizeGeminiCompatibilityURL(t *testing.T) {
+	want := "https://generativelanguage.googleapis.com/v1beta/openai/"
+	for _, input := range []string{
+		"https://generativelanguage.googleapis.com/v1beta",
+		"https://generativelanguage.googleapis.com/v1beta/",
+	} {
+		if got := normalizeProviderCompatibilityURL(input, "openai"); got != want {
+			t.Fatalf("normalizeProviderCompatibilityURL(%q) = %q, want %q", input, got, want)
+		}
+	}
+	if got := normalizeProviderCompatibilityURL(want, "openai"); got != want {
+		t.Fatalf("compatible URL changed to %q", got)
+	}
+	native := "https://generativelanguage.googleapis.com/v1beta"
+	if got := normalizeProviderCompatibilityURL(native, "anthropic"); got != native {
+		t.Fatalf("Anthropic provider URL changed to %q", got)
+	}
+}
+
 func TestProviderJSONIncludesEmptyCollections(t *testing.T) {
 	raw, err := json.Marshal(Provider{
 		Models:      []ModelRoute{},

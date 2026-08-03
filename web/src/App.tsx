@@ -241,7 +241,7 @@ function App() {
             </button>
           </div>
           <div className="sidebar__version" title={version?.commit ? `Commit ${version.commit}` : undefined}>
-            Rotakey v{version?.current_version ?? "0.1.3"}
+            Rotakey v{version?.current_version ?? "0.1.4"}
             {version?.update_available ? <span>new v{version.latest_version}</span> : <span>up to date</span>}
           </div>
         </div>
@@ -1490,7 +1490,23 @@ type ProviderDraft = {
   timeout_seconds: number; enabled: boolean; allow_private_network: boolean; extra_headers: Record<string, string>;
 };
 
+const GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/";
+
+function geminiCompatibilitySuggestion(baseURL: string, apiFormat: ProviderDraft["api_format"]) {
+  if (apiFormat !== "openai") return "";
+  try {
+    const parsed = new URL(baseURL.trim());
+    if (parsed.hostname.toLowerCase() === "generativelanguage.googleapis.com" && parsed.pathname.replace(/\/+$/, "") === "/v1beta") {
+      return GEMINI_OPENAI_BASE_URL;
+    }
+  } catch {
+    // The regular URL validation remains responsible for incomplete input.
+  }
+  return "";
+}
+
 function ProviderFields({ value, onChange }: { value: ProviderDraft; onChange: (value: ProviderDraft) => void }) {
+  const geminiSuggestion = geminiCompatibilitySuggestion(value.base_url, value.api_format);
   return (
     <div className="form-stack">
       <label className="field"><span>API protocol <small>Controls authentication, validation and upstream request format</small></span><select value={value.api_format} onChange={(event) => {
@@ -1504,7 +1520,11 @@ function ProviderFields({ value, onChange }: { value: ProviderDraft; onChange: (
         });
       }}><option value="openai">OpenAI-compatible</option><option value="anthropic">Anthropic-compatible</option></select></label>
       <label className="field"><span>Name <small>An internal identifier is generated automatically</small></span><input required placeholder="Groq production" value={value.name} onChange={(e) => onChange({ ...value, name: e.target.value })} /></label>
-      <label className="field"><span>{value.api_format === "anthropic" ? "Anthropic-compatible" : "OpenAI-compatible"} base URL <small>Include /v1 when the provider requires it</small></span><input type="url" required placeholder={value.api_format === "anthropic" ? "https://api.anthropic.com/v1" : "https://api.provider.com/v1"} value={value.base_url} onChange={(e) => onChange({ ...value, base_url: e.target.value })} /></label>
+      <label className="field"><span>{value.api_format === "anthropic" ? "Anthropic-compatible" : "OpenAI-compatible"} base URL <small>Include the provider's compatibility prefix</small></span><input type="url" required placeholder={value.api_format === "anthropic" ? "https://api.anthropic.com/v1" : "https://api.provider.com/v1"} value={value.base_url} onChange={(e) => onChange({ ...value, base_url: e.target.value })} /></label>
+      {geminiSuggestion && <InlineNotice>
+        Gemini native API URL detected. OpenAI compatibility requires <code>{geminiSuggestion}</code>{" "}
+        <button type="button" className="button button--quiet" onClick={() => onChange({ ...value, base_url: geminiSuggestion })}>Use compatible URL</button>
+      </InlineNotice>}
       <div className="field-pair">
         <label className="field"><span>Authentication header</span><input value={value.auth_header} onChange={(e) => onChange({ ...value, auth_header: e.target.value })} /></label>
         <label className="field">

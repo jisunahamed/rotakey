@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -244,6 +245,7 @@ func validateProviderInput(input *providerInput) error {
 	if input.APIFormat == "" {
 		input.APIFormat = "openai"
 	}
+	input.BaseURL = normalizeProviderCompatibilityURL(input.BaseURL, input.APIFormat)
 	if input.APIFormat != "openai" && input.APIFormat != "anthropic" {
 		return fmt.Errorf("provider protocol must be openai or anthropic")
 	}
@@ -281,6 +283,26 @@ func validateProviderInput(input *providerInput) error {
 		}
 	}
 	return nil
+}
+
+// normalizeProviderCompatibilityURL turns well-known native API roots into the
+// provider's documented compatibility root. Gemini's native v1beta API does
+// not expose OpenAI /models or /chat/completions at that level; those endpoints
+// live below /openai/.
+func normalizeProviderCompatibilityURL(rawURL, apiFormat string) string {
+	if apiFormat != "openai" {
+		return rawURL
+	}
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || !strings.EqualFold(parsed.Hostname(), "generativelanguage.googleapis.com") {
+		return rawURL
+	}
+	if strings.TrimRight(parsed.Path, "/") != "/v1beta" {
+		return rawURL
+	}
+	parsed.Path = "/v1beta/openai/"
+	parsed.RawPath = ""
+	return parsed.String()
 }
 
 func providerSlugFromName(name string) string {
