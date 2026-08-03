@@ -52,6 +52,8 @@ Providers are collapsed by default. Their header shows the total remaining capac
 
 The model list shows traffic, ready keys, the next key, and the model override state. **Shared only** means that model has no extra override and uses the provider key's shared policy. Selecting a model opens its inspector. The API-key path stays collapsed until you need individual key details, so long providers do not repeat the same pool on every row.
 
+Use **Model routes → Check all models** to run a bounded live capability probe across every configured route. The sweep rail shows progress and retains the exact failure on each row. **Delete failed** lists the affected aliases and requires confirmation before removing only the failed routes. Provider model catalogs also include a master checkbox: without a search it selects every loaded model; with a search it selects or clears every visible result.
+
 In **Model routes → Model override**, choose **All API keys** to enter a policy once and apply it to the whole provider key pool, or choose one API key for an exception. **Use shared only** removes the selected model override and restores the key's shared provider policy. Shared and model-specific policies are both enforced whenever an override exists.
 
 Provider models and API keys are collapsed sections on the Providers page. Open only the section you need; edit or delete a selected model/key from its editor header. Request Logs follow the same pattern: select one compact row, then expand routing attempts or encrypted bodies only when investigating them.

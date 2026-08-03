@@ -241,7 +241,7 @@ function App() {
             </button>
           </div>
           <div className="sidebar__version" title={version?.commit ? `Commit ${version.commit}` : undefined}>
-            Rotakey v{version?.current_version ?? "0.1.5"}
+            Rotakey v{version?.current_version ?? "0.1.6"}
             {version?.update_available ? <span>new v{version.latest_version}</span> : <span>up to date</span>}
           </div>
         </div>
@@ -1897,22 +1897,34 @@ function ModelCatalog({
   });
   const selectable = visible.filter((model) => !existingIDs.has(model.id));
   const selectedCount = Object.keys(selected).length;
+  const selectedVisibleCount = selectable.filter((model) => selected[model.id] !== undefined).length;
+  const allVisibleSelected = selectable.length > 0 && selectedVisibleCount === selectable.length;
+  const toggleVisible = (checked: boolean) => {
+    const next = { ...selected };
+    for (const model of selectable) {
+      if (checked) next[model.id] = next[model.id] || defaultPublicAlias(provider.slug, model.id);
+      else delete next[model.id];
+    }
+    onChange(next);
+  };
   return (
     <section className="model-catalog">
       <header>
         <div><strong>Select public models</strong><small>{selectedCount} selected · {existingIDs.size} already routed</small></div>
         <div className="button-row">
-          <Button type="button" variant="quiet" onClick={() => {
-            const next = { ...selected };
-            for (const model of selectable) next[model.id] = next[model.id] || defaultPublicAlias(provider.slug, model.id);
-            onChange(next);
-          }}>Select visible</Button>
-          {selectedCount > 0 && <Button type="button" variant="quiet" onClick={() => onChange({})}>Clear</Button>}
+          {selectedCount > 0 && <Button type="button" variant="quiet" onClick={() => onChange({})}>Clear all selected</Button>}
         </div>
       </header>
       <label className="catalog-search">
         <Search size={15} />
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter model IDs" />
+      </label>
+      <label className="catalog-select-all">
+        <input type="checkbox" checked={allVisibleSelected} disabled={selectable.length === 0} onChange={(event) => toggleVisible(event.target.checked)} />
+        <span>
+          <strong>{query.trim() ? "Select all search results" : "Select all loaded models"}</strong>
+          <small>{selectedVisibleCount}/{selectable.length} available results selected{existingIDs.size ? ` · ${existingIDs.size} already routed` : ""}</small>
+        </span>
       </label>
       <div className="manual-model-entry">
         <label className="field"><span>Manual model ID <small>Use this when the provider does not expose a model catalog</small></span><input value={manualModel} onChange={(event) => setManualModel(event.target.value)} placeholder="claude-model-id" /></label>
@@ -1958,6 +1970,11 @@ function ModelCatalog({
   );
 }
 
+type ModelProbeResult = {
+  state: "checking" | "passed" | "failed";
+  error?: string;
+};
+
 function ModelsPage({
   navigate,
   notify
@@ -1971,6 +1988,10 @@ function ModelsPage({
   const [providerFilter, setProviderFilter] = useState("");
   const [credentialsOpen, setCredentialsOpen] = useState(false);
   const [modelInspectorOpen, setModelInspectorOpen] = useState(false);
+  const [probeResults, setProbeResults] = useState<Record<string, ModelProbeResult>>({});
+  const [probeProgress, setProbeProgress] = useState({ completed: 0, total: 0, passed: 0, failed: 0 });
+  const [bulkChecking, setBulkChecking] = useState(false);
+  const [deletingFailed, setDeletingFailed] = useState(false);
   const [selectedID, setSelectedID] = useState(() => new URLSearchParams(location.search).get("model") || "");
   const load = useCallback(async () => {
     setLoading(true);
@@ -1999,6 +2020,68 @@ function ModelsPage({
     return matchesProvider && matchesQuery;
   });
   const selected = models.find((model) => model.id === selectedID);
+  const failedProbeIDs = models.filter((model) => probeResults[model.id]?.state === "failed" || (!probeResults[model.id] && model.capability_status === "failed")).map((model) => model.id);
+
+  const checkAllModels = async () => {
+    if (bulkChecking || models.length === 0) return;
+    const targets = [...models];
+    setProbeResults(Object.fromEntries(targets.map((model) => [model.id, { state: "checking" as const }])));
+    setProbeProgress({ completed: 0, total: targets.length, passed: 0, failed: 0 });
+    setBulkChecking(true);
+    let cursor = 0;
+    let completed = 0;
+    let passed = 0;
+    let failed = 0;
+    const worker = async () => {
+      while (cursor < targets.length) {
+        const model = targets[cursor++];
+        try {
+          await api(`/api/admin/models/${model.id}/probe`, { method: "POST" });
+          passed++;
+          setProbeResults((current) => ({ ...current, [model.id]: { state: "passed" } }));
+        } catch (caught) {
+          failed++;
+          setProbeResults((current) => ({ ...current, [model.id]: { state: "failed", error: errorMessage(caught) } }));
+        } finally {
+          completed++;
+          setProbeProgress({ completed, total: targets.length, passed, failed });
+        }
+      }
+    };
+    await worker();
+    setBulkChecking(false);
+    notify(`${passed} model${passed === 1 ? "" : "s"} live · ${failed} failed.`, failed ? "danger" : "success");
+    await load();
+  };
+
+  const deleteFailedModels = async () => {
+    if (deletingFailed || failedProbeIDs.length === 0) return;
+    const aliases = models.filter((model) => failedProbeIDs.includes(model.id)).map((model) => model.public_alias);
+    const preview = aliases.slice(0, 12).join("\n");
+    const remainder = aliases.length > 12 ? `\n…and ${aliases.length - 12} more` : "";
+    if (!confirm(`Delete ${aliases.length} failed model route${aliases.length === 1 ? "" : "s"}? Requests using these aliases will stop immediately.\n\n${preview}${remainder}`)) return;
+    setDeletingFailed(true);
+    let deleted = 0;
+    let deleteErrors = 0;
+    for (const id of failedProbeIDs) {
+      try {
+        await api(`/api/admin/models/${id}`, { method: "DELETE" });
+        deleted++;
+        setProbeResults((current) => {
+          const next = { ...current };
+          delete next[id];
+          return next;
+        });
+      } catch (caught) {
+        deleteErrors++;
+        setProbeResults((current) => ({ ...current, [id]: { state: "failed", error: `Delete failed: ${errorMessage(caught)}` } }));
+      }
+    }
+    setDeletingFailed(false);
+    notify(`${deleted} failed model route${deleted === 1 ? "" : "s"} deleted${deleteErrors ? ` · ${deleteErrors} could not be deleted` : ""}.`, deleteErrors ? "danger" : "success");
+    await load();
+  };
+
   return (
     <div className="resource-page model-page">
       <PageHeader eyebrow="Public contract" title="Model routes" description="Inspect aliases, apply one model limit to one or every API key, and open only the credential detail you need." />
@@ -2010,13 +2093,28 @@ function ModelsPage({
               <label><span className="sr-only">Filter model routes</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter aliases or upstream IDs" /></label>
               <label><span className="sr-only">Provider</span><select value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)}><option value="">All providers</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
             </div>
+            <section className={`model-sweep${bulkChecking ? " is-running" : ""}`} aria-live="polite">
+              <div className="model-sweep__readout">
+                <span>Live model sweep</span>
+                <strong>{bulkChecking ? `${probeProgress.completed}/${probeProgress.total} checked` : probeProgress.total ? `${probeProgress.passed} live · ${probeProgress.failed} failed` : `${models.length} routes ready to check`}</strong>
+              </div>
+              <div className="model-sweep__track" role="progressbar" aria-label="Model check progress" aria-valuemin={0} aria-valuemax={probeProgress.total || models.length} aria-valuenow={probeProgress.completed}>
+                <span style={{ width: `${probeProgress.total ? (probeProgress.completed / probeProgress.total) * 100 : 0}%` }} />
+              </div>
+              <div className="button-row">
+                {failedProbeIDs.length > 0 && <Button variant="danger" disabled={bulkChecking || deletingFailed} onClick={() => void deleteFailedModels()}><Trash2 size={13} /> {deletingFailed ? "Deleting…" : `Delete ${failedProbeIDs.length} failed`}</Button>}
+                <Button variant="quiet" disabled={bulkChecking || deletingFailed} onClick={() => void checkAllModels()}><Activity size={13} /> {bulkChecking ? "Checking all…" : "Check all models"}</Button>
+              </div>
+            </section>
             <header><span>Public alias</span><span>Provider</span><span>Keys</span></header>
             <div>
               {filtered.map((model) => {
                 const ready = model.credentials.filter((item) => item.enabled && item.status === "healthy").length;
+                const probe = probeResults[model.id];
+                const capabilityLabel = probe?.state === "checking" ? "checking now" : probe?.state === "passed" ? "live" : probe?.state === "failed" ? `failed · ${probe.error || "probe failed"}` : model.capability_status === "probe_verified" ? "probe verified" : model.capability_status === "catalog_verified" ? "catalog verified" : model.capability_status === "failed" ? `failed · ${model.capability_error || "probe failed"}` : "unverified";
                 return (
                   <button key={model.id} className={selectedID === model.id ? "is-selected" : ""} onClick={() => { setSelectedID(model.id); setModelInspectorOpen(true); }}>
-                    <span><StatusDot state={!model.enabled ? "disabled" : ready ? "healthy" : "exhausted"} /><code>{model.public_alias}</code><small>{model.upstream_model === model.public_alias ? (model.supports_responses ? "Chat + Responses" : "Chat Completions") : model.upstream_model} · {model.capability_status === "probe_verified" ? "probe verified" : model.capability_status === "catalog_verified" ? "catalog verified" : "unverified"}</small></span>
+                    <span><StatusDot state={probe?.state === "failed" || model.capability_status === "failed" ? "exhausted" : !model.enabled ? "disabled" : ready ? "healthy" : "exhausted"} /><code>{model.public_alias}</code><small title={probe?.error || model.capability_error}>{model.upstream_model === model.public_alias ? (model.supports_responses ? "Chat + Responses" : "Chat Completions") : model.upstream_model} · {capabilityLabel}</small></span>
                     <span>{model.provider.name}</span>
                     <span>{ready}/{model.credentials.length}</span>
                     <ChevronRight size={13} />

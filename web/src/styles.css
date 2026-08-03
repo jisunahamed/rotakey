@@ -1471,6 +1471,28 @@ fieldset legend {
   outline: 0;
 }
 
+.catalog-select-all {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 11px;
+  background: color-mix(in srgb, var(--blue) 5%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--blue) 28%, var(--line));
+  cursor: pointer;
+}
+
+.catalog-select-all input {
+  width: 16px;
+  height: 16px;
+}
+
+.catalog-select-all span,
+.catalog-select-all strong,
+.catalog-select-all small { display: block; }
+.catalog-select-all strong { font-size: 0.7rem; }
+.catalog-select-all small { margin-top: 2px; color: var(--muted); font-size: 0.61rem; }
+
 .model-catalog__list {
   display: grid;
   max-height: 390px;
@@ -2461,6 +2483,10 @@ button.table-row:hover {
   }
 
   .validation-action .button {
+    width: 100%;
+  }
+
+  .model-catalog > header .button {
     width: 100%;
   }
 
