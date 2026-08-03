@@ -103,3 +103,25 @@ func TestModelCapabilityProfileUsesProtocolTranslation(t *testing.T) {
 		t.Fatalf("OpenAI capabilities = %#v / %#v", openAI, openAIInput)
 	}
 }
+
+func TestIsGeminiOpenAIProvider(t *testing.T) {
+	valid := []Provider{
+		{APIFormat: "openai", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai/"},
+		{BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai"},
+	}
+	for _, provider := range valid {
+		if !isGeminiOpenAIProvider(provider) {
+			t.Fatalf("Gemini provider was not recognized: %#v", provider)
+		}
+	}
+	invalid := []Provider{
+		{APIFormat: "anthropic", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai/"},
+		{APIFormat: "openai", BaseURL: "https://generativelanguage.googleapis.com/v1beta"},
+		{APIFormat: "openai", BaseURL: "https://example.com/v1beta/openai/"},
+	}
+	for _, provider := range invalid {
+		if isGeminiOpenAIProvider(provider) {
+			t.Fatalf("non-Gemini provider was recognized: %#v", provider)
+		}
+	}
+}

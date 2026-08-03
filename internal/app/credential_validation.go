@@ -142,6 +142,17 @@ func inspectProviderSecret(ctx context.Context, provider Provider, secret []byte
 		result.Warning = "The provider returned an empty model catalog. Check that the base URL includes the provider's API prefix (usually /v1)."
 		return result
 	}
+	// Gemini's OpenAI catalog contains models with different capabilities. The
+	// first catalog entry is not guaranteed to accept Chat Completions, so using
+	// it as a provider-wide protocol probe can reject an otherwise valid key and
+	// compatibility endpoint. A successful authenticated OpenAI-shaped catalog
+	// is sufficient here; routes can then be checked by the model-specific probe.
+	if isGeminiOpenAIProvider(provider) {
+		result.ProtocolVerified = true
+		result.DetectedProtocol = "openai"
+		result.Valid = true
+		return result
+	}
 	verified, detected, status, warning := verifyProviderProtocol(ctx, client, provider, secret, result.Models[0].ID)
 	result.ProtocolVerified = verified
 	result.DetectedProtocol = detected
@@ -154,6 +165,17 @@ func inspectProviderSecret(ctx context.Context, provider Provider, secret []byte
 	}
 	result.Valid = true
 	return result
+}
+
+func isGeminiOpenAIProvider(provider Provider) bool {
+	if provider.APIFormat != "" && provider.APIFormat != "openai" {
+		return false
+	}
+	parsed, err := url.Parse(strings.TrimSpace(provider.BaseURL))
+	if err != nil || !strings.EqualFold(parsed.Hostname(), "generativelanguage.googleapis.com") {
+		return false
+	}
+	return strings.TrimRight(parsed.Path, "/") == "/v1beta/openai"
 }
 
 func verifyProviderProtocol(ctx context.Context, client *http.Client, provider Provider, secret []byte, model string) (bool, string, int, string) {
