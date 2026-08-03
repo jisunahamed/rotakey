@@ -97,6 +97,8 @@ Before response headers/body begin, Rotakey can try every other eligible key for
 
 ## 7. Compatibility and parameter adaptation
 
+If a provider returns HTTP 400 and explicitly says that a safe optional field is unsupported or deprecated for the selected model, Rotakey removes that field and retries before returning an error. For example, a response saying `` `temperature` is deprecated for this model `` is repaired automatically. The successful response includes `X-Rotakey-Removed-Parameters`, the failed and repaired attempts remain visible in Request logs, and the model-specific result is cached for 24 hours. Rotakey never auto-removes core semantic fields such as `model`, `messages`, `tools`, or `response_format`.
+
 OpenAI clients use the `/v1` base URL. Anthropic SDKs and Claude Code use the host root because they append `/v1/messages` themselves. Both protocols use the same Rotakey gateway key.
 
 | Client contract | Base URL | Authentication | Required version header |

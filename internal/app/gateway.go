@@ -20,10 +20,23 @@ const adaptiveCompatibilityTTL = 24 * time.Hour
 
 var (
 	adaptiveCompatibilityParameters = map[string]bool{
-		"thinking":         true,
-		"reasoning":        true,
-		"reasoning_effort": true,
-		"verbosity":        true,
+		"thinking":            true,
+		"reasoning":           true,
+		"reasoning_effort":    true,
+		"verbosity":           true,
+		"temperature":         true,
+		"top_p":               true,
+		"frequency_penalty":   true,
+		"presence_penalty":    true,
+		"seed":                true,
+		"logprobs":            true,
+		"top_logprobs":        true,
+		"parallel_tool_calls": true,
+		"service_tier":        true,
+		"stream_options":      true,
+		"store":               true,
+		"metadata":            true,
+		"user":                true,
 	}
 	unsupportedParameterPattern = regexp.MustCompile(
 		`(?i)(?:unrecognized request argument supplied|unsupported (?:request )?(?:argument|parameter)(?:\(s\))?)\s*:\s*['"` + "`" + `]?([A-Za-z][A-Za-z0-9_.-]{0,63})`,
@@ -31,6 +44,11 @@ var (
 	suggestedReplacementPattern = regexp.MustCompile(
 		`(?i)\buse\s+['"` + "`" + `]?([A-Za-z][A-Za-z0-9_.-]{0,63})['"` + "`" + `]?\s+instead\b`,
 	)
+	deprecatedParameterPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)['"` + "`" + `]?([A-Za-z][A-Za-z0-9_.-]{0,63})['"` + "`" + `]?\s+is\s+deprecated(?:\s+for\s+(?:this|the)\s+model)?`),
+		regexp.MustCompile(`(?i)(?:parameter|argument)\s+['"` + "`" + `]?([A-Za-z][A-Za-z0-9_.-]{0,63})['"` + "`" + `]?\s+(?:is|has\s+been)\s+deprecated`),
+		regexp.MustCompile(`(?i)['"` + "`" + `]?([A-Za-z][A-Za-z0-9_.-]{0,63})['"` + "`" + `]?\s+is\s+not\s+supported\s+(?:for|with)\s+this\s+model`),
+	}
 )
 
 type compatibilityReplacement struct {
@@ -641,7 +659,7 @@ func unsupportedCompatibilityParameters(body []byte, payload map[string]any) []s
 		} `json:"error"`
 	}
 	if json.Unmarshal(body, &envelope) == nil {
-		matches := unsupportedParameterPattern.FindAllStringSubmatch(envelope.Error.Message, -1)
+		matches := compatibilityParameterMatches(envelope.Error.Message)
 		code, _ := envelope.Error.Code.(string)
 		signal := strings.Contains(strings.ToLower(code), "unrecognized_request_argument") ||
 			strings.Contains(strings.ToLower(code), "unsupported_parameter") ||
@@ -674,6 +692,14 @@ func unsupportedCompatibilityParameters(body []byte, payload map[string]any) []s
 		return nil
 	}
 	return parameters
+}
+
+func compatibilityParameterMatches(message string) [][]string {
+	matches := unsupportedParameterPattern.FindAllStringSubmatch(message, -1)
+	for _, pattern := range deprecatedParameterPatterns {
+		matches = append(matches, pattern.FindAllStringSubmatch(message, -1)...)
+	}
+	return matches
 }
 
 func unsupportedCompatibilityReplacement(body []byte, payload map[string]any) (compatibilityReplacement, bool) {

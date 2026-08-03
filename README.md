@@ -215,9 +215,9 @@ Overview keeps providers collapsed by default. Expanding a provider reveals its 
 
 ### Provider-specific request compatibility
 
-Some OpenAI-compatible providers reject otherwise common top-level request fields. When an upstream explicitly reports an unsupported optional compatibility hint, Rotakey removes the reported field and performs a bounded retry. Learned fields are cached per model route for 24 hours, appear in the request's routing attempts, and are returned in `X-Rotakey-Removed-Parameters`.
+Some OpenAI-compatible providers reject otherwise common top-level request fields. When an upstream explicitly reports an optional tuning or telemetry field as unsupported or deprecated for that model, Rotakey removes the reported field and performs a bounded retry. This includes common compatibility differences such as `temperature`, `top_p`, penalties, `seed`, log probabilities, reasoning hints, and stream options. Essential semantic fields such as `model`, `messages`, `tools`, and `response_format` are never silently removed. Learned fields are cached per model route for 24 hours, appear in the request's routing attempts, and are returned in `X-Rotakey-Removed-Parameters`.
 
-Adaptive removal is intentionally limited to safe behavior hints: `thinking`, `reasoning`, `reasoning_effort`, and `verbosity`. Core request fields and arbitrary parameters are never silently removed. For a permanent or provider-specific override, edit a model route and add a field under **Remove unsupported request fields**.
+Adaptive removal is intentionally limited to an allowlist of optional behavior, sampling, telemetry, and stream-hint fields. Core request fields and arbitrary parameters are never silently removed. For a permanent or provider-specific override, edit a model route and add a field under **Remove unsupported request fields**.
 
 When an upstream explicitly recommends an equivalent output-limit field, Rotakey preserves the value and learns the model-specific replacement—for example, `max_tokens → max_completion_tokens`. Safe replacements appear in routing attempts and `X-Rotakey-Replaced-Parameters`; arbitrary parameter renames are never inferred.
 

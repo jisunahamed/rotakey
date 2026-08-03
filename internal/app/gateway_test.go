@@ -86,6 +86,22 @@ func TestUnsupportedCompatibilityParameters(t *testing.T) {
 			want: []string{"reasoning_effort"},
 		},
 		{
+			name: "deprecated model temperature",
+			body: `{"error":{"message":"` + "`" + `temperature` + "`" + ` is deprecated for this model.","type":"invalid_request_error","code":"invalid_request_error"}}`,
+			payload: map[string]any{
+				"model": "claude-sonnet-5", "temperature": 0.7,
+			},
+			want: []string{"temperature"},
+		},
+		{
+			name: "model does not support seed",
+			body: `{"error":{"message":"seed is not supported with this model","type":"invalid_request_error"}}`,
+			payload: map[string]any{
+				"model": "some-model", "seed": 42,
+			},
+			want: []string{"seed"},
+		},
+		{
 			name: "param requires unsupported signal",
 			body: `{"error":{"message":"thinking has an invalid value","param":"thinking","code":"invalid_value"}}`,
 			payload: map[string]any{
