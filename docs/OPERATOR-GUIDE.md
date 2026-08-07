@@ -227,3 +227,5 @@ See [Deployment](DEPLOYMENT.md) for Compose, domain, backup/restore, and GitHub 
 ## 12. Google Gemini
 
 Gemini's native REST root (`https://generativelanguage.googleapis.com/v1beta`) is not an OpenAI-compatible base URL. Configure the provider as **OpenAI-compatible** and use `https://generativelanguage.googleapis.com/v1beta/openai/` with `Authorization: Bearer`. Rotakey recognizes the native root and normalizes it to the compatibility endpoint when saving. A successful authenticated OpenAI-format model catalog validates the provider; use the route probe for a capability check of an individual Gemini model.
+
+Gemini model catalogs can expose IDs like `models/gemini-2.5-flash`. You may keep a public alias such as `google/models/gemini-2.5-flash`; Rotakey still sends the upstream request with the Gemini OpenAI-compatible model ID that Google expects.

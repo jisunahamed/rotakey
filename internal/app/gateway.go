@@ -244,7 +244,7 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 			"parameters", formatCompatibilityReplacements(replacedParameters),
 		)
 	}
-	upstreamPayload["model"] = route.Model.UpstreamModel
+	upstreamPayload["model"] = upstreamModelForProvider(route.Provider, route.Model.UpstreamModel)
 	inputEstimate, outputReservation := prepareTokenReservation(
 		upstreamPayload,
 		endpoint,

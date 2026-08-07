@@ -75,7 +75,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		s.rejectAnthropic(w, r, http.StatusBadRequest, "unsupported_feature", err.Error(), logInput{RequestID: requestID, Route: route, Endpoint: "messages", Started: started, RequestBody: raw, PublicProtocol: "anthropic", UpstreamProtocol: "openai"})
 		return
 	}
-	chat["model"] = route.Model.UpstreamModel
+	chat["model"] = upstreamModelForProvider(route.Provider, route.Model.UpstreamModel)
 	s.proxyOpenAIUpstreamForAnthropic(w, r, raw, chat, route, started, requestID)
 }
 

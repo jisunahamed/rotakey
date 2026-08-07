@@ -63,6 +63,30 @@ func TestInspectProviderSecretRejectsProtocolMismatch(t *testing.T) {
 	}
 }
 
+func TestInspectProviderSecretDoesNotVerifyOpenAIErrorEnvelope(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1/models" {
+			_, _ = w.Write([]byte(`{"data":[{"id":"missing-model"}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"message":"model was not found","code":"model_not_found"}}`))
+	}))
+	defer upstream.Close()
+
+	result := inspectProviderSecret(context.Background(), Provider{
+		BaseURL: upstream.URL + "/v1", APIFormat: "openai", AuthHeader: "Authorization",
+		AuthScheme: "Bearer", TimeoutSeconds: 5, AllowPrivateNetwork: true,
+	}, []byte("valid-key"))
+	if result.Valid || result.ProtocolVerified || result.StatusCode != http.StatusNotFound {
+		t.Fatalf("inspection = %#v", result)
+	}
+	if result.DetectedProtocol != "openai" || result.Warning == "" {
+		t.Fatalf("warning did not preserve protocol diagnosis: %#v", result)
+	}
+}
+
 func TestInspectProviderSecretRejectsInvalidKey(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -123,5 +147,19 @@ func TestIsGeminiOpenAIProvider(t *testing.T) {
 		if isGeminiOpenAIProvider(provider) {
 			t.Fatalf("non-Gemini provider was recognized: %#v", provider)
 		}
+	}
+}
+
+func TestUpstreamModelForGeminiOpenAIProvider(t *testing.T) {
+	provider := Provider{APIFormat: "openai", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai/"}
+	if got := upstreamModelForProvider(provider, "models/gemini-2.5-flash"); got != "gemini-2.5-flash" {
+		t.Fatalf("Gemini upstream model = %q", got)
+	}
+	if got := upstreamModelForProvider(provider, "gemini-2.5-flash"); got != "gemini-2.5-flash" {
+		t.Fatalf("Gemini upstream model without prefix = %q", got)
+	}
+	other := Provider{APIFormat: "openai", BaseURL: "https://example.com/v1"}
+	if got := upstreamModelForProvider(other, "models/gemini-2.5-flash"); got != "models/gemini-2.5-flash" {
+		t.Fatalf("non-Gemini upstream model changed to %q", got)
 	}
 }

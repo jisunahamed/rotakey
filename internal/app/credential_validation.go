@@ -178,6 +178,14 @@ func isGeminiOpenAIProvider(provider Provider) bool {
 	return strings.TrimRight(parsed.Path, "/") == "/v1beta/openai"
 }
 
+func upstreamModelForProvider(provider Provider, model string) string {
+	model = strings.TrimSpace(model)
+	if isGeminiOpenAIProvider(provider) {
+		return strings.TrimPrefix(model, "models/")
+	}
+	return model
+}
+
 func verifyProviderProtocol(ctx context.Context, client *http.Client, provider Provider, secret []byte, model string) (bool, string, int, string) {
 	protocol := provider.APIFormat
 	if protocol == "" {
@@ -185,7 +193,7 @@ func verifyProviderProtocol(ctx context.Context, client *http.Client, provider P
 	}
 	path := "/chat/completions"
 	payload := map[string]any{
-		"model":      model,
+		"model":      upstreamModelForProvider(provider, model),
 		"messages":   []any{map[string]any{"role": "user", "content": "Reply with one character."}},
 		"max_tokens": 1,
 	}
@@ -220,8 +228,24 @@ func verifyProviderProtocol(ctx context.Context, client *http.Client, provider P
 	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
 		return false, detected, response.StatusCode, fmt.Sprintf("API key was rejected by the provider (HTTP %d).", response.StatusCode)
 	}
-	if detected == protocol {
+	if response.StatusCode >= 200 && response.StatusCode < 300 && detected == protocol {
 		return true, detected, response.StatusCode, ""
+	}
+	if detected == protocol {
+		message := upstreamErrorMessage(raw, secret)
+		if message == "" {
+			message = fmt.Sprintf("Provider returned HTTP %d.", response.StatusCode)
+		}
+		switch {
+		case response.StatusCode == http.StatusNotFound:
+			return false, detected, response.StatusCode, fmt.Sprintf("Model or endpoint was not found during protocol check. Check the base URL path and the upstream model ID. Provider said: %s", message)
+		case response.StatusCode == http.StatusBadRequest:
+			return false, detected, response.StatusCode, fmt.Sprintf("The provider understood %s-compatible JSON but rejected the protocol probe. Check model availability and required request parameters. Provider said: %s", protocol, message)
+		case response.StatusCode >= 500:
+			return false, detected, response.StatusCode, fmt.Sprintf("Provider returned HTTP %d during protocol check. This is usually an upstream outage or proxy issue. Provider said: %s", response.StatusCode, message)
+		default:
+			return false, detected, response.StatusCode, fmt.Sprintf("Provider returned HTTP %d during protocol check. Provider said: %s", response.StatusCode, message)
+		}
 	}
 	return false, detected, response.StatusCode, fmt.Sprintf("Base URL/API format mismatch: POST %s returned HTTP %d without a valid %s response envelope. Check the API prefix and selected protocol.", path, response.StatusCode, protocol)
 }
@@ -561,8 +585,9 @@ func (s *Server) probeProviderModel(ctx context.Context, providerID string, inpu
 	probeContext, cancel := context.WithTimeout(ctx, minDuration(time.Duration(provider.TimeoutSeconds)*time.Second, 15*time.Second))
 	defer cancel()
 	path := "/chat/completions"
+	upstreamModel := upstreamModelForProvider(provider, input.UpstreamModel)
 	payload := map[string]any{
-		"model":    input.UpstreamModel,
+		"model":    upstreamModel,
 		"messages": []any{map[string]any{"role": "user", "content": "Reply with one character."}},
 	}
 	if provider.APIFormat == "anthropic" {
@@ -570,7 +595,7 @@ func (s *Server) probeProviderModel(ctx context.Context, providerID string, inpu
 		payload["max_tokens"] = 1
 	} else if !input.SupportsChat && input.SupportsResponses {
 		path = "/responses"
-		payload = map[string]any{"model": input.UpstreamModel, "input": "Reply with one character."}
+		payload = map[string]any{"model": upstreamModel, "input": "Reply with one character."}
 	}
 	body, _ := json.Marshal(payload)
 	request, _ := http.NewRequestWithContext(probeContext, http.MethodPost, strings.TrimRight(provider.BaseURL, "/")+path, strings.NewReader(string(body)))
