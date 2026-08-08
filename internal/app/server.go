@@ -91,8 +91,10 @@ func (s *Server) routes() http.Handler {
 
 	mux.Handle("GET /v1/models", s.requireGatewayKey(http.HandlerFunc(s.handleModels)))
 	mux.Handle("GET /v1/models/{id...}", s.requireGatewayKey(http.HandlerFunc(s.handleModel)))
+	mux.Handle("GET /v1/codex/manifest", s.requireGatewayKey(http.HandlerFunc(s.handleCodexManifest)))
 	mux.Handle("POST /v1/chat/completions", s.requireGatewayKey(http.HandlerFunc(s.handleChatCompletions)))
 	mux.Handle("POST /v1/responses", s.requireGatewayKey(http.HandlerFunc(s.handleResponses)))
+	mux.Handle("POST /v1/responses/compact", s.requireGatewayKey(http.HandlerFunc(s.handleResponsesCompact)))
 	mux.Handle("POST /v1/messages", s.requireGatewayKey(http.HandlerFunc(s.handleAnthropicMessages)))
 	mux.Handle("POST /v1/messages/count_tokens", s.requireGatewayKey(http.HandlerFunc(s.handleAnthropicCountTokens)))
 	mux.Handle("POST /v1/messages/batches", s.requireGatewayKey(http.HandlerFunc(s.handleAnthropicBatchCreate)))

@@ -622,11 +622,18 @@ func copyStreamingResponse(destination http.ResponseWriter, source io.Reader, ca
 
 func readRequestBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
-	body, err := io.ReadAll(r.Body)
+	raw, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, err
 	}
-	return body, nil
+	if !isCompressed(r) {
+		return raw, nil
+	}
+	decompressed, decErr := decompressBody(strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding"))), raw, limit)
+	if decErr != nil {
+		return nil, decErr
+	}
+	return decompressed, nil
 }
 
 func cloneMap(source map[string]any) map[string]any {

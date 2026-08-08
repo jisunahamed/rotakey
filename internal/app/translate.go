@@ -268,11 +268,15 @@ func translateChatStream(source io.Reader, destination io.Writer, publicAlias st
 	}
 }
 
-func writeSSE(destination io.Writer, capture *limitedCapture, event string, payload any) {
+func writeSSEWithSeq(destination io.Writer, capture *limitedCapture, event string, seq int, payload any) {
 	data, _ := json.Marshal(payload)
 	writeRaw(destination, capture, []byte("event: "+event+"\ndata: "))
 	writeRaw(destination, capture, data)
 	writeRaw(destination, capture, []byte("\n\n"))
+}
+
+func writeSSE(destination io.Writer, capture *limitedCapture, event string, payload any) {
+	writeSSEWithSeq(destination, capture, event, 0, payload)
 }
 
 func writeRaw(destination io.Writer, capture *limitedCapture, data []byte) {
