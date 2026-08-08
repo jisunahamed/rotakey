@@ -1260,6 +1260,13 @@ func upstreamErrorCode(body []byte) string {
 				}
 			}
 		}
+		if detail, ok := payload["detail"].(map[string]any); ok {
+			for _, key := range []string{"code", "type"} {
+				if value, ok := detail[key].(string); ok && value != "" {
+					return value
+				}
+			}
+		}
 	}
 	return "upstream_error"
 }
@@ -1272,6 +1279,17 @@ func upstreamErrorMessage(body, secret []byte) string {
 	message := ""
 	if rawError, ok := payload["error"].(map[string]any); ok {
 		message, _ = rawError["message"].(string)
+	}
+	if message == "" {
+		switch detail := payload["detail"].(type) {
+		case string:
+			message = detail
+		case map[string]any:
+			message, _ = detail["message"].(string)
+			if message == "" {
+				message, _ = detail["detail"].(string)
+			}
+		}
 	}
 	if message == "" {
 		message, _ = payload["message"].(string)

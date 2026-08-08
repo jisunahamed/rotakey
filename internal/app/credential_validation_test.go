@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -84,6 +85,54 @@ func TestInspectProviderSecretDoesNotVerifyOpenAIErrorEnvelope(t *testing.T) {
 	}
 	if result.DetectedProtocol != "openai" || result.Warning == "" {
 		t.Fatalf("warning did not preserve protocol diagnosis: %#v", result)
+	}
+}
+
+func TestInspectNVIDIAProviderUsesCatalogAndDefersRouteProbe(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1/models" {
+			_, _ = w.Write([]byte(`{"data":[{"id":"catalog-only-model"}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"detail":"model is not available for inference"}`))
+	}))
+	defer upstream.Close()
+
+	result := inspectProviderSecret(context.Background(), Provider{
+		BaseURL: upstream.URL + "/v1", APIFormat: "openai", AuthHeader: "Authorization",
+		AuthScheme: "Bearer", TimeoutSeconds: 5, AllowPrivateNetwork: true,
+	}, []byte("valid-key"))
+	if result.Valid {
+		t.Fatal("ordinary provider with an unavailable probe model must not be accepted")
+	}
+
+	// The public NVIDIA hostname takes the catalog-only validation path. The
+	// hostname predicate is covered separately to keep this test local.
+	if !isNVIDIAOpenAIProvider(Provider{BaseURL: "https://integrate.api.nvidia.com/v1", APIFormat: "openai"}) {
+		t.Fatal("NVIDIA compatibility URL was not recognized")
+	}
+}
+
+func TestVerifyProviderProtocolExplainsUnknownOpenAI404(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"detail":"model missing"}`))
+	}))
+	defer upstream.Close()
+	provider := Provider{BaseURL: upstream.URL, APIFormat: "openai", TimeoutSeconds: 5, AllowPrivateNetwork: true}
+	client, err := upstreamClient(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, _, status, warning := verifyProviderProtocol(context.Background(), client, provider, []byte("key"), "missing")
+	if verified || status != http.StatusNotFound {
+		t.Fatalf("result = verified=%v status=%d", verified, status)
+	}
+	if !strings.Contains(warning, "protocol probe returned HTTP 404") || !strings.Contains(warning, "model missing") {
+		t.Fatalf("warning = %q", warning)
 	}
 }
 

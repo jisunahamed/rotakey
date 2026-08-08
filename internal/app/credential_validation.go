@@ -142,15 +142,18 @@ func inspectProviderSecret(ctx context.Context, provider Provider, secret []byte
 		result.Warning = "The provider returned an empty model catalog. Check that the base URL includes the provider's API prefix (usually /v1)."
 		return result
 	}
-	// Gemini's OpenAI catalog contains models with different capabilities. The
-	// first catalog entry is not guaranteed to accept Chat Completions, so using
-	// it as a provider-wide protocol probe can reject an otherwise valid key and
-	// compatibility endpoint. A successful authenticated OpenAI-shaped catalog
-	// is sufficient here; routes can then be checked by the model-specific probe.
-	if isGeminiOpenAIProvider(provider) {
+	// A provider-wide inference probe uses an arbitrary catalog entry. Some
+	// providers expose catalog-only, entitlement-gated, or non-chat entries, so
+	// that probe can reject a valid credential. Their authenticated OpenAI
+	// catalog is enough to validate the key and base URL; each selected route is
+	// checked separately by the model capability probe.
+	if catalogVerifiesOpenAIProvider(provider) {
 		result.ProtocolVerified = true
 		result.DetectedProtocol = "openai"
 		result.Valid = true
+		if isNVIDIAOpenAIProvider(provider) {
+			result.Warning = "NVIDIA model catalog and API key verified. Use Check all models to verify each selected inference route."
+		}
 		return result
 	}
 	verified, detected, status, warning := verifyProviderProtocol(ctx, client, provider, secret, result.Models[0].ID)
@@ -176,6 +179,21 @@ func isGeminiOpenAIProvider(provider Provider) bool {
 		return false
 	}
 	return strings.TrimRight(parsed.Path, "/") == "/v1beta/openai"
+}
+
+func isNVIDIAOpenAIProvider(provider Provider) bool {
+	if provider.APIFormat != "" && provider.APIFormat != "openai" {
+		return false
+	}
+	parsed, err := url.Parse(strings.TrimSpace(provider.BaseURL))
+	if err != nil || !strings.EqualFold(parsed.Hostname(), "integrate.api.nvidia.com") {
+		return false
+	}
+	return strings.TrimRight(parsed.Path, "/") == "/v1"
+}
+
+func catalogVerifiesOpenAIProvider(provider Provider) bool {
+	return isGeminiOpenAIProvider(provider) || isNVIDIAOpenAIProvider(provider)
 }
 
 func upstreamModelForProvider(provider Provider, model string) string {
@@ -246,6 +264,13 @@ func verifyProviderProtocol(ctx context.Context, client *http.Client, provider P
 		default:
 			return false, detected, response.StatusCode, fmt.Sprintf("Provider returned HTTP %d during protocol check. Provider said: %s", response.StatusCode, message)
 		}
+	}
+	if response.StatusCode == http.StatusNotFound {
+		message := upstreamErrorMessage(raw, secret)
+		if message == "" {
+			message = "The provider did not return a standard error message."
+		}
+		return false, detected, response.StatusCode, fmt.Sprintf("The protocol probe returned HTTP 404. The API key and model catalog may still be valid; check the base URL path and run a model capability check on a selected route. Provider said: %s", message)
 	}
 	return false, detected, response.StatusCode, fmt.Sprintf("Base URL/API format mismatch: POST %s returned HTTP %d without a valid %s response envelope. Check the API prefix and selected protocol.", path, response.StatusCode, protocol)
 }
