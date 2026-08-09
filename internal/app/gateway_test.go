@@ -10,6 +10,24 @@ import (
 	"time"
 )
 
+func TestCopyStreamingResponseRequiresCompletion(t *testing.T) {
+	for name, source := range map[string]string{
+		"done":        "event: response.completed\ndata: {}\n\n",
+		"done_marker": "data: [DONE]\n\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := copyStreamingResponse(&flushingRecorder{body: output}, strings.NewReader(source), nil); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	recorder := &flushingRecorder{}
+	if err := copyStreamingResponse(recorder, strings.NewReader("event: response.output_text.delta\ndata: {}\n\n"), nil); err == nil {
+		t.Fatal("interrupted native stream should fail")
+	}
+}
+
 type flushingRecorder struct {
 	header  http.Header
 	body    bytes.Buffer
@@ -36,7 +54,7 @@ func (r *flushingRecorder) Flush() {
 func TestCopyStreamingResponseFlushesAndCaptures(t *testing.T) {
 	destination := &flushingRecorder{}
 	capture := &bytes.Buffer{}
-	source := bytes.NewBufferString("data: one\n\ndata: two\n\n")
+	source := bytes.NewBufferString("data: one\n\ndata: two\n\ndata: [DONE]\n\n")
 	if err := copyStreamingResponse(destination, source, capture); err != nil {
 		t.Fatalf("copy stream: %v", err)
 	}
@@ -50,7 +68,7 @@ func TestCopyStreamingResponseFlushesAndCaptures(t *testing.T) {
 
 func TestCopyStreamingResponseAllowsNoCapture(t *testing.T) {
 	destination := &flushingRecorder{}
-	if err := copyStreamingResponse(destination, bytes.NewBufferString("data: one\n\n"), nil); err != nil {
+	if err := copyStreamingResponse(destination, bytes.NewBufferString("data: one\n\ndata: [DONE]\n\n"), nil); err != nil {
 		t.Fatalf("copy stream without capture: %v", err)
 	}
 	if destination.body.Len() == 0 || destination.flushes == 0 {

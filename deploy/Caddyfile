@@ -12,3 +12,9 @@
 		format json
 	}
 }
+
+# Domain mode catch-all. Preserve POST/stream methods while moving requests
+# addressed to the VPS IP onto the canonical HTTPS hostname.
+http:// {
+	redir https://{$APP_HOST}{uri} 308
+}

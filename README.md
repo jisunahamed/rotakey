@@ -71,6 +71,7 @@ For IP-only HTTP, also set:
 
 ```dotenv
 APP_HOST=:80
+CADDYFILE=./deploy/Caddyfile.ip
 PUBLIC_BASE_URL=http://YOUR_VPS_IP
 SESSION_COOKIE_SECURE=false
 ```
@@ -93,6 +94,7 @@ Point the domain's `A` record—and `AAAA` when used—to the VPS. Copy the valu
 
 ```dotenv
 APP_HOST=ai.example.com
+CADDYFILE=./deploy/Caddyfile
 PUBLIC_BASE_URL=https://ai.example.com
 SESSION_COOKIE_SECURE=true
 ```

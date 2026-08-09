@@ -241,7 +241,7 @@ function App() {
             </button>
           </div>
           <div className="sidebar__version" title={version?.commit ? `Commit ${version.commit}` : undefined}>
-            Rotakey v{version?.current_version ?? "0.2.0"}
+            Rotakey v{version?.current_version ?? "0.2.1"}
             {version?.update_available ? <span>new v{version.latest_version}</span> : <span>up to date</span>}
           </div>
         </div>
@@ -2465,7 +2465,9 @@ function formatDuration(milliseconds: number) {
 
 function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNewKey: (key: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [codexReady, setCodexReady] = useState(0);
   useEffect(() => { void api<Settings>("/api/admin/settings").then(setSettings).catch((caught) => notify(errorMessage(caught), "danger")); }, [notify, gatewayKey]);
+  useEffect(() => { void api<Overview>("/api/admin/overview?range=1h").then((value) => setCodexReady(value.summary.routes_ready)).catch(() => undefined); }, []);
   const rotateKey = () => {
     if (!confirm("Rotate the gateway key now? The current key will stop working immediately.")) return;
     void api<{ gateway_key: string }>("/api/admin/access/rotate", { method: "POST" })
@@ -2487,6 +2489,19 @@ function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNe
   -H "Authorization: Bearer $ROTAKEY_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"model":"provider/model-alias","messages":[{"role":"user","content":"Hello"}]}'`}</pre>
+      </section>
+      <section className="section-block code-example">
+        <div className="section-heading">
+          <div><p className="eyebrow">Codex CLI &amp; Desktop</p><h2>{codexReady} model route{codexReady === 1 ? "" : "s"} ready</h2></div>
+          <div className="button-row">
+            <a className="button button--quiet" href="https://github.com/jisunahamed/rotakey/blob/main/docs/CODEX.md" target="_blank" rel="noreferrer"><BookOpen size={14} /> Full guide</a>
+            <Button variant="quiet" onClick={() => void copyText(`rotakey-codex install --url ${rootURL}`).then(() => notify("Codex setup command copied."))}><Clipboard size={14} /> Copy setup</Button>
+          </div>
+        </div>
+        <pre>{`rotakey-codex install --url ${rootURL}
+rotakey-codex doctor
+codex --profile rotakey`}</pre>
+        <p>The installer prompts for the gateway key, protects it in the OS credential store, and writes only a managed Rotakey profile. Run <code>rotakey-codex sync</code> after changing model routes.</p>
       </section>
       <section className="section-block code-example">
         <div className="section-heading"><div><p className="eyebrow">Anthropic lane</p><h2>Messages SDK and Claude Code</h2></div><div className="button-row"><a className="button button--quiet" href="https://github.com/jisunahamed/rotakey/blob/main/docs/CLAUDE-CODE.md" target="_blank" rel="noreferrer"><BookOpen size={14} /> Full guide</a><Button variant="quiet" onClick={() => void copyText(rootURL).then(() => notify("Anthropic base URL copied."))}><Clipboard size={14} /> Copy base URL</Button></div></div>

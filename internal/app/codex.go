@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -15,11 +16,12 @@ import (
 // response is deliberately small and stable so local bridges can cache it.
 func (s *Server) handleCodexManifest(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.Query(r.Context(), `
-		SELECT m.public_alias, p.name, m.default_max_output_tokens,
-		       m.supports_responses, m.supports_chat
+		SELECT m.public_alias, p.name, m.supports_responses, m.supports_chat,
+		       m.capability_status, m.capability_profile
 		FROM model_routes m JOIN providers p ON p.id=m.provider_id
 		WHERE m.enabled=TRUE AND p.enabled=TRUE
 		  AND (m.supports_responses=TRUE OR m.supports_chat=TRUE)
+		  AND m.capability_status IN ('catalog_verified', 'probe_verified')
 		  AND EXISTS (SELECT 1 FROM credentials c WHERE c.provider_id=p.id AND c.enabled=TRUE AND c.status <> 'quarantined')
 		ORDER BY m.public_alias`)
 	if err != nil {
@@ -30,20 +32,32 @@ func (s *Server) handleCodexManifest(w http.ResponseWriter, r *http.Request) {
 	models := make([]any, 0)
 	for rows.Next() {
 		var alias, provider string
-		var contextWindow int
 		var responses, chat bool
-		if rows.Scan(&alias, &provider, &contextWindow, &responses, &chat) != nil {
+		var capabilityStatus string
+		var rawProfile []byte
+		if rows.Scan(&alias, &provider, &responses, &chat, &capabilityStatus, &rawProfile) != nil {
 			continue
 		}
-		if contextWindow <= 0 {
-			contextWindow = 128000
+		profile := map[string]string{}
+		_ = json.Unmarshal(rawProfile, &profile)
+		contextWindow := 128000
+		if parsed, err := strconv.Atoi(profile["context_window"]); err == nil && parsed > 0 {
+			contextWindow = parsed
+		}
+		reasoningLevels := []string{"low", "medium", "high"}
+		if configured := strings.TrimSpace(profile["reasoning_levels"]); configured != "" {
+			reasoningLevels = strings.Split(configured, ",")
+			for index := range reasoningLevels {
+				reasoningLevels[index] = strings.TrimSpace(reasoningLevels[index])
+			}
 		}
 		models = append(models, map[string]any{
 			"id": alias, "alias": alias, "display_name": alias, "provider": provider,
 			"context_window": contextWindow, "supports_responses": responses,
-			"supports_tools": responses || chat, "supports_images": false,
-			"verified_reasoning_levels": []string{"low", "medium", "high"},
-			"catalog_ready": true,
+			"supports_tools":            profile["tools"] != "unsupported" && (responses || chat),
+			"supports_images":           profile["images"] == "supported" || profile["images"] == "native",
+			"verified_reasoning_levels": reasoningLevels,
+			"catalog_ready":             capabilityStatus == "catalog_verified" || capabilityStatus == "probe_verified",
 		})
 	}
 	body, _ := json.Marshal(map[string]any{"object": "codex_manifest", "models": models})
@@ -79,7 +93,12 @@ func (s *Server) handleResponsesCompact(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	summary := compactInputSummary(request["input"])
-	encoded := base64.RawURLEncoding.EncodeToString([]byte(summary))
+	encrypted, err := s.vault.Encrypt([]byte(summary))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "compaction_failed", "Compaction state could not be protected.")
+		return
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(encrypted)
 	id, _ := newID("cmp")
 	response := map[string]any{
 		"id": id, "object": "response.compaction", "created_at": started.Unix(), "model": model,
@@ -95,6 +114,39 @@ func (s *Server) handleResponsesCompact(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) expandRotakeyCompaction(request map[string]any) error {
+	input, ok := request["input"].([]any)
+	if !ok {
+		return nil
+	}
+	expanded := make([]any, 0, len(input))
+	for _, raw := range input {
+		item, ok := raw.(map[string]any)
+		if !ok || item["type"] != "compaction" {
+			expanded = append(expanded, raw)
+			continue
+		}
+		encoded, _ := item["encrypted_content"].(string)
+		ciphertext, err := base64.RawURLEncoding.DecodeString(encoded)
+		if err != nil {
+			return unsupportedFeatureError{Feature: "foreign or invalid compaction item"}
+		}
+		plain, err := s.vault.Decrypt(ciphertext)
+		if err != nil || !strings.HasPrefix(string(plain), "rotakey-compaction-v1:") {
+			return unsupportedFeatureError{Feature: "foreign or invalid compaction item"}
+		}
+		summary := strings.TrimPrefix(string(plain), "rotakey-compaction-v1:")
+		expanded = append(expanded, map[string]any{
+			"type": "message", "role": "developer",
+			"content": []any{map[string]any{
+				"type": "input_text", "text": "Rotakey continuity context from the earlier conversation:\n" + summary,
+			}},
+		})
+	}
+	request["input"] = expanded
+	return nil
 }
 
 func compactInputSummary(input any) string {

@@ -14,7 +14,31 @@ jobs:
       - uses: actions/checkout@v7
       - name: Verify version tag
         run: test "${GITHUB_REF_NAME#v}" = "$(sed -n 's/^[[:space:]]*Version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' internal/app/version.go)"
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.12"
+          cache: true
+      - name: Build Codex companion binaries
+        shell: bash
+        run: |
+          mkdir -p dist
+          while read -r goos goarch suffix; do
+            GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build \
+              -trimpath -ldflags="-s -w" \
+              -o "dist/rotakey-codex_${goos}_${goarch}${suffix}" ./cmd/rotakey-codex
+          done <<'TARGETS'
+          windows amd64 .exe
+          windows arm64 .exe
+          linux amd64
+          linux arm64
+          darwin amd64
+          darwin arm64
+          TARGETS
+          (cd dist && sha256sum rotakey-codex_* > SHA256SUMS)
+          go version -m dist/rotakey-codex_linux_amd64 > dist/BUILD-METADATA.txt
+      - name: Generate source SBOM
+        run: go run github.com/anchore/syft/cmd/syft@v1.38.0 dir:. -o spdx-json=dist/rotakey-sbom.spdx.json
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "Rotakey $GITHUB_REF_NAME"
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --title "Rotakey $GITHUB_REF_NAME"

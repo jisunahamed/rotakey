@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -50,6 +51,23 @@ func runMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		return fmt.Errorf("read migrations: %w", err)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	connection, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration connection: %w", err)
+	}
+	defer connection.Release()
+	if _, err := connection.Exec(ctx, `SELECT pg_advisory_lock(hashtext('rotakey-schema-migrations'))`); err != nil {
+		return fmt.Errorf("lock migrations: %w", err)
+	}
+	defer connection.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtext('rotakey-schema-migrations'))`)
+	if _, err := connection.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			filename TEXT PRIMARY KEY,
+			checksum TEXT NOT NULL,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`); err != nil {
+		return fmt.Errorf("create migration ledger: %w", err)
+	}
 
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
@@ -59,8 +77,32 @@ func runMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", entry.Name(), err)
 		}
-		if _, err := pool.Exec(ctx, string(body)); err != nil {
+		checksum := fmt.Sprintf("%x", sha256.Sum256(body))
+		var recorded string
+		err = connection.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE filename=$1`, entry.Name()).Scan(&recorded)
+		if err == nil {
+			if recorded != checksum {
+				return fmt.Errorf("migration %s checksum changed after it was applied", entry.Name())
+			}
+			continue
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("read migration ledger for %s: %w", entry.Name(), err)
+		}
+		tx, err := connection.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("begin migration %s: %w", entry.Name(), err)
+		}
+		if _, err := tx.Exec(ctx, string(body)); err != nil {
+			_ = tx.Rollback(ctx)
 			return fmt.Errorf("apply migration %s: %w", entry.Name(), err)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)`, entry.Name(), checksum); err != nil {
+			_ = tx.Rollback(ctx)
+			return fmt.Errorf("record migration %s: %w", entry.Name(), err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit migration %s: %w", entry.Name(), err)
 		}
 	}
 	return nil

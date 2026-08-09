@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -158,6 +159,15 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 			RequestID: requestID, Endpoint: endpoint, Started: started, RequestBody: raw,
 		})
 		return
+	}
+	if endpoint == "responses" {
+		if err := s.expandRotakeyCompaction(publicPayload); err != nil {
+			s.rejectGatewayRequest(w, r, http.StatusBadRequest, "unsupported_feature", err.Error(), logInput{
+				RequestID: requestID, Route: routeRuntime{Model: ModelRoute{PublicAlias: alias}},
+				Endpoint: endpoint, Started: started, RequestBody: raw,
+			})
+			return
+		}
 	}
 	s.updateActiveRequest(requestID, func(log *RequestLog) {
 		log.ModelAlias = alias
@@ -357,6 +367,9 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 		attemptStarted := time.Now()
 		response, requestErr := client.Do(upstreamRequest)
 		if requestErr != nil {
+			// The request attempt still consumes request quota, but no upstream
+			// token usage was produced. Return the unused token reservation.
+			_ = s.limiter.AdjustTokens(r.Context(), reservation, 0)
 			attempts = append(attempts, AttemptRecord{
 				CredentialID: selected.ID, CredentialLabel: selected.Label,
 				Error: "connection_error", ErrorMessage: "The upstream connection failed before a response started.",
@@ -377,6 +390,7 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 		if response.StatusCode == http.StatusBadRequest && compatibilityRetriesRemaining > 0 {
 			errorBody, wasTruncated, readErr := boundedBody(response.Body, minInt64(s.cfg.MaxResponseBytes, 2<<20))
 			_ = response.Body.Close()
+			_ = s.limiter.AdjustTokens(r.Context(), reservation, 0)
 			if readErr == nil && !wasTruncated {
 				if replacement, ok := unsupportedCompatibilityReplacement(errorBody, upstreamPayload); ok {
 					applyCompatibilityReplacement(upstreamPayload, replacement)
@@ -475,6 +489,7 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 		if retryable && transientRetriesRemaining > 0 && attemptNumber+1 < maxAttempts {
 			errorBody, _, _ := boundedBody(response.Body, 1<<20)
 			_ = response.Body.Close()
+			_ = s.limiter.AdjustTokens(r.Context(), reservation, 0)
 			attempts = append(attempts, AttemptRecord{
 				CredentialID: selected.ID, CredentialLabel: selected.Label,
 				StatusCode: response.StatusCode, Error: upstreamErrorCode(errorBody),
@@ -495,6 +510,7 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
 			body, wasTruncated, _ := boundedBody(response.Body, minInt64(s.cfg.MaxResponseBytes, 2<<20))
 			_ = response.Body.Close()
+			_ = s.limiter.AdjustTokens(r.Context(), reservation, 0)
 			attempts[len(attempts)-1].Error = upstreamErrorCode(body)
 			attempts[len(attempts)-1].ErrorMessage = upstreamErrorMessage(body, selected.Secret)
 			truncated = wasTruncated
@@ -539,6 +555,16 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 			if streamErr != nil && !errors.Is(streamErr, context.Canceled) {
 				finalErrorCode = "stream_interrupted"
 				finalErrorMessage = "The response stream ended unexpectedly after it started."
+				if !translated {
+					writeSSE(w, capture, "response.failed", map[string]any{
+						"type": "response.failed",
+						"response": map[string]any{
+							"status": "failed",
+							"error":  map[string]any{"code": finalErrorCode, "message": finalErrorMessage},
+						},
+					})
+					writeRaw(w, capture, []byte("data: [DONE]\n\n"))
+				}
 			}
 			if capture != nil {
 				finalResponse = append([]byte(nil), capture.Bytes()...)
@@ -596,16 +622,21 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 }
 
 func copyStreamingResponse(destination http.ResponseWriter, source io.Reader, capture io.Writer) error {
-	buffer := make([]byte, 32<<10)
+	reader := bufio.NewReaderSize(source, 64<<10)
 	flusher, _ := destination.(http.Flusher)
+	completed := false
 	for {
-		read, readErr := source.Read(buffer)
-		if read > 0 {
-			if _, err := destination.Write(buffer[:read]); err != nil {
+		line, readErr := reader.ReadString('\n')
+		if line != "" {
+			if strings.Contains(line, "event: response.completed") || strings.Contains(line, "data: [DONE]") {
+				completed = true
+			}
+			data := []byte(line)
+			if _, err := destination.Write(data); err != nil {
 				return err
 			}
 			if capture != nil {
-				_, _ = capture.Write(buffer[:read])
+				_, _ = capture.Write(data)
 			}
 			if flusher != nil {
 				flusher.Flush()
@@ -613,7 +644,10 @@ func copyStreamingResponse(destination http.ResponseWriter, source io.Reader, ca
 		}
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
-				return nil
+				if completed {
+					return nil
+				}
+				return io.ErrUnexpectedEOF
 			}
 			return readErr
 		}

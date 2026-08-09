@@ -1,7 +1,9 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -24,6 +26,45 @@ func TestTranslateResponsesRequest(t *testing.T) {
 	}
 	if numberAsInt64(chat["max_tokens"]) != 128 {
 		t.Fatalf("unexpected max_tokens %#v", chat["max_tokens"])
+	}
+}
+
+func TestTranslateChatStreamCompletesTextAndToolLifecycle(t *testing.T) {
+	source := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"hello "}}]}`,
+		`data: {"choices":[{"delta":{"content":"world","tool_calls":[{"index":0,"id":"call_1","function":{"name":"lookup","arguments":"{\"q\":"}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"x\"}"}}]}}]}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+	var output bytes.Buffer
+	if err := translateChatStream(strings.NewReader(source), &output, "demo/model", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []string{
+		"response.output_text.done", "response.content_part.done", "response.output_item.done",
+		"response.function_call_arguments.done", "response.completed", "data: [DONE]",
+	} {
+		if !strings.Contains(output.String(), event) {
+			t.Fatalf("stream is missing %q:\n%s", event, output.String())
+		}
+	}
+	if !strings.Contains(output.String(), `"sequence_number":1`) {
+		t.Fatal("stream events do not carry increasing sequence numbers")
+	}
+}
+
+func TestTranslateChatStreamRejectsInterruptedAndMalformedInput(t *testing.T) {
+	for name, source := range map[string]string{
+		"interrupted": `data: {"choices":[{"delta":{"content":"partial"}}]}` + "\n",
+		"malformed":   "data: {not-json}\n\ndata: [DONE]\n\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := translateChatStream(strings.NewReader(source), &output, "demo/model", nil); err == nil {
+				t.Fatal("expected stream translation to fail")
+			}
+		})
 	}
 }
 

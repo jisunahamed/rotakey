@@ -1,4 +1,4 @@
-﻿package app
+package app
 
 import (
 	"bytes"
@@ -8,27 +8,41 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 )
 
 func decompressBody(encoding string, raw []byte, limit int64) ([]byte, error) {
-	var reader io.ReadCloser
+	var reader io.Reader
+	closeReader := func() {}
 	var err error
 	switch encoding {
 	case "gzip", "x-gzip":
-		reader, err = gzip.NewReader(bytes.NewReader(raw))
+		gzipReader, gzipErr := gzip.NewReader(bytes.NewReader(raw))
+		reader, err = gzipReader, gzipErr
+		if gzipReader != nil {
+			closeReader = func() { _ = gzipReader.Close() }
+		}
 	case "deflate":
-		reader = flate.NewReader(bytes.NewReader(raw))
-	case "br", "zstd":
-		// These encodings are recognized so callers get a clear protocol error;
-		// the gateway's dependency-light build currently decodes gzip/deflate.
-		return nil, fmt.Errorf("unsupported content encoding %q", encoding)
+		flateReader := flate.NewReader(bytes.NewReader(raw))
+		reader = flateReader
+		closeReader = func() { _ = flateReader.Close() }
+	case "br":
+		reader = brotli.NewReader(bytes.NewReader(raw))
+	case "zstd":
+		zstdReader, zstdErr := zstd.NewReader(bytes.NewReader(raw), zstd.WithDecoderMaxMemory(uint64(limit+1)))
+		reader, err = zstdReader, zstdErr
+		if zstdReader != nil {
+			closeReader = zstdReader.Close
+		}
 	default:
-		return nil, nil
+		return nil, fmt.Errorf("unsupported content encoding %q", encoding)
 	}
 	if err != nil {
 		return nil, err
 	}
-	defer reader.Close()
+	defer closeReader()
 
 	buf := bytes.NewBuffer(nil)
 	written, copyErr := io.CopyN(buf, reader, limit+1)
@@ -36,7 +50,7 @@ func decompressBody(encoding string, raw []byte, limit int64) ([]byte, error) {
 		return nil, copyErr
 	}
 	if written > limit {
-		return raw, nil
+		return nil, fmt.Errorf("decoded request body exceeds %d bytes", limit)
 	}
 	return buf.Bytes(), nil
 }

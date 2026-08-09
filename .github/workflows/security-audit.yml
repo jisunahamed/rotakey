@@ -1,0 +1,43 @@
+name: scheduled security audit
+
+on:
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.12"
+          cache: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.x"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Go vulnerability report
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 -show verbose ./... | tee govulncheck.txt
+      - name: Frontend dependency report
+        working-directory: web
+        run: |
+          npm ci
+          npm audit --audit-level=high | tee ../npm-audit.txt
+      - name: Module update report
+        run: go list -m -u -json all > go-module-updates.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: security-dependency-report
+          path: |
+            govulncheck.txt
+            npm-audit.txt
+            go-module-updates.json
+          retention-days: 30

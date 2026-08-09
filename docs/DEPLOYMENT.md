@@ -35,6 +35,7 @@ For temporary IP mode:
 
 ```dotenv
 APP_HOST=:80
+CADDYFILE=./deploy/Caddyfile.ip
 PUBLIC_BASE_URL=http://203.0.113.10
 SESSION_COOKIE_SECURE=false
 ```
@@ -43,11 +44,16 @@ For domain mode, create DNS records first:
 
 ```dotenv
 APP_HOST=ai.example.com
+CADDYFILE=./deploy/Caddyfile
 PUBLIC_BASE_URL=https://ai.example.com
 SESSION_COOKIE_SECURE=true
 ```
 
-Ports 80 and 443 must reach Caddy directly for automatic certificate issuance. If a cloud firewall or NAT is present, update it as well as the VPS firewall.
+IP mode serves every address on port 80. Domain mode serves the canonical HTTPS
+hostname and redirects bare-IP HTTP requests with status 308, preserving the
+request method. Ports 80 and 443 must reach Caddy directly for automatic
+certificate issuance. If a cloud firewall or NAT is present, update it as well
+as the VPS firewall.
 
 ## 4. Start and bootstrap
 

@@ -1,9 +1,11 @@
 module github.com/jisunahamed/rotakey
 
-go 1.25.0
+go 1.25.12
 
 require (
+	github.com/andybalholm/brotli v1.2.0
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/klauspost/compress v1.18.4
 	github.com/redis/go-redis/v9 v9.21.0
 	github.com/tiktoken-go/tokenizer v0.7.0
 	golang.org/x/crypto v0.54.0

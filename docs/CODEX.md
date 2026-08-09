@@ -1,93 +1,150 @@
-# Connect Codex to Rotakey
+# Use Codex with Rotakey
 
-Rotakey is the remote, self-hosted owner of provider API keys, model aliases,
-rate limits, retries, and request logs. Codex Router is the local companion
-that makes those aliases available to Codex Desktop and Codex CLI without
-placing upstream provider keys on a developer workstation.
+Rotakey v0.2.1 exposes the Responses API used by Codex and includes the
+`rotakey-codex` companion. The companion creates a separate `rotakey` Codex
+profile, protects the gateway key with the operating-system credential store,
+and keeps a local model catalog synchronized with verified Rotakey routes.
 
-## What is supported
+This integration follows the official Codex custom-provider contract:
+`model_providers.<id>.base_url`, `wire_api = "responses"`, command-backed
+authentication, profiles, and `model_catalog_json`.
 
-Rotakey exposes the OpenAI Responses endpoints Codex needs:
+## Before installing
 
-- `GET /v1/models`
-- `GET /v1/codex/manifest`
-- `POST /v1/responses`
-- `POST /v1/responses/compact`
+1. Deploy Rotakey behind HTTPS.
+2. Add an enabled provider, API key, and model route in the Admin UI.
+3. Run the model capability probe. Only routes marked `catalog_verified` or
+   `probe_verified` appear in the Codex manifest and picker.
+4. Save the Rotakey gateway key shown during initial setup or key rotation.
 
-The compact endpoint creates a short, model-generated replacement history. It
-uses the selected Rotakey alias and the normal credential pool, so limits,
-failover, and logs still apply. It does not use OpenAI's opaque encrypted
-compaction payload, because that payload can only be created by OpenAI.
+The gateway must return `ready` from `/health/ready`. A bare remote HTTP URL is
+rejected by the companion; HTTP is allowed only for loopback development.
 
-Core text, streaming, and client function tools work through routes that have
-Responses support. A native Responses upstream is preferred. Chat-only and
-Anthropic routes use Rotakey's existing safe translation layer; features with
-no lossless equivalent return `400 unsupported_feature` instead of silently
-changing the request.
+## Install the companion
 
-## Recommended architecture
+Download the binary for your operating system from the GitHub release. Verify
+it against `SHA256SUMS` before running it.
+
+Windows PowerShell:
+
+```powershell
+$target = "$env:LOCALAPPDATA\Rotakey\rotakey-codex.exe"
+New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
+Invoke-WebRequest "https://github.com/jisunahamed/rotakey/releases/latest/download/rotakey-codex_windows_amd64.exe" -OutFile $target
+& $target install --url https://ai.example.com
+```
+
+Linux amd64:
+
+```bash
+install -d -m 700 "$HOME/.local/bin"
+curl -fL https://github.com/jisunahamed/rotakey/releases/latest/download/rotakey-codex_linux_amd64 -o "$HOME/.local/bin/rotakey-codex"
+chmod 700 "$HOME/.local/bin/rotakey-codex"
+rotakey-codex install --url https://ai.example.com
+```
+
+macOS Apple Silicon:
+
+```bash
+install -d -m 700 "$HOME/.local/bin"
+curl -fL https://github.com/jisunahamed/rotakey/releases/latest/download/rotakey-codex_darwin_arm64 -o "$HOME/.local/bin/rotakey-codex"
+chmod 700 "$HOME/.local/bin/rotakey-codex"
+rotakey-codex install --url https://ai.example.com
+```
+
+Use the `arm64` Linux build or `darwin_amd64` macOS build when appropriate.
+The installer prompts for the key without putting it in shell history. The
+`--key` flag exists for automation but is discouraged; `ROTAKEY_API_KEY` is
+safer in CI.
+
+## Start Codex
+
+```bash
+rotakey-codex doctor
+codex --profile rotakey
+```
+
+Select any displayed Rotakey alias with `/model`, or start directly:
+
+```bash
+codex --profile rotakey -m provider/model-alias
+```
+
+Plain `codex` continues to use the existing native OpenAI profile. This keeps
+native OpenAI authentication and the Rotakey gateway key isolated. Current
+Codex configuration selects one provider per profile, so native and Rotakey
+models are intentionally not combined in one picker.
+
+Codex Desktop reads the same user configuration, but profile selection support
+can vary by Desktop release. Use the `rotakey` profile when the app exposes a
+profile selector; otherwise use Codex CLI for Rotakey. Restart Codex after an
+install or catalog sync.
+
+## Commands
 
 ```text
-Codex Desktop / CLI
-        |
-        v
-Codex Router on the developer computer (127.0.0.1)
-        |
-        | one Rotakey gateway key
-        v
-Rotakey on your VPS (/v1)
-        |
-        v
-Provider credential pool and public model aliases
+rotakey-codex install --url https://ai.example.com [--model alias]
+rotakey-codex sync
+rotakey-codex doctor [--smoke-test]
+rotakey-codex status
+rotakey-codex disable
+rotakey-codex rollback
+rotakey-codex uninstall
 ```
 
-Do not put a public Rotakey key directly in shared project files or in Codex
-configuration. Store it in Codex Router's local credential store or your OS
-secret manager. Rotakey should be reachable with HTTPS in normal use.
+- `sync` refreshes only capability-ready routes and updates the default if its
+  route was removed.
+- `doctor` checks Codex, the protected key, config, gateway readiness,
+  authentication, manifest, and catalog. `--smoke-test` makes a billed model
+  request; the default doctor does not.
+- `disable` removes only the marked Rotakey block and retains state/key.
+- `rollback` restores the newest pre-change config backup.
+- `uninstall` removes the managed block, state, catalog, and protected key.
 
-## Configure the Rotakey adapter
+Unknown and user-owned Codex settings are preserved. Every config mutation is
+backed up and written atomically. An incomplete managed marker causes the tool
+to stop instead of guessing.
 
-The upstream Codex Router project needs a Rotakey provider adapter. Its
-configuration should contain only this information:
+## Secret storage
 
-```json
-{
-  "id": "rotakey",
-  "displayName": "Rotakey",
-  "kind": "openai-compatible",
-  "protocol": "openai-responses",
-  "baseUrl": "https://ai.example.com/v1",
-  "credential": {
-    "file": "rotakey.json",
-    "environment": ["ROTAKEY_API_KEY"]
-  }
-}
-```
+- Windows: DPAPI, scoped to the current Windows user.
+- macOS: Login Keychain.
+- Linux: Secret Service through `secret-tool`.
+- Linux fallback: a warning plus a permission-checked `0600` file.
 
-The adapter should fetch `GET /v1/models`, register every enabled public alias
-in Codex Router's local catalog, and send each call to Rotakey's Responses
-endpoint. The local Router keeps its loopback capability URL and its own
-Codex configuration management; Rotakey is never exposed directly as the
-Codex local server.
+The key is never written to `config.toml`, the model catalog, command arguments,
+or normal companion output. Codex obtains it by running `rotakey-codex token` as
+the configured bearer-token command.
 
-## Verification checklist
+## Supported Codex loop
 
-1. In Rotakey, add an enabled route with Responses support and a healthy key.
-2. Confirm it appears in `GET /v1/models` using the Rotakey gateway key.
-3. Run Codex Router's live compatibility checks against the registered alias:
-   basic response, SSE streaming, function tool call, and compaction.
-4. In Rotakey Admin > Request logs, verify that every request is recorded as
-   `responses`, with the expected alias, provider, key label, and attempt.
+Native Responses routes are preferred. Chat-only and Anthropic-compatible
+routes use Rotakey translation for text, SSE streaming, client function tools,
+multi-round function results, strict schemas, JSON output, and supported image
+inputs. The translated stream emits ordered item/content/delta/done events and
+fails interrupted or malformed upstream streams.
 
-Only mark an alias as Codex-ready after all four checks pass. A provider can
-be reachable and still reject tool schemas, reasoning fields, or stream
-formats; Rotakey records the upstream diagnostic when that happens.
+Rotakey provides `/v1/responses/compact`. Its continuity item is encrypted with
+the Rotakey master key and can be replayed only through the same deployment.
+It is a bounded continuity snapshot, not OpenAI's proprietary encrypted
+compaction payload.
 
-## Current limitations
+Hosted OpenAI tools, background mode, conversation IDs, file references,
+foreign encrypted compaction items, and other features without a safe
+cross-provider representation return `400 unsupported_feature` on translated
+routes. WebSocket Responses transport is disabled so Codex uses HTTP/SSE.
 
-- Hosted OpenAI tools, background mode, conversation IDs, file references, and
-  other features without a safe cross-provider representation remain rejected
-  on translated routes.
-- Native Responses providers give the most complete Codex experience.
-- The Codex Router adapter must be maintained in a fork or contributed to the
-  upstream project before a one-click setup can be claimed.
+## Troubleshooting
+
+- `401`: wrong/revoked gateway key. Run `install` again after key rotation.
+- `404 model_not_found`: run `rotakey-codex sync`; confirm the alias is enabled.
+- Model missing from picker: run its Admin capability probe, then `sync` and
+  restart Codex.
+- `429`: every eligible provider credential is at capacity or in cooldown.
+- `502`: inspect Rotakey Request logs for every upstream attempt and final cause.
+- `unsupported_feature`: use a native Responses route or remove the unsupported
+  hosted/file/conversation feature.
+- Config parse error: run `rotakey-codex rollback`, then `doctor`.
+
+The authoritative Codex configuration fields are documented in the
+[official OpenAI configuration reference](https://developers.openai.com/codex/config-reference/).

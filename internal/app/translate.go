@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 )
@@ -48,6 +49,20 @@ func translateResponsesRequest(source map[string]any) (map[string]any, error) {
 				return nil, unsupportedFeatureError{Feature: "non-object input item"}
 			}
 			itemType, _ := item["type"].(string)
+			if itemType == "function_call" {
+				callID, _ := item["call_id"].(string)
+				if callID == "" {
+					callID, _ = item["id"].(string)
+				}
+				messages = append(messages, map[string]any{
+					"role": "assistant", "content": nil,
+					"tool_calls": []any{map[string]any{
+						"id": callID, "type": "function",
+						"function": map[string]any{"name": item["name"], "arguments": item["arguments"]},
+					}},
+				})
+				continue
+			}
 			if itemType == "function_call_output" {
 				callID, _ := item["call_id"].(string)
 				messages = append(messages, map[string]any{
@@ -198,62 +213,163 @@ func translateChatResponse(body []byte, publicAlias string) ([]byte, int64, int6
 func translateChatStream(source io.Reader, destination io.Writer, publicAlias string, capture *limitedCapture) error {
 	reader := bufio.NewReaderSize(source, 64<<10)
 	responseID, _ := newID("resp")
-	writeSSE(destination, capture, "response.created", map[string]any{
+	sequence := 0
+	writeSSEWithSeq(destination, capture, "response.created", sequence, map[string]any{
 		"type": "response.created",
 		"response": map[string]any{
 			"id": responseID, "object": "response", "created_at": time.Now().Unix(),
 			"status": "in_progress", "model": publicAlias, "output": []any{},
 		},
 	})
-	itemStarted := false
+	sequence++
+	type toolState struct {
+		ID, Name, Arguments string
+		OutputIndex         int
+	}
+	tools := map[int]*toolState{}
+	output := make([]any, 0)
+	textStarted := false
+	textValue := ""
+	textOutputIndex := -1
+	nextOutputIndex := 0
+	finished := false
+	emitFailure := func(code, message string) {
+		writeSSEWithSeq(destination, capture, "response.failed", sequence, map[string]any{
+			"type": "response.failed",
+			"response": map[string]any{
+				"id": responseID, "object": "response", "created_at": time.Now().Unix(),
+				"status": "failed", "model": publicAlias,
+				"error": map[string]any{"code": code, "message": message},
+			},
+		})
+		writeRaw(destination, capture, []byte("data: [DONE]\n\n"))
+	}
+	finalize := func() {
+		if textStarted {
+			writeSSEWithSeq(destination, capture, "response.output_text.done", sequence, map[string]any{
+				"type": "response.output_text.done", "item_id": "msg_" + responseID,
+				"output_index": textOutputIndex, "content_index": 0, "text": textValue,
+			})
+			sequence++
+			part := map[string]any{"type": "output_text", "text": textValue, "annotations": []any{}}
+			writeSSEWithSeq(destination, capture, "response.content_part.done", sequence, map[string]any{
+				"type": "response.content_part.done", "item_id": "msg_" + responseID,
+				"output_index": textOutputIndex, "content_index": 0, "part": part,
+			})
+			sequence++
+			item := map[string]any{"id": "msg_" + responseID, "type": "message", "role": "assistant", "status": "completed", "content": []any{part}}
+			writeSSEWithSeq(destination, capture, "response.output_item.done", sequence, map[string]any{
+				"type": "response.output_item.done", "output_index": textOutputIndex, "item": item,
+			})
+			sequence++
+			output = append(output, item)
+		}
+		indexes := make([]int, 0, len(tools))
+		for index := range tools {
+			indexes = append(indexes, index)
+		}
+		slices.Sort(indexes)
+		for _, index := range indexes {
+			tool := tools[index]
+			writeSSEWithSeq(destination, capture, "response.function_call_arguments.done", sequence, map[string]any{
+				"type": "response.function_call_arguments.done", "item_id": tool.ID,
+				"output_index": tool.OutputIndex, "arguments": tool.Arguments,
+			})
+			sequence++
+			item := map[string]any{"id": tool.ID, "call_id": tool.ID, "type": "function_call", "name": tool.Name, "arguments": tool.Arguments, "status": "completed"}
+			writeSSEWithSeq(destination, capture, "response.output_item.done", sequence, map[string]any{
+				"type": "response.output_item.done", "output_index": tool.OutputIndex, "item": item,
+			})
+			sequence++
+			output = append(output, item)
+		}
+		writeSSEWithSeq(destination, capture, "response.completed", sequence, map[string]any{
+			"type": "response.completed",
+			"response": map[string]any{
+				"id": responseID, "object": "response", "created_at": time.Now().Unix(),
+				"status": "completed", "model": publicAlias, "output": output,
+			},
+		})
+		writeRaw(destination, capture, []byte("data: [DONE]\n\n"))
+	}
 	for {
 		line, err := reader.ReadString('\n')
 		if len(line) > 0 && strings.HasPrefix(line, "data:") {
 			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			if data == "[DONE]" {
-				writeSSE(destination, capture, "response.completed", map[string]any{
-					"type": "response.completed",
-					"response": map[string]any{
-						"id": responseID, "object": "response", "created_at": time.Now().Unix(),
-						"status": "completed", "model": publicAlias,
-					},
-				})
-				writeRaw(destination, capture, []byte("data: [DONE]\n\n"))
+				finished = true
+				finalize()
 				return nil
 			}
 			var chunk map[string]any
-			if json.Unmarshal([]byte(data), &chunk) == nil {
-				if choices, ok := chunk["choices"].([]any); ok && len(choices) > 0 {
-					choice, _ := choices[0].(map[string]any)
-					delta, _ := choice["delta"].(map[string]any)
-					if content, ok := delta["content"].(string); ok && content != "" {
-						if !itemStarted {
-							itemStarted = true
-							writeSSE(destination, capture, "response.output_item.added", map[string]any{
-								"type": "response.output_item.added", "output_index": 0,
-								"item": map[string]any{"id": "msg_" + responseID, "type": "message", "role": "assistant", "status": "in_progress", "content": []any{}},
-							})
-							writeSSE(destination, capture, "response.content_part.added", map[string]any{
-								"type": "response.content_part.added", "item_id": "msg_" + responseID,
-								"output_index": 0, "content_index": 0,
-								"part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}},
-							})
-						}
-						writeSSE(destination, capture, "response.output_text.delta", map[string]any{
-							"type": "response.output_text.delta", "item_id": "msg_" + responseID,
-							"output_index": 0, "content_index": 0, "delta": content,
+			if json.Unmarshal([]byte(data), &chunk) != nil {
+				emitFailure("upstream_stream_invalid", "The upstream returned malformed streaming JSON.")
+				return fmt.Errorf("malformed upstream SSE JSON")
+			}
+			if upstreamError, ok := chunk["error"]; ok && upstreamError != nil {
+				emitFailure("upstream_stream_error", "The upstream reported an error while streaming.")
+				return fmt.Errorf("upstream stream error: %v", upstreamError)
+			}
+			if choices, ok := chunk["choices"].([]any); ok && len(choices) > 0 {
+				choice, _ := choices[0].(map[string]any)
+				delta, _ := choice["delta"].(map[string]any)
+				if content, ok := delta["content"].(string); ok && content != "" {
+					if !textStarted {
+						textStarted = true
+						textOutputIndex = nextOutputIndex
+						nextOutputIndex++
+						writeSSEWithSeq(destination, capture, "response.output_item.added", sequence, map[string]any{
+							"type": "response.output_item.added", "output_index": textOutputIndex,
+							"item": map[string]any{"id": "msg_" + responseID, "type": "message", "role": "assistant", "status": "in_progress", "content": []any{}},
 						})
+						sequence++
+						writeSSEWithSeq(destination, capture, "response.content_part.added", sequence, map[string]any{
+							"type": "response.content_part.added", "item_id": "msg_" + responseID,
+							"output_index": textOutputIndex, "content_index": 0,
+							"part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}},
+						})
+						sequence++
 					}
-					if calls, ok := delta["tool_calls"].([]any); ok {
-						for _, rawCall := range calls {
-							call, _ := rawCall.(map[string]any)
-							function, _ := call["function"].(map[string]any)
-							if arguments, ok := function["arguments"].(string); ok && arguments != "" {
-								writeSSE(destination, capture, "response.function_call_arguments.delta", map[string]any{
-									"type":    "response.function_call_arguments.delta",
-									"item_id": call["id"], "output_index": call["index"], "delta": arguments,
-								})
+					textValue += content
+					writeSSEWithSeq(destination, capture, "response.output_text.delta", sequence, map[string]any{
+						"type": "response.output_text.delta", "item_id": "msg_" + responseID,
+						"output_index": textOutputIndex, "content_index": 0, "delta": content,
+					})
+					sequence++
+				}
+				if calls, ok := delta["tool_calls"].([]any); ok {
+					for _, rawCall := range calls {
+						call, _ := rawCall.(map[string]any)
+						index := int(numberAsInt64(call["index"]))
+						tool := tools[index]
+						function, _ := call["function"].(map[string]any)
+						if tool == nil {
+							id, _ := call["id"].(string)
+							if id == "" {
+								id, _ = newID("call")
 							}
+							tool = &toolState{ID: id, OutputIndex: nextOutputIndex}
+							nextOutputIndex++
+							tools[index] = tool
+							if name, ok := function["name"].(string); ok {
+								tool.Name = name
+							}
+							writeSSEWithSeq(destination, capture, "response.output_item.added", sequence, map[string]any{
+								"type": "response.output_item.added", "output_index": tool.OutputIndex,
+								"item": map[string]any{"id": tool.ID, "call_id": tool.ID, "type": "function_call", "name": tool.Name, "arguments": "", "status": "in_progress"},
+							})
+							sequence++
+						}
+						if name, ok := function["name"].(string); ok && name != "" {
+							tool.Name = name
+						}
+						if arguments, ok := function["arguments"].(string); ok && arguments != "" {
+							tool.Arguments += arguments
+							writeSSEWithSeq(destination, capture, "response.function_call_arguments.delta", sequence, map[string]any{
+								"type": "response.function_call_arguments.delta", "item_id": tool.ID,
+								"output_index": tool.OutputIndex, "delta": arguments,
+							})
+							sequence++
 						}
 					}
 				}
@@ -261,7 +377,11 @@ func translateChatStream(source io.Reader, destination io.Writer, publicAlias st
 		}
 		if err != nil {
 			if err == io.EOF {
-				return nil
+				if finished {
+					return nil
+				}
+				emitFailure("stream_interrupted", "The upstream stream ended before completion.")
+				return io.ErrUnexpectedEOF
 			}
 			return err
 		}
@@ -269,6 +389,9 @@ func translateChatStream(source io.Reader, destination io.Writer, publicAlias st
 }
 
 func writeSSEWithSeq(destination io.Writer, capture *limitedCapture, event string, seq int, payload any) {
+	if object, ok := payload.(map[string]any); ok {
+		object["sequence_number"] = seq
+	}
 	data, _ := json.Marshal(payload)
 	writeRaw(destination, capture, []byte("event: "+event+"\ndata: "))
 	writeRaw(destination, capture, data)
