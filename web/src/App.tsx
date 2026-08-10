@@ -241,7 +241,7 @@ function App() {
             </button>
           </div>
           <div className="sidebar__version" title={version?.commit ? `Commit ${version.commit}` : undefined}>
-            Rotakey v{version?.current_version ?? "0.2.1"}
+            Rotakey v{version?.current_version ?? "0.2.2"}
             {version?.update_available ? <span>new v{version.latest_version}</span> : <span>up to date</span>}
           </div>
         </div>
@@ -1971,7 +1971,7 @@ function ModelCatalog({
 }
 
 type ModelProbeResult = {
-  state: "checking" | "passed" | "failed";
+  state: "checking" | "passed" | "blocked" | "failed";
   error?: string;
 };
 
@@ -1989,7 +1989,7 @@ function ModelsPage({
   const [credentialsOpen, setCredentialsOpen] = useState(false);
   const [modelInspectorOpen, setModelInspectorOpen] = useState(false);
   const [probeResults, setProbeResults] = useState<Record<string, ModelProbeResult>>({});
-  const [probeProgress, setProbeProgress] = useState({ completed: 0, total: 0, passed: 0, failed: 0 });
+  const [probeProgress, setProbeProgress] = useState({ completed: 0, total: 0, passed: 0, blocked: 0, failed: 0 });
   const [bulkChecking, setBulkChecking] = useState(false);
   const [deletingFailed, setDeletingFailed] = useState(false);
   const [selectedID, setSelectedID] = useState(() => new URLSearchParams(location.search).get("model") || "");
@@ -2020,17 +2020,22 @@ function ModelsPage({
     return matchesProvider && matchesQuery;
   });
   const selected = models.find((model) => model.id === selectedID);
-  const failedProbeIDs = models.filter((model) => probeResults[model.id]?.state === "failed" || (!probeResults[model.id] && model.capability_status === "failed")).map((model) => model.id);
+  const healthyKeyCount = (model: (typeof models)[number]) => model.credentials.filter((item) => item.enabled && item.status === "healthy").length;
+  const failedProbeIDs = models.filter((model) => healthyKeyCount(model) > 0 && (probeResults[model.id]?.state === "failed" || (!probeResults[model.id] && model.capability_status === "failed"))).map((model) => model.id);
 
   const checkAllModels = async () => {
     if (bulkChecking || models.length === 0) return;
-    const targets = [...models];
-    setProbeResults(Object.fromEntries(targets.map((model) => [model.id, { state: "checking" as const }])));
-    setProbeProgress({ completed: 0, total: targets.length, passed: 0, failed: 0 });
+    const targets = models.filter((model) => healthyKeyCount(model) > 0);
+    const blockedModels = models.filter((model) => healthyKeyCount(model) === 0);
+    setProbeResults(Object.fromEntries(models.map((model) => [model.id, healthyKeyCount(model) > 0
+      ? { state: "checking" as const }
+      : { state: "blocked" as const, error: "waiting for a healthy API key" }])));
+    setProbeProgress({ completed: blockedModels.length, total: models.length, passed: 0, blocked: blockedModels.length, failed: 0 });
     setBulkChecking(true);
     let cursor = 0;
     let completed = 0;
     let passed = 0;
+    let blocked = blockedModels.length;
     let failed = 0;
     const worker = async () => {
       while (cursor < targets.length) {
@@ -2040,17 +2045,22 @@ function ModelsPage({
           passed++;
           setProbeResults((current) => ({ ...current, [model.id]: { state: "passed" } }));
         } catch (caught) {
-          failed++;
-          setProbeResults((current) => ({ ...current, [model.id]: { state: "failed", error: errorMessage(caught) } }));
+          if (caught instanceof APIError && caught.code === "model_probe_blocked") {
+            blocked++;
+            setProbeResults((current) => ({ ...current, [model.id]: { state: "blocked", error: errorMessage(caught) } }));
+          } else {
+            failed++;
+            setProbeResults((current) => ({ ...current, [model.id]: { state: "failed", error: errorMessage(caught) } }));
+          }
         } finally {
           completed++;
-          setProbeProgress({ completed, total: targets.length, passed, failed });
+          setProbeProgress({ completed: completed + blockedModels.length, total: models.length, passed, blocked, failed });
         }
       }
     };
     await worker();
     setBulkChecking(false);
-    notify(`${passed} model${passed === 1 ? "" : "s"} live · ${failed} failed.`, failed ? "danger" : "success");
+    notify(`${passed} model${passed === 1 ? "" : "s"} live · ${blocked} waiting for keys${failed ? ` · ${failed} unavailable` : ""}.`, failed ? "danger" : "success");
     await load();
   };
 
@@ -2096,7 +2106,7 @@ function ModelsPage({
             <section className={`model-sweep${bulkChecking ? " is-running" : ""}`} aria-live="polite">
               <div className="model-sweep__readout">
                 <span>Live model sweep</span>
-                <strong>{bulkChecking ? `${probeProgress.completed}/${probeProgress.total} checked` : probeProgress.total ? `${probeProgress.passed} live · ${probeProgress.failed} failed` : `${models.length} routes ready to check`}</strong>
+                <strong>{bulkChecking ? `${probeProgress.completed}/${probeProgress.total} checked` : probeProgress.total ? `${probeProgress.passed} live · ${probeProgress.blocked} waiting${probeProgress.failed ? ` · ${probeProgress.failed} unavailable` : ""}` : `${models.filter((model) => healthyKeyCount(model) > 0).length} routes ready · ${models.filter((model) => healthyKeyCount(model) === 0).length} waiting for keys`}</strong>
               </div>
               <div className="model-sweep__track" role="progressbar" aria-label="Model check progress" aria-valuemin={0} aria-valuemax={probeProgress.total || models.length} aria-valuenow={probeProgress.completed}>
                 <span style={{ width: `${probeProgress.total ? (probeProgress.completed / probeProgress.total) * 100 : 0}%` }} />
@@ -2111,10 +2121,10 @@ function ModelsPage({
               {filtered.map((model) => {
                 const ready = model.credentials.filter((item) => item.enabled && item.status === "healthy").length;
                 const probe = probeResults[model.id];
-                const capabilityLabel = probe?.state === "checking" ? "checking now" : probe?.state === "passed" ? "live" : probe?.state === "failed" ? `failed · ${probe.error || "probe failed"}` : model.capability_status === "probe_verified" ? "probe verified" : model.capability_status === "catalog_verified" ? "catalog verified" : model.capability_status === "failed" ? `failed · ${model.capability_error || "probe failed"}` : "unverified";
+                const capabilityLabel = ready === 0 ? "waiting for a healthy API key" : probe?.state === "checking" ? "checking now" : probe?.state === "passed" ? "live" : probe?.state === "blocked" ? `waiting · ${probe.error || "healthy API key required"}` : probe?.state === "failed" ? `unavailable · ${probe.error || "probe failed"}` : model.capability_status === "probe_verified" ? "probe verified" : model.capability_status === "catalog_verified" ? "catalog verified" : model.capability_status === "failed" ? `unavailable · ${model.capability_error || "probe failed"}` : "unverified";
                 return (
                   <button key={model.id} className={selectedID === model.id ? "is-selected" : ""} onClick={() => { setSelectedID(model.id); setModelInspectorOpen(true); }}>
-                    <span><StatusDot state={probe?.state === "failed" || model.capability_status === "failed" ? "exhausted" : !model.enabled ? "disabled" : ready ? "healthy" : "exhausted"} /><code>{model.public_alias}</code><small title={probe?.error || model.capability_error}>{model.upstream_model === model.public_alias ? (model.supports_responses ? "Chat + Responses" : "Chat Completions") : model.upstream_model} · {capabilityLabel}</small></span>
+                    <span><StatusDot state={!model.enabled || ready === 0 || probe?.state === "blocked" ? "disabled" : probe?.state === "failed" || model.capability_status === "failed" ? "exhausted" : "healthy"} /><code>{model.public_alias}</code><small title={probe?.error || model.capability_error}>{model.upstream_model === model.public_alias ? (model.supports_responses ? "Chat + Responses" : "Chat Completions") : model.upstream_model} · {capabilityLabel}</small></span>
                     <span>{model.provider.name}</span>
                     <span>{ready}/{model.credentials.length}</span>
                     <ChevronRight size={13} />
@@ -2142,7 +2152,7 @@ function ModelsPage({
               <div className="inspector-definition">
                 <Definition label="Provider" value={selected.provider.name} />
                 <Definition label="Route state" value={selected.enabled ? "enabled" : "disabled"} />
-                <Definition label="Capability check" value={selected.capability_status === "probe_verified" ? "probe verified" : selected.capability_status === "catalog_verified" ? "catalog verified" : selected.capability_status || "unverified"} />
+                <Definition label="Capability check" value={healthyKeyCount(selected) === 0 ? "waiting for a healthy API key" : selected.capability_status === "probe_verified" ? "probe verified" : selected.capability_status === "catalog_verified" ? "catalog verified" : selected.capability_status === "failed" ? "unavailable" : selected.capability_status || "unverified"} />
                 <Definition label="Chat endpoint" value={selected.capability_profile?.chat || (selected.supports_chat ? "native" : "off")} />
                 <Definition label="Responses" value={selected.capability_profile?.responses || (selected.supports_responses ? "native" : "translated")} />
                 <Definition label="Messages" value={selected.capability_profile?.messages || (selected.supports_messages ? "enabled" : "off")} />

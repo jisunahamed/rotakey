@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"time"
 )
+
+var errModelProbeCredentialUnavailable = errors.New("add a healthy API key before validating this model")
 
 type credentialInspection struct {
 	Valid            bool              `json:"valid"`
@@ -219,7 +222,7 @@ func verifyProviderProtocol(ctx context.Context, client *http.Client, provider P
 		path = "/messages"
 	}
 	body, _ := json.Marshal(payload)
-	probeCtx, cancel := context.WithTimeout(ctx, minDuration(time.Duration(provider.TimeoutSeconds)*time.Second, 15*time.Second))
+	probeCtx, cancel := context.WithTimeout(ctx, modelProbeTimeout(provider))
 	defer cancel()
 	request, err := http.NewRequestWithContext(probeCtx, http.MethodPost, strings.TrimRight(provider.BaseURL, "/")+path, strings.NewReader(string(body)))
 	if err != nil {
@@ -599,72 +602,132 @@ func (s *Server) probeProviderModel(ctx context.Context, providerID string, inpu
 	if err != nil {
 		return "failed", nil, nil, fmt.Errorf("provider was not found")
 	}
-	var ciphertext []byte
-	if err := s.db.QueryRow(ctx, `SELECT secret_cipher FROM credentials WHERE provider_id=$1 AND enabled=TRUE AND status<>'quarantined' ORDER BY is_primary DESC, created_at, id LIMIT 1`, providerID).Scan(&ciphertext); err != nil {
-		return "failed", nil, nil, fmt.Errorf("add a healthy API key before validating this model")
-	}
-	secret, err := s.vault.Decrypt(ciphertext)
+	rows, err := s.db.Query(ctx, `
+		SELECT secret_cipher FROM credentials
+		WHERE provider_id=$1 AND enabled=TRUE
+		  AND (status='healthy' OR (status='cooldown' AND cooldown_until <= NOW()))
+		ORDER BY is_primary DESC, created_at, id
+		LIMIT 3
+	`, providerID)
 	if err != nil {
-		return "failed", nil, nil, fmt.Errorf("API key could not be decrypted")
+		return "failed", nil, nil, fmt.Errorf("healthy API keys could not be loaded")
 	}
-	probeContext, cancel := context.WithTimeout(ctx, minDuration(time.Duration(provider.TimeoutSeconds)*time.Second, 15*time.Second))
+	defer rows.Close()
+	ciphertexts := make([][]byte, 0, 3)
+	for rows.Next() {
+		var ciphertext []byte
+		if err := rows.Scan(&ciphertext); err != nil {
+			return "failed", nil, nil, fmt.Errorf("healthy API keys could not be loaded")
+		}
+		ciphertexts = append(ciphertexts, ciphertext)
+	}
+	if err := rows.Err(); err != nil {
+		return "failed", nil, nil, fmt.Errorf("healthy API keys could not be loaded")
+	}
+	if len(ciphertexts) == 0 {
+		return "unverified", nil, nil, errModelProbeCredentialUnavailable
+	}
+	var lastErr error
+	for _, ciphertext := range ciphertexts {
+		secret, decryptErr := s.vault.Decrypt(ciphertext)
+		if decryptErr != nil {
+			lastErr = fmt.Errorf("API key could not be decrypted")
+			continue
+		}
+		status, profile, checkedAt, statusCode, probeErr := probeProviderModelWithSecret(ctx, provider, input, secret)
+		if probeErr == nil {
+			return status, profile, checkedAt, nil
+		}
+		lastErr = probeErr
+		if !retryModelProbeWithAnotherCredential(statusCode) {
+			break
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("model capability probe failed")
+	}
+	return "failed", nil, nil, lastErr
+}
+
+func probeProviderModelWithSecret(ctx context.Context, provider Provider, input *modelInput, secret []byte) (string, map[string]string, *time.Time, int, error) {
+	probeContext, cancel := context.WithTimeout(ctx, modelProbeTimeout(provider))
 	defer cancel()
 	path := "/chat/completions"
 	upstreamModel := upstreamModelForProvider(provider, input.UpstreamModel)
 	payload := map[string]any{
-		"model":    upstreamModel,
-		"messages": []any{map[string]any{"role": "user", "content": "Reply with one character."}},
+		"model":      upstreamModel,
+		"messages":   []any{map[string]any{"role": "user", "content": "Reply with one character."}},
+		"max_tokens": 1,
 	}
 	if provider.APIFormat == "anthropic" {
 		path = "/messages"
-		payload["max_tokens"] = 1
 	} else if !input.SupportsChat && input.SupportsResponses {
 		path = "/responses"
-		payload = map[string]any{"model": upstreamModel, "input": "Reply with one character."}
+		payload = map[string]any{"model": upstreamModel, "input": "Reply with one character.", "max_output_tokens": 1}
 	}
 	body, _ := json.Marshal(payload)
 	request, _ := http.NewRequestWithContext(probeContext, http.MethodPost, strings.TrimRight(provider.BaseURL, "/")+path, strings.NewReader(string(body)))
 	applyProviderHeaders(request, provider, secret)
 	client, err := upstreamClient(provider)
 	if err != nil {
-		return "failed", nil, nil, err
+		return "failed", nil, nil, 0, err
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return "failed", nil, nil, fmt.Errorf("provider could not be reached for the model capability probe")
+		return "failed", nil, nil, 0, fmt.Errorf("provider could not be reached for the model capability probe: %s", safeProbeTransportError(err))
 	}
 	defer response.Body.Close()
 	raw, _, readErr := boundedBody(response.Body, 1<<20)
 	if readErr != nil {
-		return "failed", nil, nil, fmt.Errorf("model probe response could not be read")
+		return "failed", nil, nil, response.StatusCode, fmt.Errorf("model probe response could not be read")
 	}
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
 		var decoded map[string]any
 		if json.Unmarshal(raw, &decoded) != nil {
-			return "failed", nil, nil, fmt.Errorf("model probe returned an invalid response")
+			return "failed", nil, nil, response.StatusCode, fmt.Errorf("model probe returned an invalid response")
 		}
 		if provider.APIFormat == "anthropic" && decoded["type"] != "message" {
-			return "failed", nil, nil, fmt.Errorf("Messages probe did not return an Anthropic Message")
+			return "failed", nil, nil, response.StatusCode, fmt.Errorf("Messages probe did not return an Anthropic Message")
 		}
 		if provider.APIFormat == "openai" && path == "/chat/completions" {
 			if choices, ok := decoded["choices"].([]any); !ok || len(choices) == 0 {
-				return "failed", nil, nil, fmt.Errorf("Chat probe did not return a completion choice")
+				return "failed", nil, nil, response.StatusCode, fmt.Errorf("Chat probe did not return a completion choice")
 			}
 		}
 		now := time.Now().UTC()
 		profile := modelCapabilityProfile(provider, input, "probe")
-		return "probe_verified", profile, &now, nil
+		return "probe_verified", profile, &now, response.StatusCode, nil
 	}
 	message := upstreamErrorMessage(raw, secret)
 	if message == "" {
 		message = fmt.Sprintf("provider returned HTTP %d", response.StatusCode)
 	}
-	return "failed", nil, nil, fmt.Errorf("model capability probe failed: %s", message)
+	return "failed", nil, nil, response.StatusCode, fmt.Errorf("model capability probe failed: %s", message)
 }
 
-func minDuration(left, right time.Duration) time.Duration {
-	if left <= 0 || left > right {
-		return right
+func modelProbeTimeout(provider Provider) time.Duration {
+	seconds := provider.TimeoutSeconds
+	if seconds <= 0 {
+		seconds = 15
 	}
-	return left
+	if seconds > 120 {
+		seconds = 120
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func retryModelProbeWithAnotherCredential(statusCode int) bool {
+	return statusCode == 0 || statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden ||
+		statusCode == http.StatusTooManyRequests || statusCode >= http.StatusInternalServerError
+}
+
+func safeProbeTransportError(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timed out"
+	case errors.Is(err, context.Canceled):
+		return "request was canceled"
+	default:
+		return "connection failed"
+	}
 }

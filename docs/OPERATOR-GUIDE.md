@@ -52,7 +52,7 @@ Providers are collapsed by default. Their header shows the total remaining capac
 
 The model list shows traffic, ready keys, the next key, and the model override state. **Shared only** means that model has no extra override and uses the provider key's shared policy. Selecting a model opens its inspector. The API-key path stays collapsed until you need individual key details, so long providers do not repeat the same pool on every row.
 
-Use **Model routes → Check all models** to run a bounded live capability probe across every configured route. The sweep rail shows progress and retains the exact failure on each row. **Delete failed** lists the affected aliases and requires confirmation before removing only the failed routes. Provider model catalogs also include a master checkbox: without a search it selects every loaded model; with a search it selects or clears every visible result.
+Use **Model routes → Check all models** to run a bounded live capability probe across every configured route that has a healthy key. Routes whose provider has no healthy key are shown as **waiting for keys**, not as model failures. The sweep rail shows progress and retains the exact provider failure on each checked row. **Delete failed** lists the genuinely unavailable aliases and requires confirmation before removing only those routes. Provider model catalogs also include a master checkbox: without a search it selects every loaded model; with a search it selects or clears every visible result.
 
 In **Model routes → Model override**, choose **All API keys** to enter a policy once and apply it to the whole provider key pool, or choose one API key for an exception. **Use shared only** removes the selected model override and restores the key's shared provider policy. Shared and model-specific policies are both enforced whenever an override exists.
 
@@ -159,7 +159,7 @@ Every new route receives a server-owned capability profile:
 - Anthropic-native routes expose Messages natively and Chat/Responses through translation. OpenAI Chat routes expose Chat natively and the supported Messages/Responses subsets through translation. Responses-only routes are not falsely exposed through Chat.
 - The Model route inspector shows verification state and the effective Chat, Responses, Messages, streaming, tools, and thinking path. Use **Recheck model** to run the bounded core probe again for an existing route; a failed probe is stored and shown without deleting the route.
 
-Model probing is deliberately small and bounded to 15 seconds or the provider timeout, whichever is lower. It uses the primary/first healthy credential and never stores or displays that secret.
+Model probing sends a one-token request and respects the configured provider timeout, capped at 120 seconds. On a connection, authorization, throttling, or upstream-server failure, Rotakey can try up to three healthy credentials before marking the route unavailable. It never stores or displays a probe secret.
 
 Files are pinned to the default Anthropic resource provider and the selected credential. A Message containing a File reference is forced onto that same provider/key; conflicting references return `400 resource_affinity_conflict`. Message Batches must resolve every model alias to one native Anthropic provider and are pinned to one eligible credential. Mixed-provider Batches return `400`. A credential with live Files or Batches cannot be deleted (`409`) until those resources are removed.
 

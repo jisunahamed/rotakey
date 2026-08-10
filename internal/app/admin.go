@@ -613,6 +613,11 @@ func (s *Server) handleProbeModel(w http.ResponseWriter, r *http.Request) {
 	}
 	status, profile, checkedAt, err := s.probeProviderModel(r.Context(), providerID, &input)
 	if err != nil {
+		if errors.Is(err, errModelProbeCredentialUnavailable) {
+			_, _ = s.db.Exec(r.Context(), `UPDATE model_routes SET capability_status='unverified', capability_error=$2, capabilities_checked_at=NOW(), updated_at=NOW() WHERE id=$1`, r.PathValue("id"), err.Error())
+			writeError(w, http.StatusConflict, "model_probe_blocked", err.Error())
+			return
+		}
 		_, _ = s.db.Exec(r.Context(), `UPDATE model_routes SET capability_status='failed', capability_error=$2, capabilities_checked_at=NOW(), updated_at=NOW() WHERE id=$1`, r.PathValue("id"), err.Error())
 		writeError(w, http.StatusUnprocessableEntity, "model_validation_failed", err.Error())
 		return

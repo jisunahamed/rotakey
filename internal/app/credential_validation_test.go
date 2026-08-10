@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestInspectProviderSecretLoadsModels(t *testing.T) {
@@ -210,5 +212,56 @@ func TestUpstreamModelForGeminiOpenAIProvider(t *testing.T) {
 	other := Provider{APIFormat: "openai", BaseURL: "https://example.com/v1"}
 	if got := upstreamModelForProvider(other, "models/gemini-2.5-flash"); got != "models/gemini-2.5-flash" {
 		t.Fatalf("non-Gemini upstream model changed to %q", got)
+	}
+}
+
+func TestProbeProviderModelWithSecretBoundsOpenAIOutput(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["max_tokens"] != float64(1) {
+			t.Fatalf("max_tokens = %#v", payload["max_tokens"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"a"}}]}`))
+	}))
+	defer upstream.Close()
+
+	input := modelInput{UpstreamModel: "large-model", SupportsChat: true}
+	status, profile, checkedAt, statusCode, err := probeProviderModelWithSecret(context.Background(), Provider{
+		BaseURL: upstream.URL + "/v1", APIFormat: "openai", AuthHeader: "Authorization",
+		AuthScheme: "Bearer", TimeoutSeconds: 60, AllowPrivateNetwork: true,
+	}, &input, []byte("valid-key"))
+	if err != nil || status != "probe_verified" || statusCode != http.StatusOK || checkedAt == nil {
+		t.Fatalf("probe = status=%q profile=%#v checked=%v code=%d err=%v", status, profile, checkedAt, statusCode, err)
+	}
+}
+
+func TestModelProbeTimeoutHonorsProviderLimit(t *testing.T) {
+	for _, test := range []struct {
+		seconds int
+		want    time.Duration
+	}{{0, 15 * time.Second}, {60, time.Minute}, {120, 2 * time.Minute}, {600, 2 * time.Minute}} {
+		if got := modelProbeTimeout(Provider{TimeoutSeconds: test.seconds}); got != test.want {
+			t.Fatalf("timeout(%d) = %s, want %s", test.seconds, got, test.want)
+		}
+	}
+}
+
+func TestRetryModelProbeWithAnotherCredential(t *testing.T) {
+	for _, status := range []int{0, http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusBadGateway} {
+		if !retryModelProbeWithAnotherCredential(status) {
+			t.Fatalf("status %d should try another credential", status)
+		}
+	}
+	for _, status := range []int{http.StatusBadRequest, http.StatusNotFound, http.StatusPaymentRequired} {
+		if retryModelProbeWithAnotherCredential(status) {
+			t.Fatalf("status %d should preserve the model-specific failure", status)
+		}
 	}
 }
