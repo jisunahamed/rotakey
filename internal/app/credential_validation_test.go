@@ -259,7 +259,7 @@ func TestRetryModelProbeWithAnotherCredential(t *testing.T) {
 			t.Fatalf("status %d should try another credential", status)
 		}
 	}
-	for _, status := range []int{http.StatusBadRequest, http.StatusNotFound, http.StatusPaymentRequired} {
+	for _, status := range []int{-1, http.StatusBadRequest, http.StatusNotFound, http.StatusPaymentRequired} {
 		if retryModelProbeWithAnotherCredential(status) {
 			t.Fatalf("status %d should preserve the model-specific failure", status)
 		}

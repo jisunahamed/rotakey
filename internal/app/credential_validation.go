@@ -674,7 +674,7 @@ func probeProviderModelWithSecret(ctx context.Context, provider Provider, input 
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return "failed", nil, nil, 0, fmt.Errorf("provider could not be reached for the model capability probe: %s", safeProbeTransportError(err))
+		return "failed", nil, nil, probeTransportStatus(err), fmt.Errorf("provider could not be reached for the model capability probe: %s", safeProbeTransportError(err))
 	}
 	defer response.Body.Close()
 	raw, _, readErr := boundedBody(response.Body, 1<<20)
@@ -719,6 +719,13 @@ func modelProbeTimeout(provider Provider) time.Duration {
 func retryModelProbeWithAnotherCredential(statusCode int) bool {
 	return statusCode == 0 || statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden ||
 		statusCode == http.StatusTooManyRequests || statusCode >= http.StatusInternalServerError
+}
+
+func probeTransportStatus(err error) int {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return -1
+	}
+	return 0
 }
 
 func safeProbeTransportError(err error) string {
