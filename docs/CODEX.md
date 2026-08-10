@@ -1,6 +1,6 @@
 # Use Codex with Rotakey
 
-Rotakey v0.2.2 exposes the Responses API used by Codex and includes the
+Rotakey v0.2.3 exposes the Responses API used by Codex and includes the
 `rotakey-codex` companion. The companion creates a separate `rotakey` Codex
 profile, protects the gateway key with the operating-system credential store,
 and keeps a local model catalog synchronized with verified Rotakey routes.
@@ -14,7 +14,7 @@ authentication, profiles, and `model_catalog_json`.
 1. Deploy Rotakey behind HTTPS.
 2. Add an enabled provider, API key, and model route in the Admin UI.
 3. Run the model capability probe. Only routes marked `catalog_verified` or
-   `probe_verified` appear in the Codex manifest and picker.
+   `probe_verified` appear in the public model APIs, Codex manifest, and picker.
 4. Save the Rotakey gateway key shown during initial setup or key rotation.
 
 The gateway must return `ready` from `/health/ready`. A bare remote HTTP URL is

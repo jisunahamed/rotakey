@@ -156,6 +156,11 @@ func (s *Server) loadRoute(ctx context.Context, alias string) (routeRuntime, err
 		FROM model_routes m
 		JOIN providers p ON p.id = m.provider_id
 		WHERE m.public_alias = $1 AND m.enabled = TRUE AND p.enabled = TRUE
+		  AND m.capability_status IN ('catalog_verified', 'probe_verified')
+		  AND EXISTS (
+		    SELECT 1 FROM credentials c
+		    WHERE c.provider_id = p.id AND c.enabled = TRUE AND c.status <> 'quarantined'
+		  )
 	`, alias)
 
 	var route routeRuntime
