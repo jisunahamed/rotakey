@@ -117,6 +117,21 @@ func TestInspectNVIDIAProviderUsesCatalogAndDefersRouteProbe(t *testing.T) {
 	}
 }
 
+func TestCatalogVerifiesOfficialProviderModelLists(t *testing.T) {
+	tests := []Provider{
+		{BaseURL: "https://api.openai.com/v1", APIFormat: "openai"},
+		{BaseURL: "https://api.anthropic.com/v1", APIFormat: "anthropic"},
+	}
+	for _, provider := range tests {
+		if !catalogVerifiesProvider(provider) {
+			t.Fatalf("official provider catalog was not accepted: %#v", provider)
+		}
+	}
+	if catalogVerifiesProvider(Provider{BaseURL: "https://api.openai.com/v1", APIFormat: "anthropic"}) {
+		t.Fatal("protocol mismatch must not be accepted")
+	}
+}
+
 func TestVerifyProviderProtocolExplainsUnknownOpenAI404(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

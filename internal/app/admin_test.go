@@ -59,6 +59,26 @@ func TestNormalizeGeminiCompatibilityURL(t *testing.T) {
 	}
 }
 
+func TestNormalizeOfficialProviderCompatibilityURLs(t *testing.T) {
+	tests := []struct {
+		name, input, protocol, want string
+	}{
+		{"openai root", "https://api.openai.com", "openai", "https://api.openai.com/v1"},
+		{"openai model endpoint", "https://api.openai.com/v1/models", "openai", "https://api.openai.com/v1"},
+		{"openai chat endpoint", "https://api.openai.com/v1/chat/completions", "openai", "https://api.openai.com/v1"},
+		{"anthropic root", "https://api.anthropic.com", "anthropic", "https://api.anthropic.com/v1"},
+		{"anthropic model endpoint", "https://api.anthropic.com/v1/models", "anthropic", "https://api.anthropic.com/v1"},
+		{"anthropic messages endpoint", "https://api.anthropic.com/v1/messages", "anthropic", "https://api.anthropic.com/v1"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := normalizeProviderCompatibilityURL(test.input, test.protocol); got != test.want {
+				t.Fatalf("normalizeProviderCompatibilityURL(%q, %q) = %q, want %q", test.input, test.protocol, got, test.want)
+			}
+		})
+	}
+}
+
 func TestProviderJSONIncludesEmptyCollections(t *testing.T) {
 	raw, err := json.Marshal(Provider{
 		Models:      []ModelRoute{},

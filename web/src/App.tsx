@@ -241,7 +241,7 @@ function App() {
             </button>
           </div>
           <div className="sidebar__version" title={version?.commit ? `Commit ${version.commit}` : undefined}>
-            Rotakey v{version?.current_version ?? "0.2.3"}
+            Rotakey v{version?.current_version ?? "0.2.4"}
             {version?.update_available ? <span>new v{version.latest_version}</span> : <span>up to date</span>}
           </div>
         </div>
@@ -1507,8 +1507,22 @@ function geminiCompatibilitySuggestion(baseURL: string, apiFormat: ProviderDraft
 
 function ProviderFields({ value, onChange }: { value: ProviderDraft; onChange: (value: ProviderDraft) => void }) {
   const geminiSuggestion = geminiCompatibilitySuggestion(value.base_url, value.api_format);
+  const useOfficialPreset = (kind: "openai" | "anthropic") => onChange({
+    ...value,
+    name: value.name.trim() || (kind === "openai" ? "OpenAI" : "Anthropic"),
+    base_url: kind === "openai" ? "https://api.openai.com/v1" : "https://api.anthropic.com/v1",
+    api_format: kind,
+    auth_header: kind === "openai" ? "Authorization" : "X-Api-Key",
+    auth_scheme: kind === "openai" ? "Bearer" : "",
+    anthropic_version: value.anthropic_version || "2023-06-01"
+  });
   return (
     <div className="form-stack">
+      <div className="button-row">
+        <span className="muted">Official provider setup</span>
+        <Button type="button" variant="quiet" onClick={() => useOfficialPreset("openai")}>Use OpenAI</Button>
+        <Button type="button" variant="quiet" onClick={() => useOfficialPreset("anthropic")}>Use Anthropic</Button>
+      </div>
       <label className="field"><span>API protocol <small>Controls authentication, validation and upstream request format</small></span><select value={value.api_format} onChange={(event) => {
         const api_format = event.target.value as "openai" | "anthropic";
         onChange({

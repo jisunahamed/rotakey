@@ -1,6 +1,6 @@
 # Use Codex with Rotakey
 
-Rotakey v0.2.3 exposes the Responses API used by Codex and includes the
+Rotakey v0.2.4 exposes the Responses API used by Codex and includes the
 `rotakey-codex` companion. The companion creates a separate `rotakey` Codex
 profile, protects the gateway key with the operating-system credential store,
 and keeps a local model catalog synchronized with verified Rotakey routes.

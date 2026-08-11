@@ -285,24 +285,36 @@ func validateProviderInput(input *providerInput) error {
 	return nil
 }
 
-// normalizeProviderCompatibilityURL turns well-known native API roots into the
-// provider's documented compatibility root. Gemini's native v1beta API does
-// not expose OpenAI /models or /chat/completions at that level; those endpoints
-// live below /openai/.
+// normalizeProviderCompatibilityURL turns well-known provider roots and
+// endpoint URLs into the documented compatibility root. This accepts the
+// common values users paste from provider docs, including a direct /models URL.
 func normalizeProviderCompatibilityURL(rawURL, apiFormat string) string {
-	if apiFormat != "openai" {
-		return rawURL
-	}
 	parsed, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil || !strings.EqualFold(parsed.Hostname(), "generativelanguage.googleapis.com") {
+	if err != nil {
 		return rawURL
 	}
-	if strings.TrimRight(parsed.Path, "/") != "/v1beta" {
-		return rawURL
+	host := strings.ToLower(parsed.Hostname())
+	path := strings.TrimRight(parsed.Path, "/")
+	if apiFormat == "openai" && host == "generativelanguage.googleapis.com" && path == "/v1beta" {
+		parsed.Path = "/v1beta/openai/"
+		parsed.RawPath = ""
+		return parsed.String()
 	}
-	parsed.Path = "/v1beta/openai/"
-	parsed.RawPath = ""
-	return parsed.String()
+	if apiFormat == "openai" && host == "api.openai.com" {
+		if path == "" || path == "/v1" || path == "/v1/models" || path == "/v1/chat/completions" || path == "/v1/responses" {
+			parsed.Path = "/v1"
+			parsed.RawPath = ""
+			return parsed.String()
+		}
+	}
+	if apiFormat == "anthropic" && host == "api.anthropic.com" {
+		if path == "" || path == "/v1" || path == "/v1/models" || path == "/v1/messages" {
+			parsed.Path = "/v1"
+			parsed.RawPath = ""
+			return parsed.String()
+		}
+	}
+	return rawURL
 }
 
 func providerSlugFromName(name string) string {

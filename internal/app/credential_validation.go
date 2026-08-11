@@ -150,9 +150,9 @@ func inspectProviderSecret(ctx context.Context, provider Provider, secret []byte
 	// that probe can reject a valid credential. Their authenticated OpenAI
 	// catalog is enough to validate the key and base URL; each selected route is
 	// checked separately by the model capability probe.
-	if catalogVerifiesOpenAIProvider(provider) {
+	if catalogVerifiesProvider(provider) {
 		result.ProtocolVerified = true
-		result.DetectedProtocol = "openai"
+		result.DetectedProtocol = protocol
 		result.Valid = true
 		if isNVIDIAOpenAIProvider(provider) {
 			result.Warning = "NVIDIA model catalog and API key verified. Use Check all models to verify each selected inference route."
@@ -195,8 +195,23 @@ func isNVIDIAOpenAIProvider(provider Provider) bool {
 	return strings.TrimRight(parsed.Path, "/") == "/v1"
 }
 
-func catalogVerifiesOpenAIProvider(provider Provider) bool {
-	return isGeminiOpenAIProvider(provider) || isNVIDIAOpenAIProvider(provider)
+func catalogVerifiesProvider(provider Provider) bool {
+	if isGeminiOpenAIProvider(provider) || isNVIDIAOpenAIProvider(provider) {
+		return true
+	}
+	parsed, err := url.Parse(strings.TrimSpace(provider.BaseURL))
+	if err != nil {
+		return false
+	}
+	path := strings.TrimRight(parsed.Path, "/")
+	switch {
+	case provider.APIFormat == "openai" && strings.EqualFold(parsed.Hostname(), "api.openai.com"):
+		return path == "/v1"
+	case provider.APIFormat == "anthropic" && strings.EqualFold(parsed.Hostname(), "api.anthropic.com"):
+		return path == "/v1"
+	default:
+		return false
+	}
 }
 
 func upstreamModelForProvider(provider Provider, model string) string {

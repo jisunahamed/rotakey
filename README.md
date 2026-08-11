@@ -126,9 +126,9 @@ Providers, Model routes, and Request logs use the same dense resource/inspector 
 
 In **Providers → Add provider**:
 
-1. Choose **OpenAI-compatible** or **Anthropic-compatible**, then enter the provider base URL. The Anthropic preset uses `x-api-key` and `anthropic-version: 2023-06-01`.
+1. Choose **OpenAI-compatible** or **Anthropic-compatible**, then enter the provider base URL. Use the official quick setup buttons for OpenAI or Anthropic; Rotakey also normalizes their root, `/models`, and inference endpoint URLs to `/v1`. The Anthropic setup uses `x-api-key` and `anthropic-version: 2023-06-01`.
 2. Enter API keys in separate fields. Use **Add another API key** for more keys, and optionally mark one key as **Primary**.
-3. Choose **Check keys & load models**. Rotakey validates every key against the protocol-aware upstream `/models` endpoint. If an Anthropic-compatible catalog returns `305`, `404`, `405`, or a non-standard response, add the model ID manually; Rotakey validates manually created routes with a minimal Messages probe.
+3. Choose **Check keys & load models**. Rotakey loads the authenticated upstream `/models` catalog before any route is created. Official OpenAI and Anthropic catalogs validate the key directly; custom compatibility providers also receive a one-token protocol check. If an Anthropic-compatible catalog returns `305`, `404`, `405`, or a non-standard response, add the model ID manually; Rotakey validates manually created routes with a minimal Messages probe.
 4. Select the models to expose and edit their globally unique public aliases, such as `groq/llama-3.3-70b`.
 5. Set any combination of RPS, RPM, RPD, TPS, TPM, TPD, and TPR. Blank fields are unlimited. An API key's shared limits are consumed by every model under that provider; optional model-specific limits add a narrower limit for that model.
 6. Review and create the provider. Keys are validated again before they are encrypted and saved.
