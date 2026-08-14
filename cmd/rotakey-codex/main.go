@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	version     = "0.2.4"
+	version     = "0.2.5"
 	beginMarker = "# BEGIN ROTAKEY CODEX MANAGED BLOCK"
 	endMarker   = "# END ROTAKEY CODEX MANAGED BLOCK"
 )

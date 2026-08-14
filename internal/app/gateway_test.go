@@ -28,6 +28,32 @@ func TestCopyStreamingResponseRequiresCompletion(t *testing.T) {
 	}
 }
 
+func TestWriteStreamFailureUsesEndpointProtocol(t *testing.T) {
+	t.Run("chat", func(t *testing.T) {
+		var output bytes.Buffer
+		writeStreamFailure(&output, nil, "chat", "stream_interrupted", "ended early", "demo/model")
+		body := output.String()
+		if strings.Contains(body, "response.failed") {
+			t.Fatalf("chat stream failure used Responses event:\n%s", body)
+		}
+		if !strings.Contains(body, `"error"`) || !strings.Contains(body, "data: [DONE]") {
+			t.Fatalf("chat stream failure is not OpenAI-compatible:\n%s", body)
+		}
+	})
+
+	t.Run("responses", func(t *testing.T) {
+		var output bytes.Buffer
+		writeStreamFailure(&output, nil, "responses", "stream_interrupted", "ended early", "demo/model")
+		body := output.String()
+		if !strings.Contains(body, "event: response.failed") {
+			t.Fatalf("responses stream failure did not use Responses event:\n%s", body)
+		}
+		if !strings.Contains(body, `"object":"response"`) || !strings.Contains(body, `"model":"demo/model"`) {
+			t.Fatalf("responses stream failure is missing response metadata:\n%s", body)
+		}
+	})
+}
+
 type flushingRecorder struct {
 	header  http.Header
 	body    bytes.Buffer

@@ -557,14 +557,7 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 				finalErrorCode = "stream_interrupted"
 				finalErrorMessage = "The response stream ended unexpectedly after it started."
 				if !translated {
-					writeSSE(w, capture, "response.failed", map[string]any{
-						"type": "response.failed",
-						"response": map[string]any{
-							"status": "failed",
-							"error":  map[string]any{"code": finalErrorCode, "message": finalErrorMessage},
-						},
-					})
-					writeRaw(w, capture, []byte("data: [DONE]\n\n"))
+					writeStreamFailure(w, capture, endpoint, finalErrorCode, finalErrorMessage, alias)
 				}
 			}
 			if capture != nil {
@@ -653,6 +646,35 @@ func copyStreamingResponse(destination http.ResponseWriter, source io.Reader, ca
 			return readErr
 		}
 	}
+}
+
+func writeStreamFailure(destination io.Writer, capture *limitedCapture, endpoint, code, message, model string) {
+	if endpoint == "responses" {
+		id, _ := newID("resp")
+		writeSSE(destination, capture, "response.failed", map[string]any{
+			"type": "response.failed",
+			"response": map[string]any{
+				"id":         id,
+				"object":     "response",
+				"created_at": time.Now().Unix(),
+				"status":     "failed",
+				"model":      model,
+				"error":      map[string]any{"code": code, "message": message},
+			},
+		})
+		writeRaw(destination, capture, []byte("data: [DONE]\n\n"))
+		return
+	}
+	payload := map[string]any{
+		"error": map[string]any{
+			"message": message,
+			"type":    "api_error",
+			"code":    code,
+		},
+	}
+	encoded, _ := json.Marshal(payload)
+	writeRaw(destination, capture, append(append([]byte("data: "), encoded...), []byte("\n\n")...))
+	writeRaw(destination, capture, []byte("data: [DONE]\n\n"))
 }
 
 func readRequestBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, error) {

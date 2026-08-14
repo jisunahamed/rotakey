@@ -235,6 +235,8 @@ Native upstream Responses requests pass through. For a Chat-only route, Rotakey 
 
 Features that cannot be translated faithfully return `400 unsupported_feature`, including background mode, hosted tools, conversation IDs, file references, and unsupported item types. They are never silently dropped.
 
+Streaming failures keep the public endpoint protocol. Chat Completions streams emit OpenAI-compatible error chunks, while Responses streams emit `response.failed`; OpenCode and other Chat-stream clients should not see a Responses-only failure event on `/v1/chat/completions`.
+
 ## Security and retention
 
 - Upstream credentials and optional captured bodies use AES-256-GCM with `APP_MASTER_KEY`.

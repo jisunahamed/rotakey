@@ -1,6 +1,6 @@
 # Use Codex with Rotakey
 
-Rotakey v0.2.4 exposes the Responses API used by Codex and includes the
+Rotakey v0.2.5 exposes the Responses API used by Codex and includes the
 `rotakey-codex` companion. The companion creates a separate `rotakey` Codex
 profile, protects the gateway key with the operating-system credential store,
 and keeps a local model catalog synchronized with verified Rotakey routes.
@@ -142,6 +142,8 @@ routes. WebSocket Responses transport is disabled so Codex uses HTTP/SSE.
   restart Codex.
 - `429`: every eligible provider credential is at capacity or in cooldown.
 - `502`: inspect Rotakey Request logs for every upstream attempt and final cause.
+- OpenCode `invalid_union` after `response.failed`: upgrade Rotakey to v0.2.5
+  or newer so interrupted Chat streams use Chat-compatible error chunks.
 - `unsupported_feature`: use a native Responses route or remove the unsupported
   hosted/file/conversation feature.
 - Config parse error: run `rotakey-codex rollback`, then `doctor`.
