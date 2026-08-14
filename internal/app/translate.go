@@ -144,7 +144,7 @@ func translateResponseContent(raw any) (any, error) {
 			return nil, unsupportedFeatureError{Feature: "input content part"}
 		}
 		switch part["type"] {
-		case "input_text", "output_text":
+		case "input_text":
 			translated = append(translated, map[string]any{"type": "text", "text": part["text"]})
 		case "input_image":
 			imageURL := part["image_url"]
