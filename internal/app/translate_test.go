@@ -29,6 +29,39 @@ func TestTranslateResponsesRequest(t *testing.T) {
 	}
 }
 
+
+func TestTranslateResponsesRequestAcceptsOutputTextHistory(t *testing.T) {
+	source := map[string]any{
+		"input": []any{
+			map[string]any{
+				"role": "assistant",
+				"content": []any{
+					map[string]any{"type": "output_text", "text": "previous answer"},
+				},
+			},
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "input_text", "text": "continue"},
+				},
+			},
+		},
+	}
+	chat, err := translateResponsesRequest(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := chat["messages"].([]any)
+	if len(messages) != 2 {
+		t.Fatalf("got %d messages, want 2", len(messages))
+	}
+	assistant := messages[0].(map[string]any)
+	content := assistant["content"].([]any)
+	part := content[0].(map[string]any)
+	if assistant["role"] != "assistant" || part["type"] != "text" || part["text"] != "previous answer" {
+		t.Fatalf("unexpected translated assistant history: %#v", assistant)
+	}
+}
 func TestTranslateChatStreamCompletesTextAndToolLifecycle(t *testing.T) {
 	source := strings.Join([]string{
 		`data: {"choices":[{"delta":{"content":"hello "}}]}`,
