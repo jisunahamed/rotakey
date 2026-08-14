@@ -16,7 +16,7 @@ jobs:
         run: test "${GITHUB_REF_NAME#v}" = "$(sed -n 's/^[[:space:]]*Version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' internal/app/version.go)"
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.25.12"
+          go-version: "1.25.13"
           cache: true
       - name: Build Codex companion binaries
         shell: bash

@@ -7,7 +7,7 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.25.12-alpine AS go-builder
+FROM golang:1.25.13-alpine AS go-builder
 ARG ROTAKEY_VERSION=0.2.5
 ARG ROTAKEY_COMMIT=unknown
 ARG ROTAKEY_BUILD_TIME=unknown
