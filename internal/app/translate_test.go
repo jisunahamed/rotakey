@@ -29,7 +29,6 @@ func TestTranslateResponsesRequest(t *testing.T) {
 	}
 }
 
-
 func TestTranslateResponsesRequestAcceptsOutputTextHistory(t *testing.T) {
 	source := map[string]any{
 		"input": []any{
@@ -84,6 +83,21 @@ func TestTranslateChatStreamCompletesTextAndToolLifecycle(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), `"sequence_number":1`) {
 		t.Fatal("stream events do not carry increasing sequence numbers")
+	}
+}
+
+func TestTranslateChatStreamAcceptsTerminalFinishReasonWithoutDone(t *testing.T) {
+	source := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"complete"}}]}`,
+		`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		"",
+	}, "\n")
+	var output bytes.Buffer
+	if err := translateChatStream(strings.NewReader(source), &output, "demo/model", nil); err != nil {
+		t.Fatalf("terminal finish_reason should complete stream: %v", err)
+	}
+	if !strings.Contains(output.String(), "response.completed") || !strings.Contains(output.String(), "data: [DONE]") {
+		t.Fatalf("terminal completion was not emitted:\n%s", output.String())
 	}
 }
 

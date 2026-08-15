@@ -317,6 +317,13 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 	if retryTimeout <= 0 {
 		retryTimeout = 120 * time.Second
 	}
+	if isStream && retryTimeout < 15*time.Minute {
+		// A streaming completion can legitimately take longer than the normal
+		// request deadline with large-context models. The request context remains
+		// the deadline authority; disable http.Client's competing total timeout.
+		retryTimeout = 15 * time.Minute
+		client.Timeout = 0
+	}
 	retryContext, cancelRetries := context.WithTimeout(r.Context(), retryTimeout)
 	defer cancelRetries()
 	compatibilityRemoved := append([]string(nil), strippedParameters...)

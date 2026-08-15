@@ -233,6 +233,7 @@ func translateChatStream(source io.Reader, destination io.Writer, publicAlias st
 	textOutputIndex := -1
 	nextOutputIndex := 0
 	finished := false
+	terminalChoice := false
 	emitFailure := func(code, message string) {
 		writeSSEWithSeq(destination, capture, "response.failed", sequence, map[string]any{
 			"type": "response.failed",
@@ -312,6 +313,11 @@ func translateChatStream(source io.Reader, destination io.Writer, publicAlias st
 			}
 			if choices, ok := chunk["choices"].([]any); ok && len(choices) > 0 {
 				choice, _ := choices[0].(map[string]any)
+				if finishReason, ok := choice["finish_reason"].(string); ok && finishReason != "" {
+					// Some OpenAI-compatible providers close the SSE connection after
+					// this terminal chunk without a separate data: [DONE] marker.
+					terminalChoice = true
+				}
 				delta, _ := choice["delta"].(map[string]any)
 				if content, ok := delta["content"].(string); ok && content != "" {
 					if !textStarted {
@@ -378,6 +384,10 @@ func translateChatStream(source io.Reader, destination io.Writer, publicAlias st
 		if err != nil {
 			if err == io.EOF {
 				if finished {
+					return nil
+				}
+				if terminalChoice {
+					finalize()
 					return nil
 				}
 				emitFailure("stream_interrupted", "The upstream stream ended before completion.")
