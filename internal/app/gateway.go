@@ -310,7 +310,14 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 	compatibilityRetriesRemaining := 2
 	maxAttempts := len(credentials) + compatibilityRetriesRemaining
 	transientRetriesRemaining := max(0, len(credentials)-1)
-	retryContext, cancelRetries := context.WithTimeout(r.Context(), 60*time.Second)
+	// Use the configured provider deadline for the entire retry window. A fixed
+	// 60-second gateway deadline was cutting long-context requests off even when
+	// the provider itself was configured to allow a longer response time.
+	retryTimeout := time.Duration(route.Provider.TimeoutSeconds) * time.Second
+	if retryTimeout <= 0 {
+		retryTimeout = 120 * time.Second
+	}
+	retryContext, cancelRetries := context.WithTimeout(r.Context(), retryTimeout)
 	defer cancelRetries()
 	compatibilityRemoved := append([]string(nil), strippedParameters...)
 	compatibilityReplaced := cloneStringMap(replacedParameters)
@@ -556,27 +563,22 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 			if streamErr != nil && !errors.Is(streamErr, context.Canceled) {
 				finalErrorCode = "stream_interrupted"
 				finalErrorMessage = "The response stream ended unexpectedly after it started."
-				finalStatus = http.StatusBadGateway
-				attempts = append(attempts, AttemptRecord{
-					CredentialID: selected.ID, CredentialLabel: selected.Label,
-					Error: finalErrorCode, ErrorMessage: finalErrorMessage,
-					Retryable: true, DurationMS: time.Since(attemptStarted).Milliseconds(),
-				})
-				s.markCredentialFailure(r.Context(), selected.ID, 0, 0)
-				if retryContext.Err() == nil && transientRetriesRemaining > 0 && attemptNumber+1 < maxAttempts {
-					transientRetriesRemaining--
+				if !translated {
 					writeStreamFailure(w, capture, endpoint, finalErrorCode, finalErrorMessage, alias)
-					continue
 				}
-				writeStreamFailure(w, capture, endpoint, finalErrorCode, finalErrorMessage, alias)
-				s.storeRequestLog(r.Context(), logInput{
-					RequestID: requestID, Route: route, Credential: finalCredential,
-					Endpoint: endpoint, Attempts: attempts, RoutingDecisions: routingDecisions,
-					Started: started, StatusCode: finalStatus,
-					InputTokens: inputTokens, OutputTokens: 0, ErrorCode: finalErrorCode, ErrorMessage: finalErrorMessage, RequestBody: raw,
-					ResponseBody: finalResponse, Capture: route.Model.CaptureBodies, Truncated: truncated,
-				})
-				return
+			}
+			if capture != nil {
+				finalResponse = append([]byte(nil), capture.Bytes()...)
+				truncated = capture.truncated
+			}
+			s.storeRequestLog(r.Context(), logInput{
+				RequestID: requestID, Route: route, Credential: finalCredential,
+				Endpoint: endpoint, Attempts: attempts, RoutingDecisions: routingDecisions,
+				Started: started, StatusCode: finalStatus,
+				InputTokens: inputTokens, OutputTokens: 0, ErrorCode: finalErrorCode, ErrorMessage: finalErrorMessage, RequestBody: raw,
+				ResponseBody: finalResponse, Capture: route.Model.CaptureBodies, Truncated: truncated,
+			})
+			return
 		}
 
 		body, wasTruncated, readErr := boundedBody(response.Body, s.cfg.MaxResponseBytes)
