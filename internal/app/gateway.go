@@ -556,22 +556,27 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 			if streamErr != nil && !errors.Is(streamErr, context.Canceled) {
 				finalErrorCode = "stream_interrupted"
 				finalErrorMessage = "The response stream ended unexpectedly after it started."
-				if !translated {
+				finalStatus = http.StatusBadGateway
+				attempts = append(attempts, AttemptRecord{
+					CredentialID: selected.ID, CredentialLabel: selected.Label,
+					Error: finalErrorCode, ErrorMessage: finalErrorMessage,
+					Retryable: true, DurationMS: time.Since(attemptStarted).Milliseconds(),
+				})
+				s.markCredentialFailure(r.Context(), selected.ID, 0, 0)
+				if retryContext.Err() == nil && transientRetriesRemaining > 0 && attemptNumber+1 < maxAttempts {
+					transientRetriesRemaining--
 					writeStreamFailure(w, capture, endpoint, finalErrorCode, finalErrorMessage, alias)
+					continue
 				}
-			}
-			if capture != nil {
-				finalResponse = append([]byte(nil), capture.Bytes()...)
-				truncated = capture.truncated
-			}
-			s.storeRequestLog(r.Context(), logInput{
-				RequestID: requestID, Route: route, Credential: finalCredential,
-				Endpoint: endpoint, Attempts: attempts, RoutingDecisions: routingDecisions,
-				Started: started, StatusCode: finalStatus,
-				InputTokens: inputTokens, OutputTokens: 0, ErrorCode: finalErrorCode, ErrorMessage: finalErrorMessage, RequestBody: raw,
-				ResponseBody: finalResponse, Capture: route.Model.CaptureBodies, Truncated: truncated,
-			})
-			return
+				writeStreamFailure(w, capture, endpoint, finalErrorCode, finalErrorMessage, alias)
+				s.storeRequestLog(r.Context(), logInput{
+					RequestID: requestID, Route: route, Credential: finalCredential,
+					Endpoint: endpoint, Attempts: attempts, RoutingDecisions: routingDecisions,
+					Started: started, StatusCode: finalStatus,
+					InputTokens: inputTokens, OutputTokens: 0, ErrorCode: finalErrorCode, ErrorMessage: finalErrorMessage, RequestBody: raw,
+					ResponseBody: finalResponse, Capture: route.Model.CaptureBodies, Truncated: truncated,
+				})
+				return
 		}
 
 		body, wasTruncated, readErr := boundedBody(response.Body, s.cfg.MaxResponseBytes)
