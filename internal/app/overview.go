@@ -172,12 +172,12 @@ type adminOverview struct {
 }
 
 type overviewRouteStats struct {
-	Requests         int64
-	Errors           int64
-	Tokens           int64
-	EstimatedCostUSD float64
-	LatencyP95MS     int64
-	LastRequestAt    *time.Time
+	Requests      int64
+	Errors        int64
+	InputTokens   int64
+	OutputTokens  int64
+	LatencyP95MS  int64
+	LastRequestAt *time.Time
 }
 
 type redisBucket struct {
@@ -289,7 +289,10 @@ func (s *Server) buildAdminOverview(ctx context.Context, rawRange string) (admin
 				OutputCostPerMillionUSD: model.OutputCostPerMillionUSD,
 			}
 			stats := routeStats[model.ID]
-			route.Requests, route.Errors, route.Tokens, route.EstimatedCostUSD = stats.Requests, stats.Errors, stats.Tokens, stats.EstimatedCostUSD
+			route.Requests, route.Errors = stats.Requests, stats.Errors
+			route.Tokens = stats.InputTokens + stats.OutputTokens
+			route.EstimatedCostUSD = (float64(stats.InputTokens)*model.InputCostPerMillionUSD + float64(stats.OutputTokens)*model.OutputCostPerMillionUSD) / 1_000_000
+			summary.EstimatedCostUSD += route.EstimatedCostUSD
 			route.LatencyP95MS, route.LastRequestAt = stats.LatencyP95MS, stats.LastRequestAt
 			if route.Requests > 0 {
 				route.ErrorRate = float64(route.Errors) / float64(route.Requests)
@@ -353,14 +356,13 @@ func (s *Server) overviewUsageSummary(ctx context.Context, selected overviewRang
 	var result overviewSummary
 	var p50, p95 float64
 	err := s.db.QueryRow(ctx, `
-		SELECT COUNT(*), COUNT(*) FILTER (WHERE l.status_code >= 400),
+		SELECT COUNT(*), COUNT(*) FILTER (WHERE status_code >= 400),
 		       COALESCE(SUM(input_tokens + output_tokens), 0),
-		       COALESCE(SUM(((l.input_tokens * COALESCE(m.input_cost_per_million_usd, 0)) + (l.output_tokens * COALESCE(m.output_cost_per_million_usd, 0))) / 1000000.0)::float8), 0),
 		       COALESCE(percentile_cont(0.50) WITHIN GROUP (ORDER BY latency_ms), 0),
 		       COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms), 0)
-		FROM request_logs l LEFT JOIN model_routes m ON m.id=l.model_id
-		WHERE l.created_at >= NOW() - $1::interval
-	`, selected.SQLSpan).Scan(&result.Requests, &result.Errors, &result.Tokens, &result.EstimatedCostUSD, &p50, &p95)
+		FROM request_logs
+		WHERE created_at >= NOW() - $1::interval
+	`, selected.SQLSpan).Scan(&result.Requests, &result.Errors, &result.Tokens, &p50, &p95)
 	if err != nil {
 		return overviewSummary{}, fmt.Errorf("load overview summary: %w", err)
 	}
@@ -449,14 +451,13 @@ func (s *Server) overviewAllTimeSeries(ctx context.Context) ([]overviewPoint, er
 
 func (s *Server) overviewRouteStats(ctx context.Context, selected overviewRange) (map[string]overviewRouteStats, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT l.model_id, COUNT(*), COUNT(*) FILTER (WHERE l.status_code >= 400),
-		       COALESCE(SUM(input_tokens + output_tokens), 0),
-		       COALESCE(SUM(((l.input_tokens * m.input_cost_per_million_usd) + (l.output_tokens * m.output_cost_per_million_usd)) / 1000000.0)::float8), 0),
+		SELECT model_id, COUNT(*), COUNT(*) FILTER (WHERE status_code >= 400),
+		       COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
 		       COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms), 0),
 		       MAX(created_at)
-		FROM request_logs l JOIN model_routes m ON m.id=l.model_id
-		WHERE l.created_at >= NOW() - $1::interval AND l.model_id IS NOT NULL
-		GROUP BY l.model_id
+		FROM request_logs
+		WHERE created_at >= NOW() - $1::interval AND model_id IS NOT NULL
+		GROUP BY model_id
 	`, selected.SQLSpan)
 	if err != nil {
 		return nil, fmt.Errorf("load route overview stats: %w", err)
@@ -467,7 +468,7 @@ func (s *Server) overviewRouteStats(ctx context.Context, selected overviewRange)
 		var id string
 		var stats overviewRouteStats
 		var latency float64
-		if err := rows.Scan(&id, &stats.Requests, &stats.Errors, &stats.Tokens, &stats.EstimatedCostUSD, &latency, &stats.LastRequestAt); err != nil {
+		if err := rows.Scan(&id, &stats.Requests, &stats.Errors, &stats.InputTokens, &stats.OutputTokens, &latency, &stats.LastRequestAt); err != nil {
 			return nil, err
 		}
 		stats.LatencyP95MS = int64(latency)
