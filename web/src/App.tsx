@@ -516,7 +516,7 @@ function OverviewPage({
   const [error, setError] = useState("");
   const [range, setRange] = useState<Overview["range"]>(() => {
     const value = new URLSearchParams(location.search).get("range");
-    return value === "1h" || value === "7d" ? value : "24h";
+    return value === "1h" || value === "24h" || value === "7d" || value === "all" ? value : "all";
   });
   const [selected, setSelected] = useState<InspectTarget | null>(null);
   const [expandedProviders, setExpandedProviders] = useState<Set<string>>(() => new Set());
@@ -590,7 +590,7 @@ function OverviewPage({
             </div>
             <div className="ops-commandbar__actions">
               <div className="range-switcher" aria-label="Overview time range">
-                {(["1h", "24h", "7d"] as const).map((value) => (
+                {(["1h", "24h", "7d", "all"] as const).map((value) => (
                   <button
                     key={value}
                     className={range === value ? "is-active" : ""}
@@ -615,10 +615,12 @@ function OverviewPage({
             <LedgerMetric label="Errors" value={`${formatNumber(overview.summary.errors)} · ${(overview.summary.error_rate * 100).toFixed(1)}%`} tone={overview.summary.errors ? "danger" : "default"} />
             <LedgerMetric label="P95 latency" value={`${formatNumber(overview.summary.latency_p95_ms)} ms`} />
             <LedgerMetric label="Tokens" value={formatCompact(overview.summary.tokens)} />
+            <LedgerMetric label="Estimated cost" value={formatUSD(overview.summary.estimated_cost_usd)} />
           </section>
 
           <div className={`ops-console__workspace${selected ? " has-inspector" : ""}`}>
             <div className="ops-console__main">
+              <ModelUsageRanking routes={overview.routes} range={overview.range} />
               <div className="signal-grid">
                 <SignalTimeline overview={overview} />
                 <AttentionQueue
@@ -734,25 +736,34 @@ function ConsolePanelHeader({ eyebrow, title, detail }: { eyebrow: string; title
 }
 
 function SignalTimeline({ overview }: { overview: Overview }) {
-  const requestPath = timelinePath(overview.series.map((point) => point.requests), 720, 128);
-  const latencyPath = timelinePath(overview.series.map((point) => point.latency_p95_ms), 720, 128);
+  const chartWidth = 654;
+  const chartHeight = 116;
+  const requestValues = overview.series.map((point) => point.requests);
+  const latencyValues = overview.series.map((point) => point.latency_p95_ms);
+  const requestPath = timelinePath(requestValues, chartWidth, chartHeight);
+  const latencyPath = timelinePath(latencyValues, chartWidth, chartHeight);
+  const requestMax = Math.max(...requestValues, 0);
+  const latencyMax = Math.max(...latencyValues, 0);
   const errorPoints = overview.series.map((point, index) => ({
-    x: overview.series.length <= 1 ? 0 : (index / (overview.series.length - 1)) * 720,
+    x: overview.series.length <= 1 ? 0 : (index / (overview.series.length - 1)) * chartWidth,
     active: point.errors > 0
   }));
   return (
     <section className="console-panel signal-panel">
       <ConsolePanelHeader eyebrow="Signal timeline" title={`Traffic · ${overview.range}`} detail={`P50 ${overview.summary.latency_p50_ms} ms`} />
       <div className="signal-chart">
-        <svg viewBox="0 0 720 150" role="img" aria-label={`Requests and P95 latency over ${overview.range}`}>
-          <g className="signal-gridlines">
-            {[18, 50, 82, 114].map((y) => <line key={y} x1="0" x2="720" y1={y} y2={y} />)}
+        <svg viewBox="0 0 720 170" role="img" aria-label={`Requests and P95 latency over ${overview.range}`}>
+          <g className="signal-axis-labels">
+            <text x="0" y="15">{formatCompact(requestMax)}</text><text x="28" y="127">0</text>
+            <text x="672" y="15">{formatLatency(latencyMax)}</text><text x="688" y="127">0</text>
+            <text x="46" y="158">{formatChartDate(overview.series[0]?.timestamp)}</text>
+            <text x="620" y="158">{formatChartDate(overview.series.at(-1)?.timestamp)}</text>
           </g>
-          <path className="signal-path signal-path--latency" d={latencyPath} />
+          <g transform="translate(46 12)"><g className="signal-gridlines">
+            {[0, 29, 58, 87, 116].map((y) => <line key={y} x1="0" x2={chartWidth} y1={y} y2={y} />)}
+          </g><path className="signal-path signal-path--latency" d={latencyPath} />
           <path className="signal-path signal-path--requests" d={requestPath} />
-          {errorPoints.filter((point) => point.active).map((point) => (
-            <line className="signal-error-tick" key={point.x} x1={point.x} x2={point.x} y1="132" y2="144" />
-          ))}
+          {errorPoints.filter((point) => point.active).map((point) => <line className="signal-error-tick" key={point.x} x1={point.x} x2={point.x} y1="121" y2="130" />)}</g>
         </svg>
         <div className="signal-legend">
           <span><i className="is-request" /> requests</span>
@@ -762,6 +773,13 @@ function SignalTimeline({ overview }: { overview: Overview }) {
       </div>
     </section>
   );
+}
+
+function ModelUsageRanking({ routes, range }: { routes: Overview["routes"]; range: Overview["range"] }) {
+  const ranking = [...routes].filter((route) => route.requests > 0).sort((a, b) => b.estimated_cost_usd - a.estimated_cost_usd || b.tokens - a.tokens || b.requests - a.requests).slice(0, 6);
+  return <section className="console-panel model-ranking"><ConsolePanelHeader eyebrow="Usage ledger" title="Model ranking" detail={`${range} · ranked by estimated cost`} />
+    {ranking.length === 0 ? <p className="console-empty">No model usage in this range.</p> : <div className="model-ranking__table"><div className="model-ranking__head"><span>Model</span><span>Requests</span><span>Tokens</span><span>Cost</span></div>{ranking.map((route, index) => <div className="model-ranking__row" key={route.id}><strong><i>{index + 1}</i><code>{route.alias}</code></strong><span>{formatNumber(route.requests)}</span><span>{formatCompact(route.tokens)}</span><span>{formatUSD(route.estimated_cost_usd)}</span></div>)}</div>}
+  </section>;
 }
 
 function AttentionQueue({ alerts, onSelect }: { alerts: Overview["alerts"]; onSelect: (alert: Overview["alerts"][number]) => void }) {
@@ -1593,6 +1611,10 @@ function ModelFields({ value, onChange }: { value: ModelDraft; onChange: (value:
         <label className="field"><span>Default max output tokens</span><input type="number" min={1} value={value.default_max_output_tokens} onChange={(e) => onChange({ ...value, default_max_output_tokens: Number(e.target.value) })} /></label>
         <label className="field"><span>Tokenizer profile</span><select value={value.tokenizer} onChange={(e) => onChange({ ...value, tokenizer: e.target.value })}><option value="heuristic">Conservative heuristic</option><option value="cl100k_base">cl100k_base</option><option value="o200k_base">o200k_base</option></select></label>
       </div>
+      <div className="field-pair">
+        <label className="field"><span>Input price <small>USD per 1M tokens</small></span><input type="number" min={0} step="0.000001" value={value.input_cost_per_million_usd} onChange={(e) => onChange({ ...value, input_cost_per_million_usd: Number(e.target.value) })} /></label>
+        <label className="field"><span>Output price <small>USD per 1M tokens</small></span><input type="number" min={0} step="0.000001" value={value.output_cost_per_million_usd} onChange={(e) => onChange({ ...value, output_cost_per_million_usd: Number(e.target.value) })} /></label>
+      </div>
       <Toggle checked={value.supports_chat} onChange={(supports_chat) => onChange({ ...value, supports_chat })} label="Upstream supports Chat Completions" />
       <Toggle checked={value.supports_responses} onChange={(supports_responses) => onChange({ ...value, supports_responses })} label="Upstream supports Responses natively" description="When off, the gateway translates the supported Responses subset to Chat Completions." />
       <Toggle checked={value.supports_messages} onChange={(supports_messages) => onChange({ ...value, supports_messages })} label="Expose through Anthropic Messages" description="Allows this public alias on /v1/messages. Cross-protocol routes support the lossless text, image and client-tool subset." />
@@ -1618,11 +1640,13 @@ function ModelForm({ provider, model, onClose, onComplete, notify }: { provider:
     public_alias: model.public_alias, upstream_model: model.upstream_model,
     supports_chat: model.supports_chat, supports_responses: model.supports_responses, supports_messages: model.supports_messages,
     default_max_output_tokens: model.default_max_output_tokens, tokenizer: model.tokenizer,
+    input_cost_per_million_usd: model.input_cost_per_million_usd, output_cost_per_million_usd: model.output_cost_per_million_usd,
     capture_bodies: model.capture_bodies, strip_parameters: model.strip_parameters ?? [], enabled: model.enabled
   } : {
     public_alias: `${provider.slug}/`, upstream_model: "", supports_chat: true,
     supports_responses: false, supports_messages: true, default_max_output_tokens: 1024,
-    tokenizer: "heuristic", capture_bodies: false, strip_parameters: [], enabled: true
+    tokenizer: "heuristic", input_cost_per_million_usd: 0, output_cost_per_million_usd: 0,
+    capture_bodies: false, strip_parameters: [], enabled: true
   });
   const [busy, setBusy] = useState(false);
   const save = async () => {
@@ -2700,6 +2724,8 @@ function routeInputsFromSelection(selected: Record<string, string>, catalogIDs =
     supports_responses: false,
     supports_messages: true,
     default_max_output_tokens: 1024,
+    input_cost_per_million_usd: 0,
+    output_cost_per_million_usd: 0,
     tokenizer: "heuristic",
     capture_bodies: false,
     strip_parameters: [],
@@ -2713,7 +2739,7 @@ function normalizeProviders(providers: Provider[] | null | undefined): Provider[
     api_format: provider.api_format ?? "openai",
     anthropic_version: provider.anthropic_version ?? "2023-06-01",
     extra_headers: provider.extra_headers ?? {},
-    models: (provider.models ?? []).map((model) => ({ ...model, supports_messages: model.supports_messages ?? true, strip_parameters: model.strip_parameters ?? [], capability_status: model.capability_status ?? "unverified", capability_profile: model.capability_profile ?? {} })),
+    models: (provider.models ?? []).map((model) => ({ ...model, supports_messages: model.supports_messages ?? true, strip_parameters: model.strip_parameters ?? [], capability_status: model.capability_status ?? "unverified", capability_profile: model.capability_profile ?? {}, input_cost_per_million_usd: model.input_cost_per_million_usd ?? 0, output_cost_per_million_usd: model.output_cost_per_million_usd ?? 0 })),
     credentials: (provider.credentials ?? []).map((credential) => ({
       ...credential,
       validation_error: credential.validation_error ?? "",
@@ -2727,6 +2753,19 @@ function formatNumber(value: number) {
 
 function formatCompact(value: number) {
   return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value);
+}
+
+function formatUSD(value: number) {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: value < 1 ? 4 : 2 }).format(value || 0);
+}
+
+function formatLatency(value: number) {
+  return value >= 1000 ? `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}s` : `${Math.round(value)}ms`;
+}
+
+function formatChartDate(value?: string) {
+  if (!value) return "—";
+  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(new Date(value));
 }
 
 async function copyText(value: string) {

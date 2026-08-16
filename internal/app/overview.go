@@ -25,33 +25,38 @@ type overviewRange struct {
 
 func parseOverviewRange(value string) (overviewRange, error) {
 	switch value {
-	case "", "24h":
+	case "24h":
 		return overviewRange{Name: "24h", Span: 24 * time.Hour, Bucket: time.Hour, SQLSpan: "24 hours", SQLBucket: "1 hour", PointCount: 24}, nil
+	case "":
+		return overviewRange{Name: "all", Span: 100 * 365 * 24 * time.Hour, Bucket: 30 * 24 * time.Hour, SQLSpan: "36500 days", SQLBucket: "30 days", PointCount: 1218}, nil
 	case "1h":
 		return overviewRange{Name: "1h", Span: time.Hour, Bucket: 5 * time.Minute, SQLSpan: "1 hour", SQLBucket: "5 minutes", PointCount: 12}, nil
 	case "7d":
 		return overviewRange{Name: "7d", Span: 7 * 24 * time.Hour, Bucket: 6 * time.Hour, SQLSpan: "7 days", SQLBucket: "6 hours", PointCount: 28}, nil
+	case "all":
+		return overviewRange{Name: "all", Span: 100 * 365 * 24 * time.Hour, Bucket: 30 * 24 * time.Hour, SQLSpan: "36500 days", SQLBucket: "30 days", PointCount: 1218}, nil
 	default:
 		return overviewRange{}, errInvalidOverviewRange
 	}
 }
 
 type overviewSummary struct {
-	ProvidersTotal  int     `json:"providers_total"`
-	ProvidersReady  int     `json:"providers_ready"`
-	RoutesTotal     int     `json:"routes_total"`
-	RoutesReady     int     `json:"routes_ready"`
-	KeysTotal       int     `json:"keys_total"`
-	KeysReady       int     `json:"keys_ready"`
-	KeysWarning     int     `json:"keys_warning"`
-	Requests        int64   `json:"requests"`
-	Tokens          int64   `json:"tokens"`
-	Errors          int64   `json:"errors"`
-	ErrorRate       float64 `json:"error_rate"`
-	LatencyP50MS    int64   `json:"latency_p50_ms"`
-	LatencyP95MS    int64   `json:"latency_p95_ms"`
-	MaxWaitMS       int     `json:"max_wait_ms"`
-	GatewayKeyReady bool    `json:"gateway_key_ready"`
+	ProvidersTotal   int     `json:"providers_total"`
+	ProvidersReady   int     `json:"providers_ready"`
+	RoutesTotal      int     `json:"routes_total"`
+	RoutesReady      int     `json:"routes_ready"`
+	KeysTotal        int     `json:"keys_total"`
+	KeysReady        int     `json:"keys_ready"`
+	KeysWarning      int     `json:"keys_warning"`
+	Requests         int64   `json:"requests"`
+	Tokens           int64   `json:"tokens"`
+	EstimatedCostUSD float64 `json:"estimated_cost_usd"`
+	Errors           int64   `json:"errors"`
+	ErrorRate        float64 `json:"error_rate"`
+	LatencyP50MS     int64   `json:"latency_p50_ms"`
+	LatencyP95MS     int64   `json:"latency_p95_ms"`
+	MaxWaitMS        int     `json:"max_wait_ms"`
+	GatewayKeyReady  bool    `json:"gateway_key_ready"`
 }
 
 type overviewPoint struct {
@@ -107,28 +112,31 @@ type overviewCredential struct {
 }
 
 type overviewRoute struct {
-	ID                  string               `json:"id"`
-	ProviderID          string               `json:"provider_id"`
-	Alias               string               `json:"alias"`
-	UpstreamModel       string               `json:"upstream_model"`
-	Provider            string               `json:"provider"`
-	Enabled             bool                 `json:"enabled"`
-	Healthy             int                  `json:"healthy_credentials"`
-	Unavailable         int                  `json:"unavailable_credentials"`
-	Total               int                  `json:"total_credentials"`
-	Requests            int64                `json:"requests"`
-	Errors              int64                `json:"errors"`
-	Tokens              int64                `json:"tokens"`
-	ErrorRate           float64              `json:"error_rate"`
-	LatencyP95MS        int64                `json:"latency_p95_ms"`
-	LastRequestAt       *time.Time           `json:"last_request_at,omitempty"`
-	Segments            []overviewCredential `json:"segments"`
-	NextCredentialID    string               `json:"next_credential_id,omitempty"`
-	NextRequestHeadroom *overviewHeadroom    `json:"next_request_headroom,omitempty"`
-	NextTokenHeadroom   *overviewHeadroom    `json:"next_token_headroom,omitempty"`
-	StripParameters     []string             `json:"strip_parameters"`
-	SupportsResponses   bool                 `json:"supports_responses"`
-	DefaultOutputTokens int                  `json:"default_max_output_tokens"`
+	ID                      string               `json:"id"`
+	ProviderID              string               `json:"provider_id"`
+	Alias                   string               `json:"alias"`
+	UpstreamModel           string               `json:"upstream_model"`
+	Provider                string               `json:"provider"`
+	Enabled                 bool                 `json:"enabled"`
+	Healthy                 int                  `json:"healthy_credentials"`
+	Unavailable             int                  `json:"unavailable_credentials"`
+	Total                   int                  `json:"total_credentials"`
+	Requests                int64                `json:"requests"`
+	Errors                  int64                `json:"errors"`
+	Tokens                  int64                `json:"tokens"`
+	EstimatedCostUSD        float64              `json:"estimated_cost_usd"`
+	InputCostPerMillionUSD  float64              `json:"input_cost_per_million_usd"`
+	OutputCostPerMillionUSD float64              `json:"output_cost_per_million_usd"`
+	ErrorRate               float64              `json:"error_rate"`
+	LatencyP95MS            int64                `json:"latency_p95_ms"`
+	LastRequestAt           *time.Time           `json:"last_request_at,omitempty"`
+	Segments                []overviewCredential `json:"segments"`
+	NextCredentialID        string               `json:"next_credential_id,omitempty"`
+	NextRequestHeadroom     *overviewHeadroom    `json:"next_request_headroom,omitempty"`
+	NextTokenHeadroom       *overviewHeadroom    `json:"next_token_headroom,omitempty"`
+	StripParameters         []string             `json:"strip_parameters"`
+	SupportsResponses       bool                 `json:"supports_responses"`
+	DefaultOutputTokens     int                  `json:"default_max_output_tokens"`
 }
 
 type overviewAlert struct {
@@ -164,11 +172,12 @@ type adminOverview struct {
 }
 
 type overviewRouteStats struct {
-	Requests      int64
-	Errors        int64
-	Tokens        int64
-	LatencyP95MS  int64
-	LastRequestAt *time.Time
+	Requests         int64
+	Errors           int64
+	Tokens           int64
+	EstimatedCostUSD float64
+	LatencyP95MS     int64
+	LastRequestAt    *time.Time
 }
 
 type redisBucket struct {
@@ -274,11 +283,13 @@ func (s *Server) buildAdminOverview(ctx context.Context, rawRange string) (admin
 				UpstreamModel: model.UpstreamModel, Provider: provider.Name,
 				Enabled: provider.Enabled && model.Enabled, Total: len(provider.Credentials),
 				Segments: []overviewCredential{}, StripParameters: model.StripParameters,
-				SupportsResponses:   model.SupportsResponses,
-				DefaultOutputTokens: model.DefaultMaxOutputTokens,
+				SupportsResponses:       model.SupportsResponses,
+				DefaultOutputTokens:     model.DefaultMaxOutputTokens,
+				InputCostPerMillionUSD:  model.InputCostPerMillionUSD,
+				OutputCostPerMillionUSD: model.OutputCostPerMillionUSD,
 			}
 			stats := routeStats[model.ID]
-			route.Requests, route.Errors, route.Tokens = stats.Requests, stats.Errors, stats.Tokens
+			route.Requests, route.Errors, route.Tokens, route.EstimatedCostUSD = stats.Requests, stats.Errors, stats.Tokens, stats.EstimatedCostUSD
 			route.LatencyP95MS, route.LastRequestAt = stats.LatencyP95MS, stats.LastRequestAt
 			if route.Requests > 0 {
 				route.ErrorRate = float64(route.Errors) / float64(route.Requests)
@@ -342,13 +353,14 @@ func (s *Server) overviewUsageSummary(ctx context.Context, selected overviewRang
 	var result overviewSummary
 	var p50, p95 float64
 	err := s.db.QueryRow(ctx, `
-		SELECT COUNT(*), COUNT(*) FILTER (WHERE status_code >= 400),
+		SELECT COUNT(*), COUNT(*) FILTER (WHERE l.status_code >= 400),
 		       COALESCE(SUM(input_tokens + output_tokens), 0),
+		       COALESCE(SUM(((l.input_tokens * COALESCE(m.input_cost_per_million_usd, 0)) + (l.output_tokens * COALESCE(m.output_cost_per_million_usd, 0))) / 1000000.0)::float8), 0),
 		       COALESCE(percentile_cont(0.50) WITHIN GROUP (ORDER BY latency_ms), 0),
 		       COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms), 0)
-		FROM request_logs
-		WHERE created_at >= NOW() - $1::interval
-	`, selected.SQLSpan).Scan(&result.Requests, &result.Errors, &result.Tokens, &p50, &p95)
+		FROM request_logs l LEFT JOIN model_routes m ON m.id=l.model_id
+		WHERE l.created_at >= NOW() - $1::interval
+	`, selected.SQLSpan).Scan(&result.Requests, &result.Errors, &result.Tokens, &result.EstimatedCostUSD, &p50, &p95)
 	if err != nil {
 		return overviewSummary{}, fmt.Errorf("load overview summary: %w", err)
 	}
@@ -403,13 +415,14 @@ func (s *Server) overviewSeries(ctx context.Context, selected overviewRange) ([]
 
 func (s *Server) overviewRouteStats(ctx context.Context, selected overviewRange) (map[string]overviewRouteStats, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT model_id, COUNT(*), COUNT(*) FILTER (WHERE status_code >= 400),
+		SELECT l.model_id, COUNT(*), COUNT(*) FILTER (WHERE l.status_code >= 400),
 		       COALESCE(SUM(input_tokens + output_tokens), 0),
+		       COALESCE(SUM(((l.input_tokens * m.input_cost_per_million_usd) + (l.output_tokens * m.output_cost_per_million_usd)) / 1000000.0)::float8), 0),
 		       COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms), 0),
 		       MAX(created_at)
-		FROM request_logs
-		WHERE created_at >= NOW() - $1::interval AND model_id IS NOT NULL
-		GROUP BY model_id
+		FROM request_logs l JOIN model_routes m ON m.id=l.model_id
+		WHERE l.created_at >= NOW() - $1::interval AND l.model_id IS NOT NULL
+		GROUP BY l.model_id
 	`, selected.SQLSpan)
 	if err != nil {
 		return nil, fmt.Errorf("load route overview stats: %w", err)
@@ -420,7 +433,7 @@ func (s *Server) overviewRouteStats(ctx context.Context, selected overviewRange)
 		var id string
 		var stats overviewRouteStats
 		var latency float64
-		if err := rows.Scan(&id, &stats.Requests, &stats.Errors, &stats.Tokens, &latency, &stats.LastRequestAt); err != nil {
+		if err := rows.Scan(&id, &stats.Requests, &stats.Errors, &stats.Tokens, &stats.EstimatedCostUSD, &latency, &stats.LastRequestAt); err != nil {
 			return nil, err
 		}
 		stats.LatencyP95MS = int64(latency)

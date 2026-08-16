@@ -12,10 +12,11 @@ func TestParseOverviewRange(t *testing.T) {
 		points int
 		bucket time.Duration
 	}{
-		{input: "", name: "24h", points: 24, bucket: time.Hour},
+		{input: "", name: "all", points: 1218, bucket: 30 * 24 * time.Hour},
 		{input: "1h", name: "1h", points: 12, bucket: 5 * time.Minute},
 		{input: "24h", name: "24h", points: 24, bucket: time.Hour},
 		{input: "7d", name: "7d", points: 28, bucket: 6 * time.Hour},
+		{input: "all", name: "all", points: 1218, bucket: 30 * 24 * time.Hour},
 	}
 	for _, test := range tests {
 		got, err := parseOverviewRange(test.input)

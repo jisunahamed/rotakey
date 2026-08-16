@@ -27,6 +27,8 @@ export type ModelRoute = {
   supports_responses: boolean;
   supports_messages: boolean;
   default_max_output_tokens: number;
+  input_cost_per_million_usd: number;
+  output_cost_per_million_usd: number;
   tokenizer: string;
   capture_bodies: boolean;
   strip_parameters: string[];
@@ -92,7 +94,7 @@ export type DiscoveredModel = {
 
 export type Overview = {
   generated_at: string;
-  range: "1h" | "24h" | "7d";
+  range: "1h" | "24h" | "7d" | "all";
   base_url: string;
   summary: {
     providers_total: number;
@@ -104,6 +106,7 @@ export type Overview = {
     keys_warning: number;
     requests: number;
     tokens: number;
+    estimated_cost_usd: number;
     errors: number;
     error_rate: number;
     latency_p50_ms: number;
@@ -143,6 +146,9 @@ export type Overview = {
     requests: number;
     errors: number;
     tokens: number;
+    estimated_cost_usd: number;
+    input_cost_per_million_usd: number;
+    output_cost_per_million_usd: number;
     error_rate: number;
     latency_p95_ms: number;
     last_request_at?: string;
