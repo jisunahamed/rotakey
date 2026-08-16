@@ -372,6 +372,9 @@ func (s *Server) overviewUsageSummary(ctx context.Context, selected overviewRang
 }
 
 func (s *Server) overviewSeries(ctx context.Context, selected overviewRange) ([]overviewPoint, error) {
+	if selected.Name == "all" {
+		return s.overviewAllTimeSeries(ctx)
+	}
 	rows, err := s.db.Query(ctx, `
 		WITH bounds AS (
 			SELECT date_bin($2::interval, NOW(), TIMESTAMPTZ '1970-01-01') AS end_bucket
@@ -401,6 +404,37 @@ func (s *Server) overviewSeries(ctx context.Context, selected overviewRange) ([]
 	}
 	defer rows.Close()
 	result := make([]overviewPoint, 0, selected.PointCount)
+	for rows.Next() {
+		var point overviewPoint
+		var latency float64
+		if err := rows.Scan(&point.Timestamp, &point.Requests, &point.Errors, &point.Tokens, &latency); err != nil {
+			return nil, err
+		}
+		point.LatencyP95MS = int64(latency)
+		result = append(result, point)
+	}
+	return result, rows.Err()
+}
+
+// overviewAllTimeSeries deliberately uses observed calendar months instead of
+// constructing decades of empty buckets. It keeps the all-time dashboard fast
+// on long-lived installations while still representing every month with usage.
+func (s *Server) overviewAllTimeSeries(ctx context.Context) ([]overviewPoint, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT date_trunc('month', created_at),
+		       COUNT(*),
+		       COUNT(*) FILTER (WHERE status_code >= 400),
+		       COALESCE(SUM(input_tokens + output_tokens), 0),
+		       COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms), 0)
+		FROM request_logs
+		GROUP BY 1
+		ORDER BY 1
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("load all-time overview series: %w", err)
+	}
+	defer rows.Close()
+	result := []overviewPoint{}
 	for rows.Next() {
 		var point overviewPoint
 		var latency float64
