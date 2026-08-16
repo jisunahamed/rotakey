@@ -99,7 +99,7 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 	modelRows, err := s.db.Query(ctx, `
 		SELECT id, provider_id, public_alias, upstream_model, supports_chat,
 		       supports_responses, supports_messages, default_max_output_tokens, tokenizer,
-		       input_cost_per_million_usd, output_cost_per_million_usd,
+		       input_cost_per_million_usd::float8, output_cost_per_million_usd::float8,
 		       capture_bodies, strip_parameters, capability_status, capability_profile,
 		       capabilities_checked_at, capability_error, enabled, created_at, updated_at
 		FROM model_routes ORDER BY created_at, id
