@@ -310,18 +310,12 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 	compatibilityRetriesRemaining := 2
 	maxAttempts := len(credentials) + compatibilityRetriesRemaining
 	transientRetriesRemaining := max(0, len(credentials)-1)
-	// Use the configured provider deadline for the entire retry window. A fixed
-	// 60-second gateway deadline was cutting long-context requests off even when
-	// the provider itself was configured to allow a longer response time.
-	retryTimeout := time.Duration(route.Provider.TimeoutSeconds) * time.Second
-	if retryTimeout <= 0 {
-		retryTimeout = 120 * time.Second
-	}
-	if isStream && retryTimeout < 15*time.Minute {
-		// A streaming completion can legitimately take longer than the normal
-		// request deadline with large-context models. The request context remains
-		// the deadline authority; disable http.Client's competing total timeout.
-		retryTimeout = 15 * time.Minute
+	// Use the configured provider deadline for the entire retry window so raising
+	// a provider's timeout actually extends how long a request may run.
+	retryTimeout := providerRetryTimeout(route.Provider, isStream)
+	if isStream {
+		// The request context remains the deadline authority for streams; disable
+		// http.Client's competing total timeout.
 		client.Timeout = 0
 	}
 	retryContext, cancelRetries := context.WithTimeout(r.Context(), retryTimeout)

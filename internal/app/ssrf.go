@@ -88,3 +88,20 @@ func upstreamClient(provider Provider) (*http.Client, error) {
 		},
 	}, nil
 }
+
+// providerRetryTimeout returns the deadline for a provider's entire retry
+// window based on its configured timeout. Raising a provider's timeout extends
+// how long a request may run; when unset it falls back to 120 seconds. Streaming
+// completions can legitimately run longer than the configured request timeout,
+// so they use an extended floor and the request context stays the deadline
+// authority (callers should disable http.Client's competing total timeout).
+func providerRetryTimeout(provider Provider, isStream bool) time.Duration {
+	timeout := time.Duration(provider.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 120 * time.Second
+	}
+	if isStream && timeout < 15*time.Minute {
+		timeout = 15 * time.Minute
+	}
+	return timeout
+}

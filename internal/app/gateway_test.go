@@ -325,3 +325,29 @@ func TestActiveRequestLogsExposeRunningStateAndFilter(t *testing.T) {
 		t.Fatalf("unexpected filtered logs: %#v", got)
 	}
 }
+
+
+func TestProviderRetryTimeout(t *testing.T) {
+	minute := time.Minute
+	cases := []struct {
+		name    string
+		seconds int
+		stream  bool
+		want    time.Duration
+	}{
+		{"default when unset", 0, false, 120 * time.Second},
+		{"honors configured timeout", 300, false, 300 * time.Second},
+		{"raised timeout extends window", 600, false, 600 * time.Second},
+		{"stream floors short timeout", 120, true, 15 * minute},
+		{"stream keeps longer timeout", 1200, true, 1200 * time.Second},
+		{"stream default floors to 15m", 0, true, 15 * minute},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			got := providerRetryTimeout(Provider{TimeoutSeconds: test.seconds}, test.stream)
+			if got != test.want {
+				t.Fatalf("providerRetryTimeout(%d, stream=%v) = %s, want %s", test.seconds, test.stream, got, test.want)
+			}
+		})
+	}
+}

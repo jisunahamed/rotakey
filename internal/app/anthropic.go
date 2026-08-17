@@ -155,7 +155,12 @@ func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, 
 	var finalCode, finalMessage, upstreamRequestID string
 	var inputTokens, outputTokens int64
 	var truncated bool
-	retryContext, cancelRetries := context.WithTimeout(r.Context(), 60*time.Second)
+	if stream {
+		// The request context is the deadline authority for streams; disable
+		// http.Client's competing total timeout so long streams are not cut short.
+		client.Timeout = 0
+	}
+	retryContext, cancelRetries := context.WithTimeout(r.Context(), providerRetryTimeout(route.Provider, stream))
 	defer cancelRetries()
 	compatibilityRetriesRemaining := 2
 	maxAttempts := len(credentials) + compatibilityRetriesRemaining
@@ -408,7 +413,12 @@ func (s *Server) proxyOpenAIUpstreamForAnthropic(w http.ResponseWriter, r *http.
 	var finalCode, finalMessage, upstreamRequestID string
 	var inputTokens, outputTokens int64
 	stream, _ := payload["stream"].(bool)
-	retryContext, cancelRetries := context.WithTimeout(r.Context(), 60*time.Second)
+	if stream {
+		// The request context is the deadline authority for streams; disable
+		// http.Client's competing total timeout so long streams are not cut short.
+		client.Timeout = 0
+	}
+	retryContext, cancelRetries := context.WithTimeout(r.Context(), providerRetryTimeout(route.Provider, stream))
 	defer cancelRetries()
 	compatibilityRetriesRemaining := 2
 	maxAttempts := len(credentials) + compatibilityRetriesRemaining
