@@ -82,10 +82,10 @@ func TestInspectProviderSecretDoesNotVerifyOpenAIErrorEnvelope(t *testing.T) {
 		BaseURL: upstream.URL + "/v1", APIFormat: "openai", AuthHeader: "Authorization",
 		AuthScheme: "Bearer", TimeoutSeconds: 5, AllowPrivateNetwork: true,
 	}, []byte("valid-key"))
-	if result.Valid || result.ProtocolVerified || result.StatusCode != http.StatusNotFound {
+	if !result.Valid || result.ProtocolVerified || result.StatusCode != http.StatusNotFound {
 		t.Fatalf("inspection = %#v", result)
 	}
-	if result.DetectedProtocol != "openai" || result.Warning == "" {
+	if result.DetectedProtocol != "openai" || !strings.Contains(result.Warning, "Select only models") {
 		t.Fatalf("warning did not preserve protocol diagnosis: %#v", result)
 	}
 }
@@ -106,8 +106,8 @@ func TestInspectNVIDIAProviderUsesCatalogAndDefersRouteProbe(t *testing.T) {
 		BaseURL: upstream.URL + "/v1", APIFormat: "openai", AuthHeader: "Authorization",
 		AuthScheme: "Bearer", TimeoutSeconds: 5, AllowPrivateNetwork: true,
 	}, []byte("valid-key"))
-	if result.Valid {
-		t.Fatal("ordinary provider with an unavailable probe model must not be accepted")
+	if !result.Valid || !strings.Contains(result.Warning, "Select only models") {
+		t.Fatal("ordinary provider with a catalog-only model should remain usable")
 	}
 
 	// The public NVIDIA hostname takes the catalog-only validation path. The

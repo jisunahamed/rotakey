@@ -166,6 +166,15 @@ func inspectProviderSecret(ctx context.Context, provider Provider, secret []byte
 		result.StatusCode = status
 	}
 	if !verified {
+		// A model catalog proves that this credential can authenticate to the
+		// provider, but its first entry is not necessarily an inference model the
+		// credential can use. Keep the catalog usable when that arbitrary probe
+		// returns model-specific 404 rather than rejecting the whole provider.
+		if result.CatalogAvailable && (detected == "" || detected == protocol) && status == http.StatusNotFound {
+			result.Valid = true
+			result.Warning = fmt.Sprintf("Model catalog loaded, but %q could not be used for the automatic protocol check. Select only models this API key can access. %s", result.Models[0].ID, warning)
+			return result
+		}
 		result.Warning = warning
 		return result
 	}

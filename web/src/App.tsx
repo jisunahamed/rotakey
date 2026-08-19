@@ -1378,6 +1378,9 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
   const [limits, setLimits] = useState<RatePolicy>(emptyPolicy);
   const [discoveredModels, setDiscoveredModels] = useState<DiscoveredModel[]>([]);
   const [selectedModels, setSelectedModels] = useState<Record<string, string>>({});
+  const [modelAccessWarning, setModelAccessWarning] = useState("");
+  const [unverifiedCredentialLabels, setUnverifiedCredentialLabels] = useState<string[]>([]);
+  const [canContinueWithoutValidation, setCanContinueWithoutValidation] = useState(false);
   const steps = ["Provider", "API keys", "Models", "Review"];
 
   const inspectKeys = async () => {
@@ -1389,6 +1392,9 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
     }
     setBusy(true);
     setError("");
+    setModelAccessWarning("");
+    setCanContinueWithoutValidation(false);
+    setUnverifiedCredentialLabels([]);
     try {
       const inspections = await Promise.all(credentials.map((credential) => (
         api<CredentialInspection>("/api/admin/providers/inspect", {
@@ -1396,16 +1402,21 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
           json: { provider, secret: credential.secret }
         })
       )));
-      const invalid = inspections.findIndex((inspection) => !inspection.valid);
-      if (invalid >= 0) {
-        setError(`${credentials[invalid].label}: ${inspections[invalid].warning || "API key validation failed."}`);
-        return;
-      }
       const models = mergeModelCatalogs(inspections.map((inspection) => inspection.models));
       setDiscoveredModels(models);
       setSelectedModels({});
+      setModelAccessWarning(inspections.find((inspection) => inspection.valid && inspection.warning)?.warning ?? "");
+      const invalid = inspections.findIndex((inspection) => !inspection.valid);
+      if (invalid >= 0) {
+        setUnverifiedCredentialLabels(credentials.filter((_, index) => !inspections[index].valid).map((credential) => credential.label));
+        setCanContinueWithoutValidation(true);
+        setError(`${credentials[invalid].label}: ${inspections[invalid].warning || "API key validation failed."}`);
+        return;
+      }
       setStep(2);
     } catch (caught) {
+      setUnverifiedCredentialLabels(credentials.map((credential) => credential.label));
+      setCanContinueWithoutValidation(true);
       setError(errorMessage(caught));
     } finally {
       setBusy(false);
@@ -1417,7 +1428,7 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
     setError("");
     let createdID = "";
     try {
-      const credentials = credentialInputs(credentialDrafts, limits);
+      const credentials = credentialInputs(credentialDrafts, limits, unverifiedCredentialLabels);
       const created = await api<{ id: string }>("/api/admin/providers", { method: "POST", json: provider });
       createdID = created.id;
       await api(`/api/admin/providers/${created.id}/credentials`, { method: "POST", json: { credentials } });
@@ -1426,7 +1437,11 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
       if (routes.length > 0) {
         await api(`/api/admin/providers/${created.id}/models/bulk`, { method: "POST", json: { models: routes } });
       }
-      onComplete(`Provider saved with ${credentials.length} validated API key${credentials.length === 1 ? "" : "s"} and ${routes.length} model route${routes.length === 1 ? "" : "s"}.`);
+      const unverifiedCount = credentials.filter((credential) => credential.allow_unverified).length;
+      const credentialSummary = unverifiedCount
+        ? `${credentials.length} API key${credentials.length === 1 ? "" : "s"}, including ${unverifiedCount} saved without validation`
+        : `${credentials.length} validated API key${credentials.length === 1 ? "" : "s"}`;
+      onComplete(`Provider saved with ${credentialSummary} and ${routes.length} model route${routes.length === 1 ? "" : "s"}.`);
     } catch (caught) {
       if (createdID) {
         await api(`/api/admin/providers/${createdID}`, { method: "DELETE" }).catch(() => undefined);
@@ -1442,11 +1457,26 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
       <div className="stepper">
         {steps.map((label, index) => <span key={label} className={index <= step ? "is-active" : ""}>{label}</span>)}
       </div>
-      {error && <InlineNotice tone="danger">{error}</InlineNotice>}
+      {error && (
+        <InlineNotice tone="danger">
+          <div className="wizard-validation-notice">
+            <span>{error}</span>
+            {step === 1 && canContinueWithoutValidation && (
+              <Button type="button" variant="quiet" onClick={() => {
+                setError("");
+                setStep(2);
+              }}>Continue with manual model setup</Button>
+            )}
+          </div>
+        </InlineNotice>
+      )}
       {step === 0 && <ProviderFields value={provider} onChange={(next) => {
         setProvider(next);
         setDiscoveredModels([]);
         setSelectedModels({});
+        setModelAccessWarning("");
+        setUnverifiedCredentialLabels([]);
+        setCanContinueWithoutValidation(false);
       }} />}
       {step === 1 && (
         <>
@@ -1454,24 +1484,30 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
             setCredentialDrafts(next);
             setDiscoveredModels([]);
             setSelectedModels({});
+            setModelAccessWarning("");
+            setUnverifiedCredentialLabels([]);
+            setCanContinueWithoutValidation(false);
           }} />
           <fieldset><legend>Shared limits for these API keys</legend><p className="fieldset-note">Usage from every model under this provider consumes the same key limit. Blank means no limit.</p><RateFields value={limits} onChange={setLimits} /></fieldset>
         </>
       )}
       {step === 2 && (
-        <ModelCatalog
-          provider={{ slug: providerSlugForUI(provider.name) }}
-          models={discoveredModels}
-          existing={[]}
-          selected={selectedModels}
-          onChange={setSelectedModels}
-        />
+        <>
+          {modelAccessWarning && <InlineNotice>{modelAccessWarning}</InlineNotice>}
+          <ModelCatalog
+            provider={{ slug: providerSlugForUI(provider.name) }}
+            models={discoveredModels}
+            existing={[]}
+            selected={selectedModels}
+            onChange={setSelectedModels}
+          />
+        </>
       )}
       {step === 3 && (
         <div className="review-list">
           <div><span>Provider</span><strong>{provider.name || "Missing"}</strong><code>{provider.base_url || "Missing base URL"}</code></div>
           <div><span>Public models</span><strong>{Object.keys(selectedModels).length}</strong><small>{discoveredModels.length} discovered from the provider.</small></div>
-          <div><span>API keys</span><strong>{credentialInputs(credentialDrafts, limits).length}</strong><small>Validated again on save, then encrypted.</small></div>
+          <div><span>API keys</span><strong>{credentialInputs(credentialDrafts, limits).length}</strong><small>{unverifiedCredentialLabels.length ? `${unverifiedCredentialLabels.length} saved without validation, then encrypted.` : "Validated again on save, then encrypted."}</small></div>
         </div>
       )}
       <div className="sheet-actions">
@@ -2680,7 +2716,8 @@ function CredentialEntries({ value, onChange }: { value: CredentialDraft[]; onCh
   );
 }
 
-function credentialInputs(value: CredentialDraft[], limits: RatePolicy) {
+function credentialInputs(value: CredentialDraft[], limits: RatePolicy, unverifiedLabels: string[] = []) {
+  const unverified = new Set(unverifiedLabels);
   return value
     .filter((credential) => credential.label.trim() && credential.secret.trim())
     .map((credential) => ({
@@ -2688,6 +2725,7 @@ function credentialInputs(value: CredentialDraft[], limits: RatePolicy) {
       secret: credential.secret.trim(),
       is_primary: credential.is_primary,
       enabled: true,
+      allow_unverified: unverified.has(credential.label.trim()),
       limits,
     }));
 }

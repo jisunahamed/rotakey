@@ -1704,6 +1704,24 @@ fieldset legend {
   border-color: var(--green);
 }
 
+.wizard-validation-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.wizard-validation-notice .button {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 620px) {
+  .wizard-validation-notice {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 .model-table,
 .log-table {
   min-width: 760px;

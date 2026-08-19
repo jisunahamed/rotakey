@@ -684,11 +684,12 @@ func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 }
 
 type credentialInput struct {
-	Label     string     `json:"label"`
-	Secret    string     `json:"secret"`
-	IsPrimary bool       `json:"is_primary"`
-	Enabled   *bool      `json:"enabled,omitempty"`
-	Limits    RatePolicy `json:"limits"`
+	Label           string     `json:"label"`
+	Secret          string     `json:"secret"`
+	IsPrimary       bool       `json:"is_primary"`
+	Enabled         *bool      `json:"enabled,omitempty"`
+	AllowUnverified bool       `json:"allow_unverified,omitempty"`
+	Limits          RatePolicy `json:"limits"`
 }
 
 func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request) {
@@ -731,7 +732,7 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 	inspections := make([]credentialInspection, 0, len(input.Credentials))
 	for _, credential := range input.Credentials {
 		inspection := inspectProviderSecret(r.Context(), provider, []byte(credential.Secret))
-		if !inspection.Valid {
+		if !inspection.Valid && !credential.AllowUnverified {
 			writeError(
 				w, http.StatusUnprocessableEntity, "invalid_credential",
 				fmt.Sprintf("%s: %s The API key was not saved.", credential.Label, inspection.Warning),
@@ -756,7 +757,7 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	created := make([]string, 0, len(input.Credentials))
-	for _, credential := range input.Credentials {
+	for index, credential := range input.Credentials {
 		encrypted, err := s.vault.Encrypt([]byte(credential.Secret))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "encryption_failed", "Credential could not be encrypted.")
@@ -768,16 +769,20 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 			enabled = *credential.Enabled
 		}
 		status := "healthy"
+		validationError := ""
 		if !enabled {
 			status = "disabled"
+		}
+		if !inspections[index].Valid {
+			validationError = "Saved without validation: " + inspections[index].Warning
 		}
 		if _, err := tx.Exec(r.Context(), `
 			INSERT INTO credentials
 			    (id, provider_id, label, secret_cipher, secret_suffix, is_primary,
 			     enabled, status, last_validated_at, validation_error)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),'')
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),$9)
 		`, id, r.PathValue("id"), credential.Label, encrypted, secretSuffix(credential.Secret),
-			credential.IsPrimary, enabled, status); err != nil {
+			credential.IsPrimary, enabled, status, validationError); err != nil {
 			writeError(w, http.StatusConflict, "credential_conflict", "Credential labels must be unique inside a provider.")
 			return
 		}
