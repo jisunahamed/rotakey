@@ -147,7 +147,7 @@ func (s *Server) loadRoute(ctx context.Context, alias string) (routeRuntime, err
 		SELECT
 			m.id, m.provider_id, m.public_alias, m.upstream_model, m.supports_chat,
 			m.supports_responses, m.supports_messages, m.default_max_output_tokens, m.tokenizer,
-			m.input_cost_per_million_usd::float8, m.output_cost_per_million_usd::float8,
+			m.input_cost_per_million_usd::float8, m.output_cost_per_million_usd::float8, m.request_cost_usd::float8,
 			m.capture_bodies, m.strip_parameters, m.capability_status, m.capability_profile,
 			m.capabilities_checked_at, m.capability_error, m.enabled, m.created_at, m.updated_at,
 			p.id, p.name, p.slug, p.base_url, p.auth_header, p.auth_scheme,
@@ -179,6 +179,7 @@ func (s *Server) loadRoute(ctx context.Context, alias string) (routeRuntime, err
 		&route.Model.Tokenizer,
 		&route.Model.InputCostPerMillionUSD,
 		&route.Model.OutputCostPerMillionUSD,
+		&route.Model.RequestCostUSD,
 		&route.Model.CaptureBodies,
 		&route.Model.StripParameters,
 		&route.Model.CapabilityStatus,

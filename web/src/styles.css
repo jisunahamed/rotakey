@@ -1185,6 +1185,12 @@ h3 {
   gap: 13px;
 }
 
+.pricing-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 13px;
+}
+
 .field {
   display: grid;
   gap: 7px;
@@ -2484,6 +2490,7 @@ button.table-row:hover {
   }
 
   .field-pair,
+  .pricing-fields,
   .body-grid,
   .access-key-panel {
     grid-template-columns: 1fr;

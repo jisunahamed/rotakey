@@ -127,6 +127,7 @@ type overviewRoute struct {
 	EstimatedCostUSD        float64              `json:"estimated_cost_usd"`
 	InputCostPerMillionUSD  float64              `json:"input_cost_per_million_usd"`
 	OutputCostPerMillionUSD float64              `json:"output_cost_per_million_usd"`
+	RequestCostUSD          *float64             `json:"request_cost_usd,omitempty"`
 	ErrorRate               float64              `json:"error_rate"`
 	LatencyP95MS            int64                `json:"latency_p95_ms"`
 	LastRequestAt           *time.Time           `json:"last_request_at,omitempty"`
@@ -287,11 +288,12 @@ func (s *Server) buildAdminOverview(ctx context.Context, rawRange string) (admin
 				DefaultOutputTokens:     model.DefaultMaxOutputTokens,
 				InputCostPerMillionUSD:  model.InputCostPerMillionUSD,
 				OutputCostPerMillionUSD: model.OutputCostPerMillionUSD,
+				RequestCostUSD:          model.RequestCostUSD,
 			}
 			stats := routeStats[model.ID]
 			route.Requests, route.Errors = stats.Requests, stats.Errors
 			route.Tokens = stats.InputTokens + stats.OutputTokens
-			route.EstimatedCostUSD = (float64(stats.InputTokens)*model.InputCostPerMillionUSD + float64(stats.OutputTokens)*model.OutputCostPerMillionUSD) / 1_000_000
+			route.EstimatedCostUSD = estimatedModelCost(stats, model)
 			summary.EstimatedCostUSD += route.EstimatedCostUSD
 			route.LatencyP95MS, route.LastRequestAt = stats.LatencyP95MS, stats.LastRequestAt
 			if route.Requests > 0 {
@@ -350,6 +352,14 @@ func (s *Server) buildAdminOverview(ctx context.Context, rawRange string) (admin
 		result.Alerts = result.Alerts[:20]
 	}
 	return result, nil
+}
+
+func estimatedModelCost(stats overviewRouteStats, model ModelRoute) float64 {
+	cost := (float64(stats.InputTokens)*model.InputCostPerMillionUSD + float64(stats.OutputTokens)*model.OutputCostPerMillionUSD) / 1_000_000
+	if model.RequestCostUSD != nil {
+		cost += float64(stats.Requests) * *model.RequestCostUSD
+	}
+	return cost
 }
 
 func (s *Server) overviewUsageSummary(ctx context.Context, selected overviewRange) (overviewSummary, error) {

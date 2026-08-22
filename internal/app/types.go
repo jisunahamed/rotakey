@@ -74,6 +74,7 @@ type ModelRoute struct {
 	DefaultMaxOutputTokens  int               `json:"default_max_output_tokens"`
 	InputCostPerMillionUSD  float64           `json:"input_cost_per_million_usd"`
 	OutputCostPerMillionUSD float64           `json:"output_cost_per_million_usd"`
+	RequestCostUSD          *float64          `json:"request_cost_usd,omitempty"`
 	Tokenizer               string            `json:"tokenizer"`
 	CaptureBodies           bool              `json:"capture_bodies"`
 	StripParameters         []string          `json:"strip_parameters"`

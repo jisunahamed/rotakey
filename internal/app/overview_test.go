@@ -1,9 +1,23 @@
 package app
 
 import (
+	"math"
 	"testing"
 	"time"
 )
+
+func TestEstimatedModelCostIncludesOptionalRequestPrice(t *testing.T) {
+	stats := overviewRouteStats{Requests: 4, InputTokens: 2_000_000, OutputTokens: 1_000_000}
+	withoutRequestPrice := estimatedModelCost(stats, ModelRoute{InputCostPerMillionUSD: 2, OutputCostPerMillionUSD: 3})
+	if withoutRequestPrice != 7 {
+		t.Fatalf("token-only cost = %v, want 7", withoutRequestPrice)
+	}
+	requestPrice := 0.125
+	withRequestPrice := estimatedModelCost(stats, ModelRoute{InputCostPerMillionUSD: 2, OutputCostPerMillionUSD: 3, RequestCostUSD: &requestPrice})
+	if math.Abs(withRequestPrice-7.5) > 0.000001 {
+		t.Fatalf("cost with request price = %v, want 7.5", withRequestPrice)
+	}
+}
 
 func TestParseOverviewRange(t *testing.T) {
 	tests := []struct {

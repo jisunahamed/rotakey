@@ -29,6 +29,7 @@ export type ModelRoute = {
   default_max_output_tokens: number;
   input_cost_per_million_usd: number;
   output_cost_per_million_usd: number;
+  request_cost_usd?: number;
   tokenizer: string;
   capture_bodies: boolean;
   strip_parameters: string[];

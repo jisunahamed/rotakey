@@ -99,7 +99,7 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 	modelRows, err := s.db.Query(ctx, `
 		SELECT id, provider_id, public_alias, upstream_model, supports_chat,
 		       supports_responses, supports_messages, default_max_output_tokens, tokenizer,
-		       input_cost_per_million_usd::float8, output_cost_per_million_usd::float8,
+		       input_cost_per_million_usd::float8, output_cost_per_million_usd::float8, request_cost_usd::float8,
 		       capture_bodies, strip_parameters, capability_status, capability_profile,
 		       capabilities_checked_at, capability_error, enabled, created_at, updated_at
 		FROM model_routes ORDER BY created_at, id
@@ -114,7 +114,7 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 			&model.ID, &model.ProviderID, &model.PublicAlias, &model.UpstreamModel,
 			&model.SupportsChat, &model.SupportsResponses, &model.SupportsMessages,
 			&model.DefaultMaxOutputTokens,
-			&model.Tokenizer, &model.InputCostPerMillionUSD, &model.OutputCostPerMillionUSD,
+			&model.Tokenizer, &model.InputCostPerMillionUSD, &model.OutputCostPerMillionUSD, &model.RequestCostUSD,
 			&model.CaptureBodies, &model.StripParameters,
 			&model.CapabilityStatus, &capabilityProfile, &model.CapabilitiesCheckedAt, &model.CapabilityError, &model.Enabled,
 			&model.CreatedAt, &model.UpdatedAt,
@@ -482,6 +482,7 @@ type modelInput struct {
 	DefaultMaxOutputTokens  int      `json:"default_max_output_tokens"`
 	InputCostPerMillionUSD  float64  `json:"input_cost_per_million_usd"`
 	OutputCostPerMillionUSD float64  `json:"output_cost_per_million_usd"`
+	RequestCostUSD          *float64 `json:"request_cost_usd,omitempty"`
 	Tokenizer               string   `json:"tokenizer"`
 	CaptureBodies           bool     `json:"capture_bodies"`
 	StripParameters         []string `json:"strip_parameters"`
@@ -504,7 +505,8 @@ func validateModelInput(input *modelInput) error {
 	if input.DefaultMaxOutputTokens < 1 || input.DefaultMaxOutputTokens > 1_000_000 {
 		return fmt.Errorf("default output tokens are invalid")
 	}
-	if input.InputCostPerMillionUSD < 0 || input.OutputCostPerMillionUSD < 0 || input.InputCostPerMillionUSD > 1_000_000 || input.OutputCostPerMillionUSD > 1_000_000 {
+	if input.InputCostPerMillionUSD < 0 || input.OutputCostPerMillionUSD < 0 || input.InputCostPerMillionUSD > 1_000_000 || input.OutputCostPerMillionUSD > 1_000_000 ||
+		(input.RequestCostUSD != nil && (*input.RequestCostUSD < 0 || *input.RequestCostUSD > 1_000_000)) {
 		return fmt.Errorf("model pricing is invalid")
 	}
 	if input.Tokenizer == "" {
@@ -557,13 +559,13 @@ func (s *Server) handleCreateModel(w http.ResponseWriter, r *http.Request) {
 		INSERT INTO model_routes
 		    (id, provider_id, public_alias, upstream_model, supports_chat,
 		     supports_responses, supports_messages, default_max_output_tokens, tokenizer,
-		     input_cost_per_million_usd, output_cost_per_million_usd,
+		     input_cost_per_million_usd, output_cost_per_million_usd, request_cost_usd,
 		     capture_bodies, strip_parameters, capability_status, capability_profile,
 		     capabilities_checked_at, capability_error, enabled)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'',$17)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'',$18)
 	`, id, r.PathValue("id"), input.PublicAlias, input.UpstreamModel,
 		input.SupportsChat, input.SupportsResponses, input.SupportsMessages, input.DefaultMaxOutputTokens,
-		input.Tokenizer, input.InputCostPerMillionUSD, input.OutputCostPerMillionUSD, input.CaptureBodies, input.StripParameters, status, profileJSON, checkedAt, input.Enabled)
+		input.Tokenizer, input.InputCostPerMillionUSD, input.OutputCostPerMillionUSD, input.RequestCostUSD, input.CaptureBodies, input.StripParameters, status, profileJSON, checkedAt, input.Enabled)
 	if err != nil {
 		writeError(w, http.StatusConflict, "model_conflict", "Model alias already exists or provider was not found.")
 		return
@@ -601,13 +603,13 @@ func (s *Server) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 	tag, err := s.db.Exec(r.Context(), `
 		UPDATE model_routes SET public_alias=$2, upstream_model=$3, supports_chat=$4,
 		    supports_responses=$5, supports_messages=$6, default_max_output_tokens=$7, tokenizer=$8,
-		    input_cost_per_million_usd=$9, output_cost_per_million_usd=$10,
-		    capture_bodies=$11, strip_parameters=$12, capability_status=$13,
-		    capability_profile=$14, capabilities_checked_at=$15, capability_error='', enabled=$16, updated_at=NOW()
+		    input_cost_per_million_usd=$9, output_cost_per_million_usd=$10, request_cost_usd=$11,
+		    capture_bodies=$12, strip_parameters=$13, capability_status=$14,
+		    capability_profile=$15, capabilities_checked_at=$16, capability_error='', enabled=$17, updated_at=NOW()
 		WHERE id=$1
 	`, r.PathValue("id"), input.PublicAlias, input.UpstreamModel, input.SupportsChat,
 		input.SupportsResponses, input.SupportsMessages, input.DefaultMaxOutputTokens, input.Tokenizer,
-		input.InputCostPerMillionUSD, input.OutputCostPerMillionUSD, input.CaptureBodies, input.StripParameters, capabilityStatus, capabilityProfile, checkedAt, input.Enabled)
+		input.InputCostPerMillionUSD, input.OutputCostPerMillionUSD, input.RequestCostUSD, input.CaptureBodies, input.StripParameters, capabilityStatus, capabilityProfile, checkedAt, input.Enabled)
 	if err != nil || tag.RowsAffected() == 0 {
 		writeError(w, http.StatusConflict, "model_update_failed", "Model could not be updated.")
 		return

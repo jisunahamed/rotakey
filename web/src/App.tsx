@@ -1655,9 +1655,10 @@ function ModelFields({ value, onChange }: { value: ModelDraft; onChange: (value:
         <label className="field"><span>Default max output tokens</span><input type="number" min={1} value={value.default_max_output_tokens} onChange={(e) => onChange({ ...value, default_max_output_tokens: Number(e.target.value) })} /></label>
         <label className="field"><span>Tokenizer profile</span><select value={value.tokenizer} onChange={(e) => onChange({ ...value, tokenizer: e.target.value })}><option value="heuristic">Conservative heuristic</option><option value="cl100k_base">cl100k_base</option><option value="o200k_base">o200k_base</option></select></label>
       </div>
-      <div className="field-pair">
+      <div className="pricing-fields">
         <label className="field"><span>Input price <small>USD per 1M tokens</small></span><input type="number" min={0} step="0.000001" value={value.input_cost_per_million_usd} onChange={(e) => onChange({ ...value, input_cost_per_million_usd: Number(e.target.value) })} /></label>
         <label className="field"><span>Output price <small>USD per 1M tokens</small></span><input type="number" min={0} step="0.000001" value={value.output_cost_per_million_usd} onChange={(e) => onChange({ ...value, output_cost_per_million_usd: Number(e.target.value) })} /></label>
+        <label className="field"><span>Per request price <small>Optional USD per request</small></span><input type="number" min={0} step="0.000001" placeholder="Optional" value={value.request_cost_usd ?? ""} onChange={(e) => onChange({ ...value, request_cost_usd: e.target.value === "" ? undefined : Number(e.target.value) })} /></label>
       </div>
       <Toggle checked={value.supports_chat} onChange={(supports_chat) => onChange({ ...value, supports_chat })} label="Upstream supports Chat Completions" />
       <Toggle checked={value.supports_responses} onChange={(supports_responses) => onChange({ ...value, supports_responses })} label="Upstream supports Responses natively" description="When off, the gateway translates the supported Responses subset to Chat Completions." />
@@ -1684,12 +1685,12 @@ function ModelForm({ provider, model, onClose, onComplete, notify }: { provider:
     public_alias: model.public_alias, upstream_model: model.upstream_model,
     supports_chat: model.supports_chat, supports_responses: model.supports_responses, supports_messages: model.supports_messages,
     default_max_output_tokens: model.default_max_output_tokens, tokenizer: model.tokenizer,
-    input_cost_per_million_usd: model.input_cost_per_million_usd, output_cost_per_million_usd: model.output_cost_per_million_usd,
+    input_cost_per_million_usd: model.input_cost_per_million_usd, output_cost_per_million_usd: model.output_cost_per_million_usd, request_cost_usd: model.request_cost_usd,
     capture_bodies: model.capture_bodies, strip_parameters: model.strip_parameters ?? [], enabled: model.enabled
   } : {
     public_alias: `${provider.slug}/`, upstream_model: "", supports_chat: true,
     supports_responses: false, supports_messages: true, default_max_output_tokens: 1024,
-    tokenizer: "heuristic", input_cost_per_million_usd: 0, output_cost_per_million_usd: 0,
+    tokenizer: "heuristic", input_cost_per_million_usd: 0, output_cost_per_million_usd: 0, request_cost_usd: undefined,
     capture_bodies: false, strip_parameters: [], enabled: true
   });
   const [busy, setBusy] = useState(false);
@@ -2773,6 +2774,7 @@ function routeInputsFromSelection(selected: Record<string, string>, catalogIDs =
     default_max_output_tokens: 1024,
     input_cost_per_million_usd: 0,
     output_cost_per_million_usd: 0,
+    request_cost_usd: undefined,
     tokenizer: "heuristic",
     capture_bodies: false,
     strip_parameters: [],
@@ -2786,7 +2788,7 @@ function normalizeProviders(providers: Provider[] | null | undefined): Provider[
     api_format: provider.api_format ?? "openai",
     anthropic_version: provider.anthropic_version ?? "2023-06-01",
     extra_headers: provider.extra_headers ?? {},
-    models: (provider.models ?? []).map((model) => ({ ...model, supports_messages: model.supports_messages ?? true, strip_parameters: model.strip_parameters ?? [], capability_status: model.capability_status ?? "unverified", capability_profile: model.capability_profile ?? {}, input_cost_per_million_usd: model.input_cost_per_million_usd ?? 0, output_cost_per_million_usd: model.output_cost_per_million_usd ?? 0 })),
+    models: (provider.models ?? []).map((model) => ({ ...model, supports_messages: model.supports_messages ?? true, strip_parameters: model.strip_parameters ?? [], capability_status: model.capability_status ?? "unverified", capability_profile: model.capability_profile ?? {}, input_cost_per_million_usd: model.input_cost_per_million_usd ?? 0, output_cost_per_million_usd: model.output_cost_per_million_usd ?? 0, request_cost_usd: model.request_cost_usd })),
     credentials: (provider.credentials ?? []).map((credential) => ({
       ...credential,
       validation_error: credential.validation_error ?? "",
