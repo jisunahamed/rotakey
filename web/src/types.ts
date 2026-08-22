@@ -260,6 +260,7 @@ export type Settings = {
   metadata_retention_days: number;
   body_retention_days: number;
   max_wait_ms: number;
+  default_provider_timeout_seconds: number;
   default_anthropic_provider_id: string;
   base_url: string;
 };

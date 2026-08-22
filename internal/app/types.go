@@ -168,6 +168,7 @@ type AppSettings struct {
 	MetadataRetentionDays      int    `json:"metadata_retention_days"`
 	BodyRetentionDays          int    `json:"body_retention_days"`
 	MaxWaitMS                  int    `json:"max_wait_ms"`
+	DefaultProviderTimeoutSecs int    `json:"default_provider_timeout_seconds"`
 	DefaultAnthropicProviderID string `json:"default_anthropic_provider_id"`
 	BaseURL                    string `json:"base_url"`
 }

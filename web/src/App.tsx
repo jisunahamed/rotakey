@@ -1383,6 +1383,14 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
   const [canContinueWithoutValidation, setCanContinueWithoutValidation] = useState(false);
   const steps = ["Provider", "API keys", "Models", "Review"];
 
+  useEffect(() => {
+    void api<Settings>("/api/admin/settings")
+      .then((settings) => setProvider((current) => (
+        current.name || current.base_url ? current : { ...current, timeout_seconds: settings.default_provider_timeout_seconds }
+      )))
+      .catch(() => undefined);
+  }, []);
+
   const inspectKeys = async () => {
     const incomplete = credentialDrafts.some((credential) => Boolean(credential.label.trim()) !== Boolean(credential.secret.trim()));
     const credentials = credentialInputs(credentialDrafts, limits);
@@ -2625,6 +2633,7 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
       <section className="settings-list">
         <label className="settings-row"><span><strong>Default Anthropic resource provider</strong><small>Files have no model field, so uploads need one native Anthropic provider. Batches remain model-routed.</small></span><div><select value={settings.default_anthropic_provider_id || ""} onChange={(event) => setSettings({ ...settings, default_anthropic_provider_id: event.target.value })}><option value="">Not configured</option>{providers.filter((provider) => provider.api_format === "anthropic" && provider.enabled).map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></div></label>
         <label className="settings-row"><span><strong>Capacity wait ceiling</strong><small>Requests wait only when capacity can return within this deadline.</small></span><div><input type="number" min={0} max={30000} step={100} value={settings.max_wait_ms} onChange={(e) => setSettings({ ...settings, max_wait_ms: Number(e.target.value) })} /><code>ms</code></div></label>
+        <label className="settings-row"><span><strong>Global provider timeout</strong><small>Applies this request timeout to every provider and becomes the default for new providers.</small></span><div><input type="number" min={1} max={900} value={settings.default_provider_timeout_seconds} onChange={(e) => setSettings({ ...settings, default_provider_timeout_seconds: Number(e.target.value) })} /><code>seconds</code></div></label>
         <label className="settings-row"><span><strong>Metadata retention</strong><small>Request IDs, routing attempts, status, latency and usage.</small></span><div><input type="number" min={1} max={3650} value={settings.metadata_retention_days} onChange={(e) => setSettings({ ...settings, metadata_retention_days: Number(e.target.value) })} /><code>days</code></div></label>
         <label className="settings-row"><span><strong>Captured body retention</strong><small>Only applies to model routes where encrypted body capture is enabled.</small></span><div><input type="number" min={1} max={365} value={settings.body_retention_days} onChange={(e) => setSettings({ ...settings, body_retention_days: Number(e.target.value) })} /><code>days</code></div></label>
       </section>

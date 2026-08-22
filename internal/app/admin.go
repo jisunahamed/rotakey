@@ -1167,8 +1167,9 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.MetadataRetentionDays < 1 || input.MetadataRetentionDays > 3650 ||
 		input.BodyRetentionDays < 1 || input.BodyRetentionDays > 365 ||
-		input.MaxWaitMS < 0 || input.MaxWaitMS > 30000 {
-		writeError(w, http.StatusBadRequest, "invalid_settings", "Retention or wait settings are outside allowed ranges.")
+		input.MaxWaitMS < 0 || input.MaxWaitMS > 30000 ||
+		input.DefaultProviderTimeoutSecs < 1 || input.DefaultProviderTimeoutSecs > 900 {
+		writeError(w, http.StatusBadRequest, "invalid_settings", "Retention, wait, or provider timeout settings are outside allowed ranges.")
 		return
 	}
 	if input.DefaultAnthropicProviderID != "" {
@@ -1178,19 +1179,34 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	_, err := s.db.Exec(r.Context(), `
-		UPDATE app_settings SET metadata_retention_days=$1, body_retention_days=$2,
-		    max_wait_ms=$3, default_anthropic_provider_id=NULLIF($4,''), updated_at=NOW() WHERE id=1
-	`, input.MetadataRetentionDays, input.BodyRetentionDays, input.MaxWaitMS, input.DefaultAnthropicProviderID)
+	tx, err := s.db.Begin(r.Context())
 	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "settings_unavailable", "Settings could not be updated.")
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE app_settings SET metadata_retention_days=$1, body_retention_days=$2,
+		    max_wait_ms=$3, default_provider_timeout_seconds=$4,
+		    default_anthropic_provider_id=NULLIF($5,''), updated_at=NOW() WHERE id=1
+	`, input.MetadataRetentionDays, input.BodyRetentionDays, input.MaxWaitMS, input.DefaultProviderTimeoutSecs, input.DefaultAnthropicProviderID); err != nil {
+		writeError(w, http.StatusInternalServerError, "settings_update_failed", "Settings could not be updated.")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `UPDATE providers SET timeout_seconds=$1, updated_at=NOW()`, input.DefaultProviderTimeoutSecs); err != nil {
+		writeError(w, http.StatusInternalServerError, "settings_update_failed", "Provider timeouts could not be updated.")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "settings_update_failed", "Settings could not be updated.")
 		return
 	}
 	s.audit(r.Context(), adminIDFromContext(r.Context()), "settings.update", "system", "", map[string]any{
-		"metadata_retention_days":       input.MetadataRetentionDays,
-		"body_retention_days":           input.BodyRetentionDays,
-		"max_wait_ms":                   input.MaxWaitMS,
-		"default_anthropic_provider_id": input.DefaultAnthropicProviderID,
+		"metadata_retention_days":          input.MetadataRetentionDays,
+		"body_retention_days":              input.BodyRetentionDays,
+		"max_wait_ms":                      input.MaxWaitMS,
+		"default_provider_timeout_seconds": input.DefaultProviderTimeoutSecs,
+		"default_anthropic_provider_id":    input.DefaultAnthropicProviderID,
 	})
 	w.WriteHeader(http.StatusNoContent)
 }
