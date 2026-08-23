@@ -132,9 +132,9 @@ Keep the gateway key in your shell, secret manager, or OS credential tooling. Ne
 | Rotakey upstream route | Claude Code behavior |
 | --- | --- |
 | Anthropic-compatible | Native Messages, streaming, tools, thinking, prompt caching, citations, and safe `anthropic-*` headers pass through. |
-| OpenAI-compatible | Rotakey translates core text, images, system prompts, client function tools/results, tool choice, stop sequences, and streaming. |
+| OpenAI-compatible | Rotakey translates core text, images, system prompts, client function tools/results, tool choice, stop sequences, and streaming. Claude Code metadata, thinking/context/container controls, and prompt-cache hints are accepted but omitted because this protocol has no equivalent. |
 
-Features without a faithful target-protocol equivalent are never silently discarded. Rotakey returns `400 unsupported_feature` with a request ID. For the fullest Claude Code feature set, choose a native Anthropic-compatible model route. For a translated route, disabling an unsupported Claude Code feature may be necessary—for example `CLAUDE_CODE_DISABLE_THINKING=1` when the target model cannot represent thinking blocks.
+For the fullest Claude Code feature set, choose a native Anthropic-compatible model route. Data-bearing Anthropic features without a faithful target-protocol equivalent, such as citations, Files, and server tools, return `400 unsupported_feature` with a request ID.
 
 ## Verify before opening Claude Code
 

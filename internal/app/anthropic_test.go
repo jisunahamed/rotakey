@@ -45,8 +45,7 @@ func TestTranslateAnthropicRequestToChatCoreSurface(t *testing.T) {
 
 func TestAnthropicOnlyFeaturesAreRejectedCrossProtocol(t *testing.T) {
 	for _, payload := range []map[string]any{
-		{"thinking": map[string]any{"type": "enabled"}, "messages": []any{map[string]any{"role": "user", "content": "Hi"}}},
-		{"messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "Hi", "cache_control": map[string]any{"type": "ephemeral"}}}}}},
+		{"messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "Hi", "citations": map[string]any{"enabled": true}}}}}},
 	} {
 		if _, err := translateAnthropicRequestToChat(payload); err == nil {
 			t.Fatalf("unsupported payload was accepted: %#v", payload)
@@ -74,12 +73,31 @@ func TestTranslateChatRequestToAnthropicTools(t *testing.T) {
 	}
 }
 
-func TestCrossProtocolTranslationRejectsUnknownFields(t *testing.T) {
-	if _, err := translateAnthropicRequestToChat(map[string]any{
-		"messages": []any{map[string]any{"role": "user", "content": "Hi"}},
-		"metadata": map[string]any{"user_id": "u1"},
-	}); err == nil {
-		t.Fatal("Anthropic metadata was silently dropped")
+func TestAnthropicMetadataAndCacheHintsAreIgnoredCrossProtocol(t *testing.T) {
+	chat, err := translateAnthropicRequestToChat(map[string]any{
+		"messages":           []any{map[string]any{"role": "user", "content": "Hi"}},
+		"metadata":           map[string]any{"user_id": "u1"},
+		"thinking":           map[string]any{"type": "enabled", "budget_tokens": 1024},
+		"context_management": map[string]any{"edits": []any{}},
+	})
+	if err != nil {
+		t.Fatalf("Claude Code control-field translation failed: %v", err)
+	}
+	for _, field := range []string{"metadata", "thinking", "context_management"} {
+		if _, exists := chat[field]; exists {
+			t.Fatalf("%s leaked into OpenAI request: %#v", field, chat)
+		}
+	}
+	chat, err = translateAnthropicRequestToChat(map[string]any{
+		"messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{
+			"type": "text", "text": "Hi", "cache_control": map[string]any{"type": "ephemeral"},
+		}}}},
+	})
+	if err != nil {
+		t.Fatalf("cache hint translation failed: %v", err)
+	}
+	if _, exists := chat["cache_control"]; exists {
+		t.Fatalf("cache hint leaked into OpenAI request: %#v", chat)
 	}
 	if _, err := translateChatRequestToAnthropic(map[string]any{
 		"messages":         []any{map[string]any{"role": "user", "content": "Hi"}},

@@ -18,13 +18,8 @@ func (e anthropicUnsupportedError) Error() string {
 }
 
 func translateAnthropicRequestToChat(source map[string]any) (map[string]any, error) {
-	if feature := unsupportedTopLevelField(source, "model", "max_tokens", "messages", "system", "temperature", "top_p", "stop_sequences", "stream", "tools", "tool_choice"); feature != "" {
+	if feature := unsupportedTopLevelField(source, "model", "max_tokens", "messages", "system", "temperature", "top_p", "stop_sequences", "stream", "tools", "tool_choice", "metadata", "thinking", "container", "mcp_servers", "context_management"); feature != "" {
 		return nil, anthropicUnsupportedError{Feature: feature}
-	}
-	for _, field := range []string{"thinking", "container", "mcp_servers", "context_management"} {
-		if value, ok := source[field]; ok && value != nil && value != false && value != "" {
-			return nil, anthropicUnsupportedError{Feature: field}
-		}
 	}
 	if feature := findAnthropicOnlyFeature(source); feature != "" {
 		return nil, anthropicUnsupportedError{Feature: feature}
@@ -422,7 +417,12 @@ func findAnthropicOnlyFeature(value any) string {
 	switch typed := value.(type) {
 	case map[string]any:
 		for key, child := range typed {
-			if key == "cache_control" || key == "citations" || key == "file_id" {
+			// Claude Code adds prompt-cache hints by default. OpenAI-compatible
+			// providers cannot honor them, but the request remains valid without them.
+			if key == "cache_control" {
+				continue
+			}
+			if key == "citations" || key == "file_id" {
 				return key
 			}
 			if key == "type" {
