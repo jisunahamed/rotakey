@@ -18,7 +18,7 @@ func (e anthropicUnsupportedError) Error() string {
 }
 
 func translateAnthropicRequestToChat(source map[string]any) (map[string]any, error) {
-	if feature := unsupportedTopLevelField(source, "model", "max_tokens", "messages", "system", "temperature", "top_p", "stop_sequences", "stream", "tools", "tool_choice", "metadata", "thinking", "container", "mcp_servers", "context_management"); feature != "" {
+	if feature := unsupportedTopLevelField(source, "model", "max_tokens", "messages", "system", "temperature", "top_p", "stop_sequences", "stream", "tools", "tool_choice", "metadata", "thinking", "container", "mcp_servers", "context_management", "output_config"); feature != "" {
 		return nil, anthropicUnsupportedError{Feature: feature}
 	}
 	if feature := findAnthropicOnlyFeature(source); feature != "" {

@@ -137,7 +137,7 @@ Every public `model` field is a Rotakey alias, never an upstream model ID.
 | Public request → upstream provider | Behavior |
 | --- | --- |
 | Anthropic → Anthropic | Native pass-through. Content blocks, thinking, prompt caching, citations, Files, server/client tools, safe `anthropic-*` headers, and unknown SSE event types are preserved. |
-| Anthropic → OpenAI | Text, images, system prompts, tool calls/results, tool choice, stop sequences, and streaming are translated. Claude Code metadata plus thinking/context/container controls and prompt-cache hints are accepted and omitted. Citations, Files, and server tools return `400 unsupported_feature`. |
+| Anthropic → OpenAI | Text, images, system prompts, tool calls/results, tool choice, stop sequences, and streaming are translated. Claude Code metadata plus thinking/context/container/output controls and prompt-cache hints are accepted and omitted. Citations, Files, and server tools return `400 unsupported_feature`. |
 | OpenAI Chat/Responses → OpenAI | Existing OpenAI-compatible behavior is unchanged. |
 | OpenAI Chat/Responses → Anthropic | Core text, images, JSON function tools, tool results, stop controls, usage, and streaming are translated to Messages. Use `/v1/messages` for the full Anthropic feature surface. |
 

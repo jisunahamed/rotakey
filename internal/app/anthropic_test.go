@@ -79,11 +79,12 @@ func TestAnthropicMetadataAndCacheHintsAreIgnoredCrossProtocol(t *testing.T) {
 		"metadata":           map[string]any{"user_id": "u1"},
 		"thinking":           map[string]any{"type": "enabled", "budget_tokens": 1024},
 		"context_management": map[string]any{"edits": []any{}},
+		"output_config":      map[string]any{"effort": "medium"},
 	})
 	if err != nil {
 		t.Fatalf("Claude Code control-field translation failed: %v", err)
 	}
-	for _, field := range []string{"metadata", "thinking", "context_management"} {
+	for _, field := range []string{"metadata", "thinking", "context_management", "output_config"} {
 		if _, exists := chat[field]; exists {
 			t.Fatalf("%s leaked into OpenAI request: %#v", field, chat)
 		}
