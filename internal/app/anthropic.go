@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"strconv"
@@ -40,509 +39,84 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		s.rejectAnthropic(w, r, http.StatusBadRequest, "invalid_request_error", "A public model alias is required.", logInput{RequestID: requestID, Endpoint: "messages", Started: started, RequestBody: raw, PublicProtocol: "anthropic"})
 		return
 	}
-	route, err := s.loadRoute(r.Context(), alias)
+	settings, _, err := s.settings(r.Context())
+	if err != nil {
+		s.rejectAnthropic(w, r, http.StatusServiceUnavailable, "api_error", "Gateway settings are unavailable.", logInput{RequestID: requestID, Route: routeRuntime{Model: ModelRoute{PublicAlias: alias}}, Endpoint: "messages", Started: started, RequestBody: raw, PublicProtocol: "anthropic"})
+		return
+	}
+	routes, err := s.resolveRoutes(r.Context(), alias, settings.RoutingMode)
 	if err != nil {
 		s.rejectAnthropic(w, r, http.StatusNotFound, "not_found_error", "The requested model alias is not enabled.", logInput{RequestID: requestID, Route: routeRuntime{Model: ModelRoute{PublicAlias: alias}}, Endpoint: "messages", Started: started, RequestBody: raw, PublicProtocol: "anthropic"})
 		return
 	}
-	if !route.Model.SupportsMessages {
-		s.rejectAnthropic(w, r, http.StatusBadRequest, "invalid_request_error", "This model route does not support Messages.", logInput{RequestID: requestID, Route: route, Endpoint: "messages", Started: started, RequestBody: raw, PublicProtocol: "anthropic", UpstreamProtocol: route.Provider.APIFormat})
+	req := dispatchRequest{
+		RequestID: requestID, Started: started, Endpoint: "messages",
+		PublicMode: messageModeAnthropic, Alias: alias, Raw: raw, Public: payload,
+		MaxWait: time.Duration(settings.MaxWaitMS) * time.Millisecond,
+	}
+	req.Stream, _ = payload["stream"].(bool)
+	usable := make([]routeRuntime, 0, len(routes))
+	for _, route := range routes {
+		if routeSupportsRequest(route, req) {
+			usable = append(usable, route)
+		}
+	}
+	if len(usable) == 0 {
+		s.rejectAnthropic(w, r, http.StatusBadRequest, "invalid_request_error", "This model route does not support Messages.", logInput{RequestID: requestID, Route: routes[0], Endpoint: "messages", Started: started, RequestBody: raw, PublicProtocol: "anthropic", UpstreamProtocol: routes[0].Provider.APIFormat})
 		return
 	}
 	s.updateActiveRequest(requestID, func(log *RequestLog) {
 		log.ModelAlias = alias
-		log.ProviderName = route.Provider.Name
+		log.ProviderName = usable[0].Provider.Name
 		log.PublicProtocol = "anthropic"
-		log.UpstreamProtocol = route.Provider.APIFormat
+		log.UpstreamProtocol = usable[0].Provider.APIFormat
 	})
-	forcedCredential, affinityErr := s.resolveMessageResourceAffinity(r.Context(), payload, route.Provider.ID)
+	// File references bind a request to the exact provider and key that hold the
+	// upload, so affinity resolution restricts the pool to that one route.
+	forcedCredential, affinityRoutes, affinityErr := s.resolvePooledResourceAffinity(r.Context(), payload, usable)
 	if affinityErr != nil {
-		s.rejectAnthropic(w, r, http.StatusBadRequest, "resource_affinity_conflict", affinityErr.Error(), logInput{RequestID: requestID, Route: route, Endpoint: "messages", Started: started, RequestBody: raw, PublicProtocol: "anthropic", UpstreamProtocol: route.Provider.APIFormat})
+		s.rejectAnthropic(w, r, http.StatusBadRequest, "resource_affinity_conflict", affinityErr.Error(), logInput{RequestID: requestID, Route: usable[0], Endpoint: "messages", Started: started, RequestBody: raw, PublicProtocol: "anthropic", UpstreamProtocol: usable[0].Provider.APIFormat})
 		return
 	}
-	if route.Provider.APIFormat == "anthropic" {
-		upstream := cloneMap(payload)
-		upstream["model"] = route.Model.UpstreamModel
-		s.proxyAnthropicUpstream(w, r, raw, upstream, route, started, requestID, messageModeAnthropic, forcedCredential, false)
-		return
-	}
-	if forcedCredential != "" {
-		s.rejectAnthropic(w, r, http.StatusBadRequest, "unsupported_feature", "File references require a native Anthropic provider route.", logInput{RequestID: requestID, Route: route, Endpoint: "messages", Started: started, RequestBody: raw, PublicProtocol: "anthropic", UpstreamProtocol: "openai"})
-		return
-	}
-	chat, err := translateAnthropicRequestToChat(payload)
-	if err != nil {
-		s.rejectAnthropic(w, r, http.StatusBadRequest, "unsupported_feature", err.Error(), logInput{RequestID: requestID, Route: route, Endpoint: "messages", Started: started, RequestBody: raw, PublicProtocol: "anthropic", UpstreamProtocol: "openai"})
-		return
-	}
-	chat["model"] = upstreamModelForProvider(route.Provider, route.Model.UpstreamModel)
-	s.proxyOpenAIUpstreamForAnthropic(w, r, raw, chat, route, started, requestID)
+	s.servePooled(w, r, req, affinityRoutes, forcedCredential)
 }
 
-func (s *Server) handleOpenAIThroughAnthropic(w http.ResponseWriter, r *http.Request, raw []byte, public map[string]any, route routeRuntime, endpoint string, started time.Time, requestID string) {
-	chat := public
-	var err error
-	if endpoint == "responses" {
-		chat, err = translateResponsesRequest(public)
-		if err != nil {
-			s.rejectGatewayRequest(w, r, http.StatusBadRequest, "unsupported_feature", err.Error(), logInput{RequestID: requestID, Route: route, Endpoint: endpoint, Started: started, RequestBody: raw, Capture: route.Model.CaptureBodies, PublicProtocol: "openai", UpstreamProtocol: "anthropic"})
-			return
-		}
+// resolvePooledResourceAffinity finds the credential a request's file
+// references belong to and narrows the pool to that credential's provider. A
+// pooled alias may span providers, so the affinity check runs against each
+// native Anthropic route until one owns the files.
+func (s *Server) resolvePooledResourceAffinity(
+	ctx context.Context,
+	payload map[string]any,
+	routes []routeRuntime,
+) (string, []routeRuntime, error) {
+	if len(collectStringFields(payload, "file_id")) == 0 {
+		return "", routes, nil
 	}
-	upstream, err := translateChatRequestToAnthropic(chat)
-	if err != nil {
-		s.rejectGatewayRequest(w, r, http.StatusBadRequest, "unsupported_feature", err.Error(), logInput{RequestID: requestID, Route: route, Endpoint: endpoint, Started: started, RequestBody: raw, Capture: route.Model.CaptureBodies, PublicProtocol: "openai", UpstreamProtocol: "anthropic"})
-		return
-	}
-	upstream["model"] = route.Model.UpstreamModel
-	includeUsage := false
-	if options, ok := chat["stream_options"].(map[string]any); ok {
-		includeUsage, _ = options["include_usage"].(bool)
-	}
-	mode := messageModeChat
-	if endpoint == "responses" {
-		mode = messageModeResponses
-	}
-	s.proxyAnthropicUpstream(w, r, raw, upstream, route, started, requestID, mode, "", includeUsage)
-}
-
-func (s *Server) proxyAnthropicUpstream(w http.ResponseWriter, r *http.Request, raw []byte, payload map[string]any, route routeRuntime, started time.Time, requestID, publicMode, forcedCredential string, includeOpenAIUsage bool) {
-	compatibilityRemoved := stripTopLevelParameters(payload, route.Model.StripParameters)
-	compatibilityRemoved = appendUniqueStrings(compatibilityRemoved, stripTopLevelParameters(payload, s.learnedCompatibilityParameters(r.Context(), route.Model.ID))...)
-	if numberAsInt64(payload["max_tokens"]) <= 0 {
-		payload["max_tokens"] = route.Model.DefaultMaxOutputTokens
-	}
-	inputEstimate := estimateInputTokens(raw, route.Model.Tokenizer)
-	outputReservation := numberAsInt64(payload["max_tokens"])
-	tokenCost := inputEstimate + outputReservation
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		s.writeMessageProxyError(w, r, publicMode, http.StatusBadRequest, "invalid_request_error", "Request could not be prepared.")
-		return
-	}
-	credentials, err := s.loadCredentials(r.Context(), route.Provider.ID, route.Model.ID)
-	if err == nil && forcedCredential != "" {
-		filtered := credentials[:0]
-		for _, credential := range credentials {
-			if credential.ID == forcedCredential {
-				filtered = append(filtered, credential)
-			}
-		}
-		credentials = filtered
-	}
-	if err != nil || len(credentials) == 0 {
-		s.writeMessageProxyError(w, r, publicMode, http.StatusServiceUnavailable, "api_error", "No healthy credential is available for this route.")
-		s.storeRequestLog(r.Context(), logInput{RequestID: requestID, Route: route, Endpoint: protocolEndpoint(publicMode), Started: started, StatusCode: http.StatusServiceUnavailable, ErrorCode: "no_credentials", ErrorMessage: "No healthy credential is available for this route.", RequestBody: raw, Capture: route.Model.CaptureBodies, PublicProtocol: protocolName(publicMode), UpstreamProtocol: "anthropic"})
-		return
-	}
-	settings, _, err := s.settings(r.Context())
-	if err != nil {
-		s.writeMessageProxyError(w, r, publicMode, http.StatusServiceUnavailable, "api_error", "Gateway settings are unavailable.")
-		return
-	}
-	client, err := upstreamClient(route.Provider)
-	if err != nil {
-		s.writeMessageProxyError(w, r, publicMode, http.StatusBadGateway, "api_error", err.Error())
-		return
-	}
-	stream, _ := payload["stream"].(bool)
-	skipped := map[string]bool{}
-	attempts := make([]AttemptRecord, 0, 2)
-	decisions := make([]RoutingDecision, 0)
-	var finalCredential credentialRuntime
-	var finalResponse []byte
-	var finalStatus int
-	var finalCode, finalMessage, upstreamRequestID string
-	var inputTokens, outputTokens int64
-	var truncated bool
-	if stream {
-		// The request context is the deadline authority for streams; disable
-		// http.Client's competing total timeout so long streams are not cut short.
-		client.Timeout = 0
-	}
-	retryContext, cancelRetries := context.WithTimeout(r.Context(), providerRetryTimeout(route.Provider, stream))
-	defer cancelRetries()
-	compatibilityRetriesRemaining := 2
-	maxAttempts := len(credentials) + compatibilityRetriesRemaining
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		selected, reservation, retryAfter, routing, selectErr := s.selectCredentialWithDiagnostics(retryContext, route.Model.ID, credentials, tokenCost, skipped, time.Duration(settings.MaxWaitMS)*time.Millisecond)
-		decisions = append(decisions, routing...)
-		if selectErr != nil {
-			finalStatus, finalCode, finalMessage = http.StatusServiceUnavailable, "limiter_unavailable", "Rate limiter is unavailable."
-			s.writeMessageProxyError(w, r, publicMode, finalStatus, "api_error", finalMessage)
-			break
-		}
-		if selected == nil {
-			seconds := max(1, int(math.Ceil(retryAfter.Seconds())))
-			w.Header().Set("Retry-After", strconv.Itoa(seconds))
-			finalStatus, finalCode, finalMessage = http.StatusTooManyRequests, "rate_limit_exceeded", "Every credential for this model is at capacity."
-			s.writeMessageProxyError(w, r, publicMode, finalStatus, "rate_limit_error", finalMessage)
-			break
-		}
-		finalCredential = *selected
-		skipped[selected.ID] = true
-		s.updateActiveRequest(requestID, func(log *RequestLog) { log.CredentialLabel = selected.Label })
-		target := strings.TrimRight(route.Provider.BaseURL, "/") + "/messages"
-		upstreamRequest, _ := http.NewRequestWithContext(retryContext, http.MethodPost, target, bytes.NewReader(encoded))
-		applyProviderHeaders(upstreamRequest, route.Provider, selected.Secret)
-		forwardAnthropicHeaders(upstreamRequest.Header, r.Header)
-		attemptStarted := time.Now()
-		response, requestErr := client.Do(upstreamRequest)
-		if requestErr != nil {
-			attempts = append(attempts, AttemptRecord{CredentialID: selected.ID, CredentialLabel: selected.Label, Error: "connection_error", ErrorMessage: "The upstream connection failed before a response started.", Retryable: true, DurationMS: time.Since(attemptStarted).Milliseconds()})
-			s.markCredentialFailure(r.Context(), selected.ID, 0, 0)
-			if retryContext.Err() == nil && len(skipped) < len(credentials) {
-				continue
-			}
-			finalStatus, finalCode, finalMessage = http.StatusBadGateway, "upstream_unavailable", "The upstream provider could not be reached."
-			s.writeMessageProxyError(w, r, publicMode, finalStatus, "api_error", finalMessage)
-			break
-		}
-		upstreamRequestID = response.Header.Get("Request-Id")
-		if response.StatusCode == http.StatusBadRequest && compatibilityRetriesRemaining > 0 {
-			body, wasTruncated, readErr := boundedBody(response.Body, minInt64(s.cfg.MaxResponseBytes, 2<<20))
-			_ = response.Body.Close()
-			if readErr == nil && !wasTruncated {
-				parameters := unsupportedCompatibilityParameters(body, payload)
-				if len(parameters) > 0 {
-					for _, parameter := range parameters {
-						delete(payload, parameter)
-					}
-					encoded, err = json.Marshal(payload)
-					if err != nil {
-						finalStatus, finalCode, finalMessage = http.StatusBadRequest, "invalid_request_error", "Request could not be prepared after compatibility repair."
-						s.writeMessageProxyError(w, r, publicMode, finalStatus, "invalid_request_error", finalMessage)
-						break
-					}
-					attempts = append(attempts, AttemptRecord{
-						CredentialID: selected.ID, CredentialLabel: selected.Label,
-						StatusCode: response.StatusCode, Error: upstreamErrorCode(body),
-						ErrorMessage: upstreamErrorMessage(body, selected.Secret), Retryable: true,
-						DurationMS: time.Since(attemptStarted).Milliseconds(), RemovedParameters: parameters,
-					})
-					compatibilityRetriesRemaining--
-					compatibilityRemoved = appendUniqueStrings(compatibilityRemoved, parameters...)
-					s.rememberCompatibilityParameters(r.Context(), route.Model.ID, parameters)
-					skipped = map[string]bool{}
-					continue
-				}
-			}
-			response.Body = io.NopCloser(bytes.NewReader(body))
-		}
-		retryable := anthropicRetryableStatus(response.StatusCode)
-		if retryable && retryContext.Err() == nil && len(skipped) < len(credentials) {
-			body, _, _ := boundedBody(response.Body, 1<<20)
-			_ = response.Body.Close()
-			attempts = append(attempts, AttemptRecord{CredentialID: selected.ID, CredentialLabel: selected.Label, StatusCode: response.StatusCode, Error: upstreamErrorCode(body), ErrorMessage: upstreamErrorMessage(body, selected.Secret), Retryable: true, DurationMS: time.Since(attemptStarted).Milliseconds()})
-			s.markCredentialFailure(r.Context(), selected.ID, response.StatusCode, parseRetryAfter(response.Header.Get("Retry-After")))
+	var lastErr error
+	for _, route := range routes {
+		if route.Provider.APIFormat != "anthropic" {
 			continue
 		}
-		finalStatus = response.StatusCode
-		attempts = append(attempts, AttemptRecord{CredentialID: selected.ID, CredentialLabel: selected.Label, StatusCode: response.StatusCode, Retryable: retryable, DurationMS: time.Since(attemptStarted).Milliseconds()})
-		copyAnthropicHeaders(w.Header(), response.Header)
-		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			body, wasTruncated, _ := boundedBody(response.Body, minInt64(s.cfg.MaxResponseBytes, 2<<20))
-			_ = response.Body.Close()
-			truncated = wasTruncated
-			finalResponse = body
-			finalCode = upstreamErrorCode(body)
-			finalMessage = upstreamErrorMessage(body, selected.Secret)
-			attempts[len(attempts)-1].Error = finalCode
-			attempts[len(attempts)-1].ErrorMessage = finalMessage
-			s.markCredentialFailure(r.Context(), selected.ID, response.StatusCode, parseRetryAfter(response.Header.Get("Retry-After")))
-			if publicMode == messageModeAnthropic {
-				w.WriteHeader(response.StatusCode)
-				_, _ = w.Write(body)
-			} else {
-				writeError(w, response.StatusCode, finalCode, valueOr(finalMessage, "The upstream provider rejected the request."))
-			}
-			break
-		}
-		if stream {
-			streamSource := io.Reader(response.Body)
-			if !strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
-				body, wasTruncated, readErr := boundedBody(response.Body, s.cfg.MaxResponseBytes)
-				_ = response.Body.Close()
-				if readErr != nil || wasTruncated {
-					finalStatus, finalCode, finalMessage, truncated = http.StatusBadGateway, "upstream_stream_invalid", "The upstream returned an unreadable non-SSE response for a streaming request.", wasTruncated
-					s.markCredentialFailure(r.Context(), selected.ID, http.StatusBadGateway, 0)
-					attempts[len(attempts)-1].Error, attempts[len(attempts)-1].ErrorMessage = finalCode, finalMessage
-					if retryContext.Err() == nil && len(skipped) < len(credentials) {
-						attempts[len(attempts)-1].Retryable = true
-						continue
-					}
-					s.writeMessageProxyError(w, r, publicMode, finalStatus, "api_error", finalMessage)
-					break
-				}
-				synthetic, syntheticErr := anthropicJSONToSSE(body)
-				if syntheticErr != nil {
-					finalStatus, finalCode, finalMessage = http.StatusBadGateway, "upstream_stream_invalid", "The upstream returned HTTP 200 without a valid Anthropic stream or Message response."
-					finalResponse = body
-					s.markCredentialFailure(r.Context(), selected.ID, http.StatusBadGateway, 0)
-					attempts[len(attempts)-1].Error, attempts[len(attempts)-1].ErrorMessage = finalCode, finalMessage
-					if retryContext.Err() == nil && len(skipped) < len(credentials) {
-						attempts[len(attempts)-1].Retryable = true
-						continue
-					}
-					s.writeMessageProxyError(w, r, publicMode, finalStatus, "api_error", finalMessage)
-					break
-				}
-				streamSource = bytes.NewReader(synthetic)
-			} else {
-				prepared, prepareErr := prepareAnthropicSSE(streamSource)
-				if prepareErr != nil {
-					_ = response.Body.Close()
-					finalStatus, finalCode, finalMessage = http.StatusBadGateway, "upstream_stream_invalid", "The upstream returned HTTP 200 without a valid Anthropic SSE event."
-					s.markCredentialFailure(r.Context(), selected.ID, http.StatusBadGateway, 0)
-					attempts[len(attempts)-1].Error, attempts[len(attempts)-1].ErrorMessage = finalCode, finalMessage
-					if retryContext.Err() == nil && len(skipped) < len(credentials) {
-						attempts[len(attempts)-1].Retryable = true
-						continue
-					}
-					s.writeMessageProxyError(w, r, publicMode, finalStatus, "api_error", finalMessage)
-					break
-				}
-				streamSource = prepared
-			}
-			s.markCredentialSuccess(r.Context(), selected.ID)
-			if len(compatibilityRemoved) > 0 {
-				w.Header().Set("X-Rotakey-Removed-Parameters", strings.Join(compatibilityRemoved, ","))
-			}
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("X-Accel-Buffering", "no")
-			w.WriteHeader(response.StatusCode)
-			var capture *limitedCapture
-			if route.Model.CaptureBodies {
-				capture = &limitedCapture{limit: s.cfg.CaptureBytes}
-			}
-			var streamCode string
-			var streamErr error
-			switch publicMode {
-			case messageModeAnthropic:
-				streamCode, streamErr = rewriteAnthropicStream(streamSource, w, route.Model.PublicAlias, capture)
-			case messageModeResponses:
-				streamCode, streamErr = translateAnthropicStreamToResponses(streamSource, w, route.Model.PublicAlias, capture)
-			default:
-				stats := &anthropicStreamStats{}
-				streamCode, streamErr = translateAnthropicStreamToOpenAI(streamSource, w, route.Model.PublicAlias, capture, includeOpenAIUsage, stats)
-				inputTokens, outputTokens = stats.InputTokens, stats.OutputTokens
-				actualInput := inputTokens
-				if actualInput == 0 {
-					actualInput = inputEstimate
-				}
-				if actualInput+outputTokens > 0 {
-					_ = s.limiter.AdjustTokens(r.Context(), reservation, actualInput+outputTokens)
-				}
-			}
-			_ = response.Body.Close()
-			if streamCode != "" {
-				finalCode, finalMessage = streamCode, "The upstream provider sent an error after streaming started."
-			}
-			if streamErr != nil && !errors.Is(streamErr, context.Canceled) {
-				finalCode, finalMessage = "stream_interrupted", "The response stream ended unexpectedly after it started."
-			}
-			if capture != nil {
-				finalResponse = append([]byte(nil), capture.Bytes()...)
-				truncated = capture.truncated
-			}
-			s.storeRequestLog(r.Context(), logInput{RequestID: requestID, Route: route, Credential: finalCredential, Endpoint: protocolEndpoint(publicMode), Attempts: attempts, RoutingDecisions: decisions, Started: started, StatusCode: finalStatus, InputTokens: inputEstimate, OutputTokens: outputTokens, ErrorCode: finalCode, ErrorMessage: finalMessage, RequestBody: raw, ResponseBody: finalResponse, Capture: route.Model.CaptureBodies, Truncated: truncated, PublicProtocol: protocolName(publicMode), UpstreamProtocol: "anthropic", UpstreamRequestID: upstreamRequestID})
-			return
-		}
-		s.markCredentialSuccess(r.Context(), selected.ID)
-		if len(compatibilityRemoved) > 0 {
-			w.Header().Set("X-Rotakey-Removed-Parameters", strings.Join(compatibilityRemoved, ","))
-		}
-		body, wasTruncated, readErr := boundedBody(response.Body, s.cfg.MaxResponseBytes)
-		_ = response.Body.Close()
-		if readErr != nil || wasTruncated {
-			finalStatus, finalCode, finalMessage, truncated = http.StatusBadGateway, "upstream_response_too_large", "Upstream response exceeded the configured limit.", wasTruncated
-			s.writeMessageProxyError(w, r, publicMode, finalStatus, "api_error", finalMessage)
-			break
-		}
-		switch publicMode {
-		case messageModeAnthropic:
-			finalResponse, inputTokens, outputTokens = replaceAnthropicModel(body, route.Model.PublicAlias)
-		case messageModeResponses:
-			finalResponse, inputTokens, outputTokens, err = translateAnthropicResponseToResponses(body, route.Model.PublicAlias)
-		default:
-			finalResponse, inputTokens, outputTokens, err = translateAnthropicResponseToChat(body, route.Model.PublicAlias)
-		}
+		// resolveMessageResourceAffinity rewrites file_id in place once it
+		// matches, so a probe against the wrong provider must not mutate the
+		// payload the next probe inspects.
+		probe := cloneMap(payload)
+		credentialID, err := s.resolveMessageResourceAffinity(ctx, probe, route.Provider.ID)
 		if err != nil {
-			finalStatus, finalCode, finalMessage = http.StatusBadGateway, "translation_failed", "Upstream response could not be translated."
-			s.writeMessageProxyError(w, r, publicMode, finalStatus, "api_error", finalMessage)
-			break
-		}
-		if inputTokens+outputTokens > 0 {
-			_ = s.limiter.AdjustTokens(r.Context(), reservation, inputTokens+outputTokens)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(response.StatusCode)
-		_, _ = w.Write(finalResponse)
-		break
-	}
-	s.storeRequestLog(r.Context(), logInput{RequestID: requestID, Route: route, Credential: finalCredential, Endpoint: protocolEndpoint(publicMode), Attempts: attempts, RoutingDecisions: decisions, Started: started, StatusCode: finalStatus, InputTokens: inputTokens, OutputTokens: outputTokens, ErrorCode: finalCode, ErrorMessage: finalMessage, RequestBody: raw, ResponseBody: finalResponse, Capture: route.Model.CaptureBodies, Truncated: truncated, PublicProtocol: protocolName(publicMode), UpstreamProtocol: "anthropic", UpstreamRequestID: upstreamRequestID})
-}
-
-func (s *Server) proxyOpenAIUpstreamForAnthropic(w http.ResponseWriter, r *http.Request, raw []byte, payload map[string]any, route routeRuntime, started time.Time, requestID string) {
-	compatibilityRemoved := stripTopLevelParameters(payload, route.Model.StripParameters)
-	compatibilityRemoved = appendUniqueStrings(compatibilityRemoved, stripTopLevelParameters(payload, s.learnedCompatibilityParameters(r.Context(), route.Model.ID))...)
-	if numberAsInt64(payload["max_tokens"]) <= 0 {
-		payload["max_tokens"] = route.Model.DefaultMaxOutputTokens
-	}
-	inputEstimate := estimateInputTokens(raw, route.Model.Tokenizer)
-	tokenCost := inputEstimate + numberAsInt64(payload["max_tokens"])
-	encoded, _ := json.Marshal(payload)
-	credentials, err := s.loadCredentials(r.Context(), route.Provider.ID, route.Model.ID)
-	if err != nil || len(credentials) == 0 {
-		s.rejectAnthropic(w, r, http.StatusServiceUnavailable, "api_error", "No healthy credential is available for this route.", logInput{RequestID: requestID, Route: route, Endpoint: "messages", Started: started, RequestBody: raw, PublicProtocol: "anthropic", UpstreamProtocol: "openai"})
-		return
-	}
-	settings, _, _ := s.settings(r.Context())
-	client, err := upstreamClient(route.Provider)
-	if err != nil {
-		s.rejectAnthropic(w, r, http.StatusBadGateway, "api_error", err.Error(), logInput{RequestID: requestID, Route: route, Endpoint: "messages", Started: started, RequestBody: raw, PublicProtocol: "anthropic", UpstreamProtocol: "openai"})
-		return
-	}
-	skipped := map[string]bool{}
-	attempts := []AttemptRecord{}
-	decisions := []RoutingDecision{}
-	var finalCredential credentialRuntime
-	var finalResponse []byte
-	var finalStatus int
-	var finalCode, finalMessage, upstreamRequestID string
-	var inputTokens, outputTokens int64
-	stream, _ := payload["stream"].(bool)
-	if stream {
-		// The request context is the deadline authority for streams; disable
-		// http.Client's competing total timeout so long streams are not cut short.
-		client.Timeout = 0
-	}
-	retryContext, cancelRetries := context.WithTimeout(r.Context(), providerRetryTimeout(route.Provider, stream))
-	defer cancelRetries()
-	compatibilityRetriesRemaining := 2
-	maxAttempts := len(credentials) + compatibilityRetriesRemaining
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		selected, reservation, retryAfter, routing, selectErr := s.selectCredentialWithDiagnostics(retryContext, route.Model.ID, credentials, tokenCost, skipped, time.Duration(settings.MaxWaitMS)*time.Millisecond)
-		decisions = append(decisions, routing...)
-		if selectErr != nil {
-			finalStatus, finalCode, finalMessage = http.StatusServiceUnavailable, "limiter_unavailable", "Rate limiter is unavailable."
-			writeAnthropicError(w, r, finalStatus, "api_error", finalMessage)
-			break
-		}
-		if selected == nil {
-			seconds := max(1, int(math.Ceil(retryAfter.Seconds())))
-			w.Header().Set("Retry-After", strconv.Itoa(seconds))
-			finalStatus, finalCode, finalMessage = http.StatusTooManyRequests, "rate_limit_exceeded", "Every credential for this model is at capacity."
-			writeAnthropicError(w, r, finalStatus, "rate_limit_error", finalMessage)
-			break
-		}
-		finalCredential = *selected
-		skipped[selected.ID] = true
-		target := strings.TrimRight(route.Provider.BaseURL, "/") + "/chat/completions"
-		upstreamRequest, _ := http.NewRequestWithContext(retryContext, http.MethodPost, target, bytes.NewReader(encoded))
-		applyProviderHeaders(upstreamRequest, route.Provider, selected.Secret)
-		response, requestErr := client.Do(upstreamRequest)
-		if requestErr != nil {
-			attempts = append(attempts, AttemptRecord{CredentialID: selected.ID, CredentialLabel: selected.Label, Error: "connection_error", Retryable: true})
-			s.markCredentialFailure(r.Context(), selected.ID, 0, 0)
-			if retryContext.Err() == nil && len(skipped) < len(credentials) {
-				continue
-			}
-			finalStatus, finalCode, finalMessage = http.StatusBadGateway, "upstream_unavailable", "The upstream provider could not be reached."
-			writeAnthropicError(w, r, finalStatus, "api_error", finalMessage)
-			break
-		}
-		upstreamRequestID = valueOr(response.Header.Get("Request-Id"), response.Header.Get("X-Request-Id"))
-		if response.StatusCode == http.StatusBadRequest && compatibilityRetriesRemaining > 0 {
-			body, wasTruncated, readErr := boundedBody(response.Body, minInt64(s.cfg.MaxResponseBytes, 2<<20))
-			_ = response.Body.Close()
-			if readErr == nil && !wasTruncated {
-				parameters := unsupportedCompatibilityParameters(body, payload)
-				if len(parameters) > 0 {
-					for _, parameter := range parameters {
-						delete(payload, parameter)
-					}
-					encoded, err = json.Marshal(payload)
-					if err != nil {
-						finalStatus, finalCode, finalMessage = http.StatusBadRequest, "invalid_request_error", "Request could not be prepared after compatibility repair."
-						writeAnthropicError(w, r, finalStatus, "invalid_request_error", finalMessage)
-						break
-					}
-					attempts = append(attempts, AttemptRecord{
-						CredentialID: selected.ID, CredentialLabel: selected.Label,
-						StatusCode: response.StatusCode, Error: upstreamErrorCode(body),
-						ErrorMessage: upstreamErrorMessage(body, selected.Secret), Retryable: true,
-						RemovedParameters: parameters,
-					})
-					compatibilityRetriesRemaining--
-					compatibilityRemoved = appendUniqueStrings(compatibilityRemoved, parameters...)
-					s.rememberCompatibilityParameters(r.Context(), route.Model.ID, parameters)
-					skipped = map[string]bool{}
-					continue
-				}
-			}
-			response.Body = io.NopCloser(bytes.NewReader(body))
-		}
-		retryable := anthropicRetryableStatus(response.StatusCode)
-		if retryable && retryContext.Err() == nil && len(skipped) < len(credentials) {
-			body, _, _ := boundedBody(response.Body, 1<<20)
-			_ = response.Body.Close()
-			attempts = append(attempts, AttemptRecord{CredentialID: selected.ID, CredentialLabel: selected.Label, StatusCode: response.StatusCode, Error: upstreamErrorCode(body), Retryable: true})
-			s.markCredentialFailure(r.Context(), selected.ID, response.StatusCode, parseRetryAfter(response.Header.Get("Retry-After")))
+			lastErr = err
 			continue
 		}
-		finalStatus = response.StatusCode
-		attempts = append(attempts, AttemptRecord{CredentialID: selected.ID, CredentialLabel: selected.Label, StatusCode: response.StatusCode, Retryable: retryable})
-		copyAnthropicHeaders(w.Header(), response.Header)
-		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			body, _, _ := boundedBody(response.Body, minInt64(s.cfg.MaxResponseBytes, 2<<20))
-			_ = response.Body.Close()
-			finalResponse, finalCode, finalMessage = body, upstreamErrorCode(body), upstreamErrorMessage(body, selected.Secret)
-			s.markCredentialFailure(r.Context(), selected.ID, response.StatusCode, parseRetryAfter(response.Header.Get("Retry-After")))
-			writeAnthropicError(w, r, response.StatusCode, anthropicErrorType(response.StatusCode), valueOr(finalMessage, "The upstream provider rejected the request."))
-			break
+		if _, err := s.resolveMessageResourceAffinity(ctx, payload, route.Provider.ID); err != nil {
+			lastErr = err
+			continue
 		}
-		s.markCredentialSuccess(r.Context(), selected.ID)
-		if len(compatibilityRemoved) > 0 {
-			w.Header().Set("X-Rotakey-Removed-Parameters", strings.Join(compatibilityRemoved, ","))
-		}
-		if stream {
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("X-Accel-Buffering", "no")
-			w.WriteHeader(response.StatusCode)
-			streamCode, streamErr := translateOpenAIStreamToAnthropic(response.Body, w, route.Model.PublicAlias, nil)
-			_ = response.Body.Close()
-			if streamCode != "" {
-				finalCode, finalMessage = streamCode, "The upstream provider sent an error after streaming started."
-			}
-			if streamErr != nil && !errors.Is(streamErr, context.Canceled) {
-				finalCode, finalMessage = "stream_interrupted", "The response stream ended unexpectedly."
-			}
-			s.storeRequestLog(r.Context(), logInput{RequestID: requestID, Route: route, Credential: finalCredential, Endpoint: "messages", Attempts: attempts, RoutingDecisions: decisions, Started: started, StatusCode: finalStatus, InputTokens: inputEstimate, ErrorCode: finalCode, ErrorMessage: finalMessage, RequestBody: raw, Capture: route.Model.CaptureBodies, PublicProtocol: "anthropic", UpstreamProtocol: "openai", UpstreamRequestID: upstreamRequestID})
-			return
-		}
-		body, _, readErr := boundedBody(response.Body, s.cfg.MaxResponseBytes)
-		_ = response.Body.Close()
-		if readErr != nil {
-			finalStatus, finalCode, finalMessage = http.StatusBadGateway, "upstream_response_invalid", "Upstream response could not be read."
-			writeAnthropicError(w, r, finalStatus, "api_error", finalMessage)
-			break
-		}
-		finalResponse, inputTokens, outputTokens, err = translateChatResponseToAnthropic(body, route.Model.PublicAlias)
-		if err != nil {
-			finalStatus, finalCode, finalMessage = http.StatusBadGateway, "translation_failed", "Upstream response could not be translated."
-			writeAnthropicError(w, r, finalStatus, "api_error", finalMessage)
-			break
-		}
-		_ = s.limiter.AdjustTokens(r.Context(), reservation, inputTokens+outputTokens)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(response.StatusCode)
-		_, _ = w.Write(finalResponse)
-		break
+		return credentialID, []routeRuntime{route}, nil
 	}
-	s.storeRequestLog(r.Context(), logInput{RequestID: requestID, Route: route, Credential: finalCredential, Endpoint: "messages", Attempts: attempts, RoutingDecisions: decisions, Started: started, StatusCode: finalStatus, InputTokens: inputTokens, OutputTokens: outputTokens, ErrorCode: finalCode, ErrorMessage: finalMessage, RequestBody: raw, ResponseBody: finalResponse, Capture: route.Model.CaptureBodies, PublicProtocol: "anthropic", UpstreamProtocol: "openai", UpstreamRequestID: upstreamRequestID})
+	if lastErr != nil {
+		return "", nil, lastErr
+	}
+	return "", nil, errors.New("file references require a native Anthropic provider route")
 }
 
 func (s *Server) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Request) {
@@ -622,14 +196,6 @@ func (s *Server) rejectAnthropic(w http.ResponseWriter, r *http.Request, status 
 	writeAnthropicError(w, r, status, code, message)
 	input.StatusCode, input.ErrorCode, input.ErrorMessage = status, code, message
 	s.storeRequestLog(r.Context(), input)
-}
-
-func (s *Server) writeMessageProxyError(w http.ResponseWriter, r *http.Request, mode string, status int, code, message string) {
-	if mode == messageModeAnthropic {
-		writeAnthropicError(w, r, status, code, message)
-		return
-	}
-	writeError(w, status, code, message)
 }
 
 func decodeJSONMap(raw []byte) (map[string]any, error) {

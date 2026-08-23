@@ -46,7 +46,9 @@ import {
   type Provider,
   type RatePolicy,
   type RequestLog,
-  type Settings
+  type RoutingMode,
+  type Settings,
+  type SettingsUpdateResult
 } from "./types";
 
 type Page = "overview" | "providers" | "models" | "logs" | "access" | "settings";
@@ -65,6 +67,24 @@ const pageFromLocation = (): Page => {
   const segment = location.pathname.replace(/^\/admin\/?/, "").split("/")[0] as Page;
   return navItems.some((item) => item.id === segment) ? segment : "overview";
 };
+
+// The routing mode decides whether a new public alias carries the provider slug,
+// so it is fetched once and shared by every form that proposes an alias.
+let routingModeCache: RoutingMode | null = null;
+
+function useRoutingMode(): RoutingMode {
+  const [mode, setMode] = useState<RoutingMode>(routingModeCache ?? "provider");
+  useEffect(() => {
+    if (routingModeCache) return;
+    void api<Settings>("/api/admin/settings")
+      .then((settings) => {
+        routingModeCache = settings.routing_mode === "model" ? "model" : "provider";
+        setMode(routingModeCache);
+      })
+      .catch(() => undefined);
+  }, []);
+  return mode;
+}
 
 function App() {
   const [phase, setPhase] = useState<AuthPhase>("loading");
@@ -1681,6 +1701,7 @@ function ModelFields({ value, onChange }: { value: ModelDraft; onChange: (value:
 }
 
 function ModelForm({ provider, model, onClose, onComplete, notify }: { provider: Provider; model?: ModelRoute; onClose: () => void; onComplete: (message: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
+  const routingMode = useRoutingMode();
   const [draft, setDraft] = useState<ModelDraft>(model ? {
     public_alias: model.public_alias, upstream_model: model.upstream_model,
     supports_chat: model.supports_chat, supports_responses: model.supports_responses, supports_messages: model.supports_messages,
@@ -1694,6 +1715,12 @@ function ModelForm({ provider, model, onClose, onComplete, notify }: { provider:
     capture_bodies: false, strip_parameters: [], enabled: true
   });
   const [busy, setBusy] = useState(false);
+  // The mode arrives after the first render, so the untouched provider-prefixed
+  // default is cleared once model-wise routing is confirmed.
+  useEffect(() => {
+    if (model || routingMode !== "model") return;
+    setDraft((current) => current.public_alias === `${provider.slug}/` ? { ...current, public_alias: "" } : current);
+  }, [model, provider.slug, routingMode]);
   const save = async () => {
     setBusy(true);
     try {
@@ -1968,6 +1995,7 @@ function ModelCatalog({
 }) {
   const [query, setQuery] = useState("");
   const [manualModel, setManualModel] = useState("");
+  const routingMode = useRoutingMode();
   const existingIDs = useMemo(() => new Set(existing.map((model) => model.upstream_model)), [existing]);
   const catalogModels = useMemo(() => {
     const known = new Map(models.map((model) => [model.id, model]));
@@ -1985,7 +2013,7 @@ function ModelCatalog({
   const toggleVisible = (checked: boolean) => {
     const next = { ...selected };
     for (const model of selectable) {
-      if (checked) next[model.id] = next[model.id] || defaultPublicAlias(provider.slug, model.id);
+      if (checked) next[model.id] = next[model.id] || defaultPublicAlias(provider.slug, model.id, routingMode);
       else delete next[model.id];
     }
     onChange(next);
@@ -2014,7 +2042,7 @@ function ModelCatalog({
         <Button type="button" variant="quiet" disabled={!manualModel.trim() || existingIDs.has(manualModel.trim())} onClick={() => {
           const upstream = manualModel.trim();
           if (!upstream) return;
-          onChange({ ...selected, [upstream]: defaultPublicAlias(provider.slug, upstream) });
+          onChange({ ...selected, [upstream]: defaultPublicAlias(provider.slug, upstream, routingMode) });
           setManualModel("");
         }}><Plus size={14} /> Add model ID</Button>
       </div>
@@ -2031,7 +2059,7 @@ function ModelCatalog({
                   disabled={alreadyRouted}
                   onChange={(event) => {
                     const next = { ...selected };
-                    if (event.target.checked) next[model.id] = defaultPublicAlias(provider.slug, model.id);
+                    if (event.target.checked) next[model.id] = defaultPublicAlias(provider.slug, model.id, routingMode);
                     else delete next[model.id];
                     onChange(next);
                   }}
@@ -2076,6 +2104,7 @@ function ModelsPage({
   const [bulkChecking, setBulkChecking] = useState(false);
   const [deletingFailed, setDeletingFailed] = useState(false);
   const [selectedID, setSelectedID] = useState(() => new URLSearchParams(location.search).get("model") || "");
+  const routingMode = useRoutingMode();
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -2103,6 +2132,7 @@ function ModelsPage({
     return matchesProvider && matchesQuery;
   });
   const selected = models.find((model) => model.id === selectedID);
+  const poolSizes = poolSizeByAlias(providers);
   const healthyKeyCount = (model: (typeof models)[number]) => model.credentials.filter((item) => item.enabled && item.status === "healthy").length;
   const failedProbeIDs = models.filter((model) => healthyKeyCount(model) > 0 && (probeResults[model.id]?.state === "failed" || (!probeResults[model.id] && model.capability_status === "failed"))).map((model) => model.id);
 
@@ -2177,7 +2207,7 @@ function ModelsPage({
 
   return (
     <div className="resource-page model-page">
-      <PageHeader eyebrow="Public contract" title="Model routes" description="Inspect aliases, apply one model limit to one or every API key, and open only the credential detail you need." />
+      <PageHeader eyebrow="Public contract" title="Model routes" description={routingMode === "model" ? "Model-wise routing: aliases sharing a name are served as one pool, rotating across providers and API keys. Callers see the name once." : "Inspect aliases, apply one model limit to one or every API key, and open only the credential detail you need."} />
       {loading ? <PageSkeleton /> : models.length === 0 ? <EmptyState title="No public models" description="Create a route inside a provider to expose it through /v1/models." /> : (
         <div className="ide-resource-workbench">
           <section className="ide-resource-list">
@@ -2208,7 +2238,7 @@ function ModelsPage({
                 return (
                   <button key={model.id} className={selectedID === model.id ? "is-selected" : ""} onClick={() => { setSelectedID(model.id); setModelInspectorOpen(true); }}>
                     <span><StatusDot state={probe?.state === "passed" ? "healthy" : !model.enabled || ready === 0 || probe?.state === "blocked" ? "disabled" : probe?.state === "failed" || model.capability_status === "failed" ? "exhausted" : "healthy"} /><code>{model.public_alias}</code><small title={probe?.state === "passed" ? undefined : probe?.error || model.capability_error}>{model.upstream_model === model.public_alias ? (model.supports_responses ? "Chat + Responses" : "Chat Completions") : model.upstream_model} · {capabilityLabel}</small></span>
-                    <span>{model.provider.name}</span>
+                    <span>{routingMode === "model" && poolSizes[model.public_alias] > 1 ? `${model.provider.name} · pool of ${poolSizes[model.public_alias]}` : model.provider.name}</span>
                     <span>{ready}/{model.credentials.length}</span>
                     <ChevronRight size={13} />
                   </button>
@@ -2234,6 +2264,7 @@ function ModelsPage({
               </header>
               <div className="inspector-definition">
                 <Definition label="Provider" value={selected.provider.name} />
+                {routingMode === "model" && poolSizes[selected.public_alias] > 1 && <Definition label="Pooled with" value={`${poolSizes[selected.public_alias] - 1} other provider route${poolSizes[selected.public_alias] === 2 ? "" : "s"}`} />}
                 <Definition label="Route state" value={selected.enabled ? "enabled" : "disabled"} />
                 <Definition label="Capability check" value={healthyKeyCount(selected) === 0 ? "waiting for a healthy API key" : selected.capability_status === "probe_verified" ? "probe verified" : selected.capability_status === "catalog_verified" ? "catalog verified" : selected.capability_status === "failed" ? "unavailable" : selected.capability_status || "unverified"} />
                 <Definition label="Chat endpoint" value={selected.capability_profile?.chat || (selected.supports_chat ? "native" : "off")} />
@@ -2632,6 +2663,7 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
     <>
       <PageHeader eyebrow="Control plane policy" title="System" description="Bound waiting and retention so the gateway stays predictable on a small VPS." />
       <section className="settings-list">
+        <label className="settings-row"><span><strong>Routing mode</strong><small>{settings.routing_mode === "model" ? "Model-wise: one alias pools every provider publishing that name, rotating across providers and keys. Saving strips the provider prefix from aliases that carry one." : "Provider-wise: each alias belongs to one provider. Saving prepends the provider slug to aliases that lack one."}</small></span><div><select value={settings.routing_mode} onChange={(event) => setSettings({ ...settings, routing_mode: event.target.value as RoutingMode })}><option value="provider">Provider-wise</option><option value="model">Model-wise (pooled)</option></select></div></label>
         <label className="settings-row"><span><strong>Default Anthropic resource provider</strong><small>Files have no model field, so uploads need one native Anthropic provider. Batches remain model-routed.</small></span><div><select value={settings.default_anthropic_provider_id || ""} onChange={(event) => setSettings({ ...settings, default_anthropic_provider_id: event.target.value })}><option value="">Not configured</option>{providers.filter((provider) => provider.api_format === "anthropic" && provider.enabled).map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></div></label>
         <label className="settings-row"><span><strong>Capacity wait ceiling</strong><small>Requests wait only when capacity can return within this deadline.</small></span><div><input type="number" min={0} max={30000} step={100} value={settings.max_wait_ms} onChange={(e) => setSettings({ ...settings, max_wait_ms: Number(e.target.value) })} /><code>ms</code></div></label>
         <label className="settings-row"><span><strong>Global provider timeout</strong><small>Applies this request timeout to every provider and becomes the default for new providers.</small></span><div><input type="number" min={1} max={900} value={settings.default_provider_timeout_seconds} onChange={(e) => setSettings({ ...settings, default_provider_timeout_seconds: Number(e.target.value) })} /><code>seconds</code></div></label>
@@ -2642,8 +2674,16 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
         <span>Changes apply to new requests without restarting the gateway.</span>
         <Button disabled={busy} onClick={() => {
           setBusy(true);
-          void api("/api/admin/settings", { method: "PUT", json: settings })
-            .then(() => notify("System settings saved."))
+          void api<SettingsUpdateResult>("/api/admin/settings", { method: "PUT", json: settings })
+            .then((result) => {
+              routingModeCache = result.routing_mode;
+              // A mode switch renames aliases in the same transaction, so the
+              // save confirmation reports what changed and what could not.
+              const parts = ["System settings saved."];
+              if (result.aliases_rewritten > 0) parts.push(`${result.aliases_rewritten} model alias${result.aliases_rewritten === 1 ? "" : "es"} renamed for ${result.routing_mode}-wise routing.`);
+              if (result.alias_conflicts.length > 0) parts.push(`Kept unchanged to avoid a collision: ${result.alias_conflicts.join(", ")}.`);
+              notify(parts.join(" "), result.alias_conflicts.length > 0 ? "danger" : "success");
+            })
             .catch((caught) => notify(errorMessage(caught), "danger"))
             .finally(() => setBusy(false));
         }}>{busy ? "Saving…" : "Save settings"}</Button>
@@ -2750,8 +2790,10 @@ function mergeModelCatalogs(catalogs: DiscoveredModel[][]): DiscoveredModel[] {
   return [...byID.values()].sort((left, right) => left.id.localeCompare(right.id));
 }
 
-function defaultPublicAlias(providerSlug: string, upstreamModel: string) {
-  const raw = upstreamModel.startsWith(`${providerSlug}/`)
+function defaultPublicAlias(providerSlug: string, upstreamModel: string, mode: RoutingMode = "provider") {
+  // Model-wise routing pools every provider publishing the same alias, so a new
+  // route must not carry the provider slug that would keep them separate.
+  const raw = mode === "model" || upstreamModel.startsWith(`${providerSlug}/`)
     ? upstreamModel
     : `${providerSlug}/${upstreamModel}`;
   const safe = raw.replace(/[^A-Za-z0-9._:/-]+/g, "-").replace(/^-+|-+$/g, "");
@@ -2780,6 +2822,18 @@ function routeInputsFromSelection(selected: Record<string, string>, catalogIDs =
     strip_parameters: [],
     enabled: true,
   }));
+}
+
+// poolSizeByAlias counts how many provider routes publish each public alias, so
+// model-wise mode can show that one name is backed by several providers.
+function poolSizeByAlias(providers: Provider[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const provider of providers) {
+    for (const model of provider.models) {
+      counts[model.public_alias] = (counts[model.public_alias] ?? 0) + 1;
+    }
+  }
+  return counts;
 }
 
 function normalizeProviders(providers: Provider[] | null | undefined): Provider[] {

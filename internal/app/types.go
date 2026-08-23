@@ -171,6 +171,7 @@ type AppSettings struct {
 	MaxWaitMS                  int    `json:"max_wait_ms"`
 	DefaultProviderTimeoutSecs int    `json:"default_provider_timeout_seconds"`
 	DefaultAnthropicProviderID string `json:"default_anthropic_provider_id"`
+	RoutingMode                string `json:"routing_mode"`
 	BaseURL                    string `json:"base_url"`
 }
 

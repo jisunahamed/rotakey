@@ -58,17 +58,29 @@ type compatibilityReplacement struct {
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `
+	settings, _, err := s.settings(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "settings_unavailable", "Gateway settings are unavailable.")
+		return
+	}
+	// Model-wise routing publishes one entry per public alias even when several
+	// providers carry it, so callers never see the same model twice.
+	query := `
 		SELECT m.public_alias, m.created_at, m.supports_messages
 		FROM model_routes m JOIN providers p ON p.id=m.provider_id
-		WHERE m.enabled=TRUE AND p.enabled=TRUE
-		  AND m.capability_status IN ('catalog_verified', 'probe_verified')
-		  AND EXISTS (
-		    SELECT 1 FROM credentials c
-		    WHERE c.provider_id=p.id AND c.enabled=TRUE AND c.status <> 'quarantined'
-		  )
+		WHERE ` + routeFilter + `
 		ORDER BY m.public_alias
-	`)
+	`
+	if normalizeRoutingMode(settings.RoutingMode) == routingModeModel {
+		query = `
+			SELECT m.public_alias, MIN(m.created_at), BOOL_OR(m.supports_messages)
+			FROM model_routes m JOIN providers p ON p.id=m.provider_id
+			WHERE ` + routeFilter + `
+			GROUP BY m.public_alias
+			ORDER BY m.public_alias
+		`
+	}
+	rows, err := s.db.Query(r.Context(), query)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "models_unavailable", "Model routes could not be loaded.")
 		return
@@ -173,7 +185,28 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 	s.updateActiveRequest(requestID, func(log *RequestLog) {
 		log.ModelAlias = alias
 	})
-	route, err := s.loadRoute(r.Context(), alias)
+	settings, _, err := s.settings(r.Context())
+	if err != nil {
+		s.rejectGatewayRequest(w, r, http.StatusServiceUnavailable, "settings_unavailable", "Gateway settings are unavailable.", logInput{
+			RequestID: requestID, Route: routeRuntime{Model: ModelRoute{PublicAlias: alias}},
+			Endpoint: endpoint, Started: started, RequestBody: raw,
+		})
+		return
+	}
+	req := dispatchRequest{
+		RequestID: requestID, Started: started, Endpoint: endpoint,
+		PublicMode: messageModeChat, Alias: alias, Raw: raw, Public: publicPayload,
+		MaxWait: time.Duration(settings.MaxWaitMS) * time.Millisecond,
+	}
+	if endpoint == "responses" {
+		req.PublicMode = messageModeResponses
+	}
+	req.Stream, _ = publicPayload["stream"].(bool)
+	if options, ok := publicPayload["stream_options"].(map[string]any); ok {
+		req.IncludeOpenAIUsage, _ = options["include_usage"].(bool)
+	}
+
+	routes, err := s.resolveRoutes(r.Context(), alias, settings.RoutingMode)
 	if err != nil {
 		s.rejectGatewayRequest(w, r, http.StatusNotFound, "model_not_found", "The requested model alias is not enabled.", logInput{
 			RequestID: requestID, Route: routeRuntime{Model: ModelRoute{PublicAlias: alias}},
@@ -181,446 +214,30 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 		})
 		return
 	}
+	// Providers that cannot serve the caller's protocol leave the pool before any
+	// request is sent, so failover never wastes an attempt on them.
+	usable := make([]routeRuntime, 0, len(routes))
+	for _, route := range routes {
+		if routeSupportsRequest(route, req) {
+			usable = append(usable, route)
+		}
+	}
+	if len(usable) == 0 {
+		message := "This model route does not support Chat Completions."
+		if endpoint == "responses" {
+			message = "This model route does not support Responses."
+		}
+		s.rejectGatewayRequest(w, r, http.StatusBadRequest, "unsupported_endpoint", message, logInput{
+			RequestID: requestID, Route: routes[0], Endpoint: endpoint, Started: started,
+			RequestBody: raw, Capture: routes[0].Model.CaptureBodies,
+		})
+		return
+	}
 	s.updateActiveRequest(requestID, func(log *RequestLog) {
-		log.ModelAlias = route.Model.PublicAlias
-		log.ProviderName = route.Provider.Name
+		log.ModelAlias = usable[0].Model.PublicAlias
+		log.ProviderName = usable[0].Provider.Name
 	})
-	if endpoint == "chat" && !route.Model.SupportsChat {
-		s.rejectGatewayRequest(w, r, http.StatusBadRequest, "unsupported_endpoint", "This model route does not support Chat Completions.", logInput{
-			RequestID: requestID, Route: route, Endpoint: endpoint, Started: started,
-			RequestBody: raw, Capture: route.Model.CaptureBodies,
-		})
-		return
-	}
-	if route.Provider.APIFormat == "anthropic" {
-		if endpoint == "responses" && !route.Model.SupportsResponses && !route.Model.SupportsChat {
-			s.rejectGatewayRequest(w, r, http.StatusBadRequest, "unsupported_endpoint", "This model route does not support Responses.", logInput{
-				RequestID: requestID, Route: route, Endpoint: endpoint, Started: started,
-				RequestBody: raw, Capture: route.Model.CaptureBodies, PublicProtocol: "openai", UpstreamProtocol: "anthropic",
-			})
-			return
-		}
-		s.handleOpenAIThroughAnthropic(w, r, raw, publicPayload, route, endpoint, started, requestID)
-		return
-	}
-
-	upstreamPayload := cloneMap(publicPayload)
-	translated := false
-	if endpoint == "responses" && !route.Model.SupportsResponses {
-		if !route.Model.SupportsChat {
-			s.rejectGatewayRequest(w, r, http.StatusBadRequest, "unsupported_endpoint", "This model route does not support Responses.", logInput{
-				RequestID: requestID, Route: route, Endpoint: endpoint, Started: started,
-				RequestBody: raw, Capture: route.Model.CaptureBodies,
-			})
-			return
-		}
-		upstreamPayload, err = translateResponsesRequest(publicPayload)
-		if err != nil {
-			var unsupported unsupportedFeatureError
-			if errors.As(err, &unsupported) {
-				s.rejectGatewayRequest(w, r, http.StatusBadRequest, "unsupported_feature", unsupported.Error(), logInput{
-					RequestID: requestID, Route: route, Endpoint: endpoint, Started: started,
-					RequestBody: raw, Capture: route.Model.CaptureBodies,
-				})
-				return
-			}
-			s.rejectGatewayRequest(w, r, http.StatusBadRequest, "invalid_request", "Responses request could not be translated.", logInput{
-				RequestID: requestID, Route: route, Endpoint: endpoint, Started: started,
-				RequestBody: raw, Capture: route.Model.CaptureBodies,
-			})
-			return
-		}
-		translated = true
-	}
-	strippedParameters := stripTopLevelParameters(upstreamPayload, route.Model.StripParameters)
-	learnedParameters := s.learnedCompatibilityParameters(r.Context(), route.Model.ID)
-	strippedParameters = append(strippedParameters, stripTopLevelParameters(upstreamPayload, learnedParameters)...)
-	replacedParameters := applyCompatibilityReplacements(
-		upstreamPayload,
-		s.learnedCompatibilityReplacements(r.Context(), route.Model.ID, endpoint),
-	)
-	if len(strippedParameters) > 0 {
-		s.logger.Info(
-			"removed unsupported upstream parameters",
-			"request_id", requestID,
-			"model", route.Model.PublicAlias,
-			"parameters", strings.Join(strippedParameters, ","),
-		)
-	}
-	if len(replacedParameters) > 0 {
-		s.logger.Info(
-			"replaced unsupported upstream parameters",
-			"request_id", requestID,
-			"model", route.Model.PublicAlias,
-			"parameters", formatCompatibilityReplacements(replacedParameters),
-		)
-	}
-	upstreamPayload["model"] = upstreamModelForProvider(route.Provider, route.Model.UpstreamModel)
-	inputEstimate, outputReservation := prepareTokenReservation(
-		upstreamPayload,
-		endpoint,
-		translated,
-		route.Model.DefaultMaxOutputTokens,
-		route.Model.Tokenizer,
-		raw,
-	)
-	totalReservation := inputEstimate + outputReservation
-	isStream, _ := publicPayload["stream"].(bool)
-	encodedUpstream, err := json.Marshal(upstreamPayload)
-	if err != nil {
-		s.rejectGatewayRequest(w, r, http.StatusBadRequest, "invalid_request", "Request could not be prepared.", logInput{
-			RequestID: requestID, Route: route, Endpoint: endpoint, Started: started,
-			InputTokens: inputEstimate, RequestBody: raw, Capture: route.Model.CaptureBodies,
-		})
-		return
-	}
-
-	credentials, err := s.loadCredentials(r.Context(), route.Provider.ID, route.Model.ID)
-	if err != nil {
-		s.rejectGatewayRequest(w, r, http.StatusServiceUnavailable, "credentials_unavailable", "Provider credentials could not be loaded.", logInput{
-			RequestID: requestID, Route: route, Endpoint: endpoint, Started: started,
-			InputTokens: inputEstimate, RequestBody: raw, Capture: route.Model.CaptureBodies,
-		})
-		return
-	}
-	if len(credentials) == 0 {
-		s.rejectGatewayRequest(w, r, http.StatusServiceUnavailable, "no_credentials", "No healthy credential is configured for this model.", logInput{
-			RequestID: requestID, Route: route, Endpoint: endpoint, Started: started,
-			InputTokens: inputEstimate, RequestBody: raw, Capture: route.Model.CaptureBodies,
-		})
-		return
-	}
-	settings, _, err := s.settings(r.Context())
-	if err != nil {
-		s.rejectGatewayRequest(w, r, http.StatusServiceUnavailable, "settings_unavailable", "Gateway settings are unavailable.", logInput{
-			RequestID: requestID, Route: route, Endpoint: endpoint, Started: started,
-			InputTokens: inputEstimate, RequestBody: raw, Capture: route.Model.CaptureBodies,
-		})
-		return
-	}
-
-	client, err := upstreamClient(route.Provider)
-	if err != nil {
-		s.rejectGatewayRequest(w, r, http.StatusBadGateway, "unsafe_provider_url", err.Error(), logInput{
-			RequestID: requestID, Route: route, Endpoint: endpoint, Started: started,
-			InputTokens: inputEstimate, RequestBody: raw, Capture: route.Model.CaptureBodies,
-		})
-		return
-	}
-	compatibilityRetriesRemaining := 2
-	maxAttempts := len(credentials) + compatibilityRetriesRemaining
-	transientRetriesRemaining := max(0, len(credentials)-1)
-	// Use the configured provider deadline for the entire retry window so raising
-	// a provider's timeout actually extends how long a request may run.
-	retryTimeout := providerRetryTimeout(route.Provider, isStream)
-	if isStream {
-		// The request context remains the deadline authority for streams; disable
-		// http.Client's competing total timeout.
-		client.Timeout = 0
-	}
-	retryContext, cancelRetries := context.WithTimeout(r.Context(), retryTimeout)
-	defer cancelRetries()
-	compatibilityRemoved := append([]string(nil), strippedParameters...)
-	compatibilityReplaced := cloneStringMap(replacedParameters)
-	skipped := map[string]bool{}
-	attempts := make([]AttemptRecord, 0, maxAttempts)
-	routingDecisions := make([]RoutingDecision, 0)
-	var (
-		finalCredential   credentialRuntime
-		finalResponse     []byte
-		finalStatus       int
-		finalErrorCode    string
-		finalErrorMessage string
-		inputTokens       = inputEstimate
-		outputTokens      int64
-		truncated         bool
-	)
-
-	for attemptNumber := 0; attemptNumber < maxAttempts; attemptNumber++ {
-		selected, reservation, retryAfter, decisions, selectErr := s.selectCredentialWithDiagnostics(
-			retryContext, route.Model.ID, credentials, totalReservation, skipped, time.Duration(settings.MaxWaitMS)*time.Millisecond,
-		)
-		routingDecisions = append(routingDecisions, decisions...)
-		if selectErr != nil {
-			finalErrorMessage = "Rate limiter is unavailable."
-			writeError(w, http.StatusServiceUnavailable, "limiter_unavailable", finalErrorMessage)
-			finalStatus = http.StatusServiceUnavailable
-			finalErrorCode = "limiter_unavailable"
-			break
-		}
-		if selected == nil {
-			seconds := int(math.Ceil(retryAfter.Seconds()))
-			if seconds < 1 {
-				seconds = 1
-			}
-			w.Header().Set("Retry-After", strconv.Itoa(seconds))
-			finalErrorMessage = "Every credential for this model is at capacity."
-			writeError(w, http.StatusTooManyRequests, "rate_limit_exceeded", finalErrorMessage)
-			finalStatus = http.StatusTooManyRequests
-			finalErrorCode = "rate_limit_exceeded"
-			break
-		}
-		finalCredential = *selected
-		s.updateActiveRequest(requestID, func(log *RequestLog) {
-			log.CredentialLabel = selected.Label
-		})
-		skipped[selected.ID] = true
-
-		path := "/chat/completions"
-		if endpoint == "responses" && !translated {
-			path = "/responses"
-		}
-		target := strings.TrimRight(route.Provider.BaseURL, "/") + path
-		upstreamRequest, _ := http.NewRequestWithContext(retryContext, http.MethodPost, target, bytes.NewReader(encodedUpstream))
-		applyProviderHeaders(upstreamRequest, route.Provider, selected.Secret)
-		attemptStarted := time.Now()
-		response, requestErr := client.Do(upstreamRequest)
-		if requestErr != nil {
-			// The request attempt still consumes request quota, but no upstream
-			// token usage was produced. Return the unused token reservation.
-			_ = s.limiter.AdjustTokens(r.Context(), reservation, 0)
-			attempts = append(attempts, AttemptRecord{
-				CredentialID: selected.ID, CredentialLabel: selected.Label,
-				Error: "connection_error", ErrorMessage: "The upstream connection failed before a response started.",
-				Retryable: true, DurationMS: time.Since(attemptStarted).Milliseconds(),
-			})
-			s.markCredentialFailure(r.Context(), selected.ID, 0, 0)
-			if retryContext.Err() == nil && transientRetriesRemaining > 0 && attemptNumber+1 < maxAttempts {
-				transientRetriesRemaining--
-				continue
-			}
-			finalErrorMessage = "The upstream provider could not be reached."
-			writeError(w, http.StatusBadGateway, "upstream_unavailable", finalErrorMessage)
-			finalStatus = http.StatusBadGateway
-			finalErrorCode = "upstream_unavailable"
-			break
-		}
-
-		if response.StatusCode == http.StatusBadRequest && compatibilityRetriesRemaining > 0 {
-			errorBody, wasTruncated, readErr := boundedBody(response.Body, minInt64(s.cfg.MaxResponseBytes, 2<<20))
-			_ = response.Body.Close()
-			_ = s.limiter.AdjustTokens(r.Context(), reservation, 0)
-			if readErr == nil && !wasTruncated {
-				if replacement, ok := unsupportedCompatibilityReplacement(errorBody, upstreamPayload); ok {
-					applyCompatibilityReplacement(upstreamPayload, replacement)
-					encodedUpstream, err = json.Marshal(upstreamPayload)
-					if err != nil {
-						finalErrorMessage = "Request could not be prepared."
-						writeError(w, http.StatusBadRequest, "invalid_request", finalErrorMessage)
-						finalStatus = http.StatusBadRequest
-						finalErrorCode = "invalid_request"
-						break
-					}
-					replaced := map[string]string{replacement.From: replacement.To}
-					attempts = append(attempts, AttemptRecord{
-						CredentialID: selected.ID, CredentialLabel: selected.Label,
-						StatusCode: response.StatusCode, Error: upstreamErrorCode(errorBody),
-						ErrorMessage: upstreamErrorMessage(errorBody, selected.Secret),
-						Retryable:    true, DurationMS: time.Since(attemptStarted).Milliseconds(),
-						ReplacedParameters: replaced,
-					})
-					compatibilityRetriesRemaining--
-					compatibilityReplaced[replacement.From] = replacement.To
-					s.rememberCompatibilityReplacement(r.Context(), route.Model.ID, endpoint, replacement)
-					s.logger.Info(
-						"learned upstream parameter replacement",
-						"request_id", requestID,
-						"model", route.Model.PublicAlias,
-						"from", replacement.From,
-						"to", replacement.To,
-					)
-					skipped = map[string]bool{}
-					continue
-				}
-
-				parameters := unsupportedCompatibilityParameters(errorBody, upstreamPayload)
-				if len(parameters) > 0 {
-					for _, parameter := range parameters {
-						delete(upstreamPayload, parameter)
-					}
-					encodedUpstream, err = json.Marshal(upstreamPayload)
-					if err != nil {
-						finalErrorMessage = "Request could not be prepared."
-						writeError(w, http.StatusBadRequest, "invalid_request", finalErrorMessage)
-						finalStatus = http.StatusBadRequest
-						finalErrorCode = "invalid_request"
-						break
-					}
-					attempts = append(attempts, AttemptRecord{
-						CredentialID: selected.ID, CredentialLabel: selected.Label,
-						StatusCode: response.StatusCode, Error: upstreamErrorCode(errorBody),
-						ErrorMessage: upstreamErrorMessage(errorBody, selected.Secret),
-						Retryable:    true, DurationMS: time.Since(attemptStarted).Milliseconds(),
-						RemovedParameters: parameters,
-					})
-					compatibilityRetriesRemaining--
-					compatibilityRemoved = appendUniqueStrings(compatibilityRemoved, parameters...)
-					s.rememberCompatibilityParameters(r.Context(), route.Model.ID, parameters)
-					s.logger.Info(
-						"learned unsupported upstream parameters",
-						"request_id", requestID,
-						"model", route.Model.PublicAlias,
-						"parameters", strings.Join(parameters, ","),
-					)
-					// This was a request-shape failure, not a credential failure.
-					// Let the normal round-robin cursor select any eligible key again.
-					skipped = map[string]bool{}
-					continue
-				}
-			}
-
-			finalStatus = response.StatusCode
-			attempts = append(attempts, AttemptRecord{
-				CredentialID: selected.ID, CredentialLabel: selected.Label,
-				StatusCode: response.StatusCode, Error: upstreamErrorCode(errorBody),
-				ErrorMessage: upstreamErrorMessage(errorBody, selected.Secret), Retryable: false,
-				DurationMS: time.Since(attemptStarted).Milliseconds(),
-			})
-			truncated = wasTruncated
-			finalResponse = errorBody
-			finalErrorCode = upstreamErrorCode(errorBody)
-			finalErrorMessage = upstreamErrorMessage(errorBody, selected.Secret)
-			copyUpstreamHeaders(w.Header(), response.Header)
-			w.WriteHeader(response.StatusCode)
-			_, _ = w.Write(errorBody)
-			s.markCredentialFailure(r.Context(), selected.ID, response.StatusCode, parseRetryAfter(response.Header.Get("Retry-After")))
-			break
-		}
-
-		retryable := response.StatusCode == http.StatusTooManyRequests ||
-			response.StatusCode == 529 ||
-			response.StatusCode == http.StatusInternalServerError ||
-			response.StatusCode == http.StatusBadGateway ||
-			response.StatusCode == http.StatusServiceUnavailable ||
-			response.StatusCode == http.StatusGatewayTimeout ||
-			response.StatusCode == http.StatusUnauthorized ||
-			response.StatusCode == http.StatusForbidden
-		if retryable && transientRetriesRemaining > 0 && attemptNumber+1 < maxAttempts {
-			errorBody, _, _ := boundedBody(response.Body, 1<<20)
-			_ = response.Body.Close()
-			_ = s.limiter.AdjustTokens(r.Context(), reservation, 0)
-			attempts = append(attempts, AttemptRecord{
-				CredentialID: selected.ID, CredentialLabel: selected.Label,
-				StatusCode: response.StatusCode, Error: upstreamErrorCode(errorBody),
-				ErrorMessage: upstreamErrorMessage(errorBody, selected.Secret),
-				Retryable:    true, DurationMS: time.Since(attemptStarted).Milliseconds(),
-			})
-			s.markCredentialFailure(r.Context(), selected.ID, response.StatusCode, parseRetryAfter(response.Header.Get("Retry-After")))
-			transientRetriesRemaining--
-			continue
-		}
-
-		finalStatus = response.StatusCode
-		attempts = append(attempts, AttemptRecord{
-			CredentialID: selected.ID, CredentialLabel: selected.Label,
-			StatusCode: response.StatusCode, Retryable: retryable,
-			DurationMS: time.Since(attemptStarted).Milliseconds(),
-		})
-		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			body, wasTruncated, _ := boundedBody(response.Body, minInt64(s.cfg.MaxResponseBytes, 2<<20))
-			_ = response.Body.Close()
-			_ = s.limiter.AdjustTokens(r.Context(), reservation, 0)
-			attempts[len(attempts)-1].Error = upstreamErrorCode(body)
-			attempts[len(attempts)-1].ErrorMessage = upstreamErrorMessage(body, selected.Secret)
-			truncated = wasTruncated
-			finalResponse = body
-			finalErrorCode = upstreamErrorCode(body)
-			finalErrorMessage = upstreamErrorMessage(body, selected.Secret)
-			copyUpstreamHeaders(w.Header(), response.Header)
-			w.WriteHeader(response.StatusCode)
-			_, _ = w.Write(body)
-			s.markCredentialFailure(r.Context(), selected.ID, response.StatusCode, parseRetryAfter(response.Header.Get("Retry-After")))
-			break
-		}
-
-		s.markCredentialSuccess(r.Context(), selected.ID)
-		copyUpstreamHeaders(w.Header(), response.Header)
-		if len(compatibilityRemoved) > 0 {
-			w.Header().Set("X-Rotakey-Removed-Parameters", strings.Join(compatibilityRemoved, ","))
-		}
-		if len(compatibilityReplaced) > 0 {
-			w.Header().Set("X-Rotakey-Replaced-Parameters", formatCompatibilityReplacements(compatibilityReplaced))
-		}
-		if isStream {
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("X-Accel-Buffering", "no")
-			w.WriteHeader(response.StatusCode)
-			var capture *limitedCapture
-			if route.Model.CaptureBodies {
-				capture = &limitedCapture{limit: s.cfg.CaptureBytes}
-			}
-			var streamErr error
-			if translated {
-				streamErr = translateChatStream(response.Body, w, alias, capture)
-			} else {
-				var captureWriter io.Writer
-				if capture != nil {
-					captureWriter = capture
-				}
-				streamErr = copyStreamingResponse(w, response.Body, captureWriter)
-			}
-			_ = response.Body.Close()
-			if streamErr != nil && !errors.Is(streamErr, context.Canceled) {
-				finalErrorCode = "stream_interrupted"
-				finalErrorMessage = "The response stream ended unexpectedly after it started."
-				if !translated {
-					writeStreamFailure(w, capture, endpoint, finalErrorCode, finalErrorMessage, alias)
-				}
-			}
-			if capture != nil {
-				finalResponse = append([]byte(nil), capture.Bytes()...)
-				truncated = capture.truncated
-			}
-			s.storeRequestLog(r.Context(), logInput{
-				RequestID: requestID, Route: route, Credential: finalCredential,
-				Endpoint: endpoint, Attempts: attempts, RoutingDecisions: routingDecisions,
-				Started: started, StatusCode: finalStatus,
-				InputTokens: inputTokens, OutputTokens: 0, ErrorCode: finalErrorCode, ErrorMessage: finalErrorMessage, RequestBody: raw,
-				ResponseBody: finalResponse, Capture: route.Model.CaptureBodies, Truncated: truncated,
-			})
-			return
-		}
-
-		body, wasTruncated, readErr := boundedBody(response.Body, s.cfg.MaxResponseBytes)
-		_ = response.Body.Close()
-		if readErr != nil || wasTruncated {
-			finalErrorMessage = "Upstream response exceeded the configured limit."
-			writeError(w, http.StatusBadGateway, "upstream_response_too_large", finalErrorMessage)
-			finalStatus = http.StatusBadGateway
-			finalErrorCode = "upstream_response_too_large"
-			truncated = wasTruncated
-			break
-		}
-		if translated {
-			finalResponse, inputTokens, outputTokens, err = translateChatResponse(body, alias)
-			if err != nil {
-				finalErrorMessage = "Upstream response could not be translated."
-				writeError(w, http.StatusBadGateway, "translation_failed", finalErrorMessage)
-				finalStatus = http.StatusBadGateway
-				finalErrorCode = "translation_failed"
-				break
-			}
-		} else {
-			finalResponse, inputTokens, outputTokens = replaceResponseModel(body, alias)
-		}
-		if inputTokens+outputTokens > 0 {
-			_ = s.limiter.AdjustTokens(r.Context(), reservation, inputTokens+outputTokens)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(response.StatusCode)
-		_, _ = w.Write(finalResponse)
-		break
-	}
-
-	s.storeRequestLog(r.Context(), logInput{
-		RequestID: requestID, Route: route, Credential: finalCredential,
-		Endpoint: endpoint, Attempts: attempts, RoutingDecisions: routingDecisions,
-		Started: started, StatusCode: finalStatus,
-		InputTokens: inputTokens, OutputTokens: outputTokens, ErrorCode: finalErrorCode, ErrorMessage: finalErrorMessage,
-		RequestBody: raw, ResponseBody: finalResponse, Capture: route.Model.CaptureBodies,
-		Truncated: truncated,
-	})
+	s.servePooled(w, r, req, usable, "")
 }
 
 func copyStreamingResponse(destination http.ResponseWriter, source io.Reader, capture io.Writer) error {
@@ -891,14 +508,6 @@ func formatCompatibilityReplacements(replacements map[string]string) string {
 		values = append(values, source+"="+replacements[source])
 	}
 	return strings.Join(values, ",")
-}
-
-func cloneStringMap(source map[string]string) map[string]string {
-	target := make(map[string]string, len(source))
-	for key, value := range source {
-		target[key] = value
-	}
-	return target
 }
 
 func appendUniqueStrings(values []string, additions ...string) []string {
@@ -1277,16 +886,7 @@ func (s *Server) markCredentialFailure(ctx context.Context, credentialID string,
 		return
 	}
 	if status == http.StatusTooManyRequests {
-		if retryAfter <= 0 {
-			retryAfter = time.Minute
-		}
-		_ = s.redis.Set(ctx, "cooldown:"+credentialID, "429", retryAfter).Err()
-		if _, err := s.db.Exec(ctx, `
-			UPDATE credentials SET status='cooldown', cooldown_until=$2,
-			    updated_at=NOW() WHERE id=$1
-		`, credentialID, time.Now().Add(retryAfter)); err != nil {
-			s.logger.Warn("credential cooldown state write failed", "credential_id", credentialID, "error", err)
-		}
+		s.holdCredential(ctx, credentialID, retryAfter)
 		return
 	}
 	failures, _ := s.redis.Incr(ctx, "failures:"+credentialID).Result()
@@ -1300,6 +900,105 @@ func (s *Server) markCredentialFailure(ctx context.Context, credentialID string,
 			s.logger.Warn("credential circuit state write failed", "credential_id", credentialID, "error", err)
 		}
 	}
+}
+
+// holdCredential parks a credential for the provider's stated cooldown. It is
+// the shared path for HTTP 429 and for providers that signal exhaustion some
+// other way, so a rate-limited key is never retried until the window passes
+// even when the gateway has no local limit configured for it.
+func (s *Server) holdCredential(ctx context.Context, credentialID string, retryAfter time.Duration) {
+	if retryAfter <= 0 {
+		retryAfter = time.Minute
+	}
+	if retryAfter > 24*time.Hour {
+		retryAfter = 24 * time.Hour
+	}
+	_ = s.redis.Set(ctx, "cooldown:"+credentialID, "429", retryAfter).Err()
+	if _, err := s.db.Exec(ctx, `
+		UPDATE credentials SET status='cooldown', cooldown_until=$2,
+		    updated_at=NOW() WHERE id=$1
+	`, credentialID, time.Now().Add(retryAfter)); err != nil {
+		s.logger.Warn("credential cooldown state write failed", "credential_id", credentialID, "error", err)
+	}
+}
+
+// markUpstreamFailure classifies an upstream rejection using both the status
+// line and the error body. Providers disagree about how they report quota
+// exhaustion — some use 429, others answer 400/403/503 with a rate-limit code —
+// and all of those must put the credential on hold rather than fall through to
+// the generic three-strike circuit breaker.
+func (s *Server) markUpstreamFailure(ctx context.Context, credentialID string, status int, header http.Header, body []byte) {
+	if hold, ok := upstreamRateLimitHold(status, header, body); ok {
+		s.holdCredential(ctx, credentialID, hold)
+		return
+	}
+	s.markCredentialFailure(ctx, credentialID, status, parseRetryAfter(header.Get("Retry-After")))
+}
+
+// upstreamRateLimitHold reports how long a credential should be held when the
+// provider signalled rate limiting. HTTP 401 is excluded because an invalid key
+// must be quarantined instead of retried later.
+func upstreamRateLimitHold(status int, header http.Header, body []byte) (time.Duration, bool) {
+	if status == http.StatusUnauthorized {
+		return 0, false
+	}
+	rateLimited := status == http.StatusTooManyRequests || bodySignalsRateLimit(body)
+	if !rateLimited {
+		return 0, false
+	}
+	hold := parseRetryAfter(header.Get("Retry-After"))
+	if hold <= 0 {
+		for _, name := range []string{"X-Ratelimit-Reset", "X-Ratelimit-Reset-Requests", "X-Ratelimit-Reset-Tokens", "Anthropic-Ratelimit-Requests-Reset", "Anthropic-Ratelimit-Tokens-Reset"} {
+			if reset := parseRetryAfter(header.Get(name)); reset > 0 {
+				hold = reset
+				break
+			}
+		}
+	}
+	return hold, true
+}
+
+// rateLimitSignals are the substrings providers use to say "you are throttled".
+// They are matched against the error code, type and message rather than the
+// status code so a non-429 rejection is still recognised.
+var rateLimitSignals = []string{
+	"rate_limit", "ratelimit", "rate limit", "too many requests",
+	"quota", "resource_exhausted", "resource exhausted", "throttl",
+	"over capacity", "overloaded", "concurrent request",
+}
+
+func bodySignalsRateLimit(body []byte) bool {
+	if len(body) == 0 || len(body) > 64<<10 {
+		return false
+	}
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil {
+		return false
+	}
+	fields := []string{}
+	collect := func(value any) {
+		container, ok := value.(map[string]any)
+		if !ok {
+			return
+		}
+		for _, key := range []string{"code", "type", "status", "message", "reason"} {
+			if text, ok := container[key].(string); ok {
+				fields = append(fields, text)
+			}
+		}
+	}
+	collect(payload)
+	collect(payload["error"])
+	collect(payload["detail"])
+	for _, field := range fields {
+		lowered := strings.ToLower(field)
+		for _, signal := range rateLimitSignals {
+			if strings.Contains(lowered, signal) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Server) markCredentialSuccess(ctx context.Context, credentialID string) {

@@ -15,15 +15,39 @@ import (
 // handleCodexManifest publishes only routes that can be used by Codex. The
 // response is deliberately small and stable so local bridges can cache it.
 func (s *Server) handleCodexManifest(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `
-		SELECT m.public_alias, p.name, m.supports_responses, m.supports_chat,
-		       m.capability_status, m.capability_profile
-		FROM model_routes m JOIN providers p ON p.id=m.provider_id
-		WHERE m.enabled=TRUE AND p.enabled=TRUE
+	settings, _, err := s.settings(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "settings_unavailable", "Gateway settings are unavailable.")
+		return
+	}
+	const codexFilter = `
+		m.enabled=TRUE AND p.enabled=TRUE
 		  AND (m.supports_responses=TRUE OR m.supports_chat=TRUE)
 		  AND m.capability_status IN ('catalog_verified', 'probe_verified')
 		  AND EXISTS (SELECT 1 FROM credentials c WHERE c.provider_id=p.id AND c.enabled=TRUE AND c.status <> 'quarantined')
-		ORDER BY m.public_alias`)
+	`
+	query := `
+		SELECT m.public_alias, p.name, m.supports_responses, m.supports_chat,
+		       m.capability_status, m.capability_profile
+		FROM model_routes m JOIN providers p ON p.id=m.provider_id
+		WHERE ` + codexFilter + `
+		ORDER BY m.public_alias`
+	if normalizeRoutingMode(settings.RoutingMode) == routingModeModel {
+		// Model-wise routing publishes one entry per alias. The provider column
+		// becomes the pool size because no single provider owns the alias, and
+		// capabilities are the union of what the pool can do.
+		query = `
+			SELECT m.public_alias,
+			       'pool of ' || COUNT(*)::text,
+			       BOOL_OR(m.supports_responses), BOOL_OR(m.supports_chat),
+			       MIN(m.capability_status),
+			       (ARRAY_AGG(m.capability_profile ORDER BY m.created_at, m.id))[1]
+			FROM model_routes m JOIN providers p ON p.id=m.provider_id
+			WHERE ` + codexFilter + `
+			GROUP BY m.public_alias
+			ORDER BY m.public_alias`
+	}
+	rows, err := s.db.Query(r.Context(), query)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "manifest_unavailable", "Codex model manifest is unavailable.")
 		return

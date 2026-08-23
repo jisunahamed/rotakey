@@ -1174,6 +1174,11 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_settings", "Retention, wait, or provider timeout settings are outside allowed ranges.")
 		return
 	}
+	routingMode := normalizeRoutingMode(input.RoutingMode)
+	if routingMode == "" {
+		writeError(w, http.StatusBadRequest, "invalid_routing_mode", "Routing mode must be 'provider' or 'model'.")
+		return
+	}
 	if input.DefaultAnthropicProviderID != "" {
 		var valid bool
 		if err := s.db.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM providers WHERE id=$1 AND api_format='anthropic' AND enabled=TRUE)`, input.DefaultAnthropicProviderID).Scan(&valid); err != nil || !valid {
@@ -1187,17 +1192,38 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = tx.Rollback(r.Context()) }()
+	var previousMode string
+	if err := tx.QueryRow(r.Context(), `SELECT routing_mode FROM app_settings WHERE id=1 FOR UPDATE`).Scan(&previousMode); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "settings_unavailable", "Settings could not be updated.")
+		return
+	}
 	if _, err := tx.Exec(r.Context(), `
 		UPDATE app_settings SET metadata_retention_days=$1, body_retention_days=$2,
 		    max_wait_ms=$3, default_provider_timeout_seconds=$4,
-		    default_anthropic_provider_id=NULLIF($5,''), updated_at=NOW() WHERE id=1
-	`, input.MetadataRetentionDays, input.BodyRetentionDays, input.MaxWaitMS, input.DefaultProviderTimeoutSecs, input.DefaultAnthropicProviderID); err != nil {
+		    default_anthropic_provider_id=NULLIF($5,''), routing_mode=$6, updated_at=NOW() WHERE id=1
+	`, input.MetadataRetentionDays, input.BodyRetentionDays, input.MaxWaitMS, input.DefaultProviderTimeoutSecs, input.DefaultAnthropicProviderID, routingMode); err != nil {
 		writeError(w, http.StatusInternalServerError, "settings_update_failed", "Settings could not be updated.")
 		return
 	}
 	if _, err := tx.Exec(r.Context(), `UPDATE providers SET timeout_seconds=$1, updated_at=NOW()`, input.DefaultProviderTimeoutSecs); err != nil {
 		writeError(w, http.StatusInternalServerError, "settings_update_failed", "Provider timeouts could not be updated.")
 		return
+	}
+	rewrites := []aliasRewrite{}
+	conflicts := []string{}
+	if routingMode != previousMode {
+		rows, err := s.routeAliasRows(r.Context(), tx)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "settings_update_failed", "Model aliases could not be read.")
+			return
+		}
+		rewrites, conflicts = planAliasRewrites(rows, routingMode)
+		for _, rewrite := range rewrites {
+			if _, err := tx.Exec(r.Context(), `UPDATE model_routes SET public_alias=$2, updated_at=NOW() WHERE id=$1`, rewrite.ModelID, rewrite.To); err != nil {
+				writeError(w, http.StatusInternalServerError, "settings_update_failed", "Model aliases could not be rewritten for the new routing mode.")
+				return
+			}
+		}
 	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "settings_update_failed", "Settings could not be updated.")
@@ -1209,8 +1235,15 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		"max_wait_ms":                      input.MaxWaitMS,
 		"default_provider_timeout_seconds": input.DefaultProviderTimeoutSecs,
 		"default_anthropic_provider_id":    input.DefaultAnthropicProviderID,
+		"routing_mode":                     routingMode,
+		"aliases_rewritten":                len(rewrites),
+		"alias_conflicts":                  conflicts,
 	})
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"routing_mode":      routingMode,
+		"aliases_rewritten": len(rewrites),
+		"alias_conflicts":   conflicts,
+	})
 }
 
 func applyProviderHeaders(request *http.Request, provider Provider, secret []byte) {

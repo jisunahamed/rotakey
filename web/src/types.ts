@@ -256,6 +256,8 @@ export type RequestLog = {
   created_at: string;
 };
 
+export type RoutingMode = 'provider' | 'model';
+
 export type Settings = {
   gateway_key_prefix: string;
   metadata_retention_days: number;
@@ -263,5 +265,14 @@ export type Settings = {
   max_wait_ms: number;
   default_provider_timeout_seconds: number;
   default_anthropic_provider_id: string;
+  routing_mode: RoutingMode;
   base_url: string;
+};
+
+/** Returned by PUT /api/admin/settings, which reports the alias renames the
+ * routing-mode switch performed. */
+export type SettingsUpdateResult = {
+  routing_mode: RoutingMode;
+  aliases_rewritten: number;
+  alias_conflicts: string[];
 };

@@ -142,28 +142,31 @@ const providerColumns = `
 	created_at, updated_at
 `
 
-func (s *Server) loadRoute(ctx context.Context, alias string) (routeRuntime, error) {
-	row := s.db.QueryRow(ctx, `
-		SELECT
-			m.id, m.provider_id, m.public_alias, m.upstream_model, m.supports_chat,
-			m.supports_responses, m.supports_messages, m.default_max_output_tokens, m.tokenizer,
-			m.input_cost_per_million_usd::float8, m.output_cost_per_million_usd::float8, m.request_cost_usd::float8,
-			m.capture_bodies, m.strip_parameters, m.capability_status, m.capability_profile,
-			m.capabilities_checked_at, m.capability_error, m.enabled, m.created_at, m.updated_at,
-			p.id, p.name, p.slug, p.base_url, p.auth_header, p.auth_scheme,
-			p.extra_headers, p.timeout_seconds, p.enabled, p.allow_private_network,
-			p.api_format, p.anthropic_version,
-			p.created_at, p.updated_at
-		FROM model_routes m
-		JOIN providers p ON p.id = m.provider_id
-		WHERE m.public_alias = $1 AND m.enabled = TRUE AND p.enabled = TRUE
+const routeColumns = `
+		m.id, m.provider_id, m.public_alias, m.upstream_model, m.supports_chat,
+		m.supports_responses, m.supports_messages, m.default_max_output_tokens, m.tokenizer,
+		m.input_cost_per_million_usd::float8, m.output_cost_per_million_usd::float8, m.request_cost_usd::float8,
+		m.capture_bodies, m.strip_parameters, m.capability_status, m.capability_profile,
+		m.capabilities_checked_at, m.capability_error, m.enabled, m.created_at, m.updated_at,
+		p.id, p.name, p.slug, p.base_url, p.auth_header, p.auth_scheme,
+		p.extra_headers, p.timeout_seconds, p.enabled, p.allow_private_network,
+		p.api_format, p.anthropic_version,
+		p.created_at, p.updated_at
+`
+
+// routeFilter keeps the eligibility rules identical between single-route and
+// pooled lookups: enabled on both sides, verified capabilities, and at least
+// one credential that is not quarantined.
+const routeFilter = `
+		m.enabled = TRUE AND p.enabled = TRUE
 		  AND m.capability_status IN ('catalog_verified', 'probe_verified')
 		  AND EXISTS (
 		    SELECT 1 FROM credentials c
 		    WHERE c.provider_id = p.id AND c.enabled = TRUE AND c.status <> 'quarantined'
 		  )
-	`, alias)
+`
 
+func scanRoute(row pgx.Row) (routeRuntime, error) {
 	var route routeRuntime
 	var extra []byte
 	var capabilityProfile []byte
@@ -214,6 +217,50 @@ func (s *Server) loadRoute(ctx context.Context, alias string) (routeRuntime, err
 		route.Provider.ExtraHeaders = map[string]string{}
 	}
 	return route, nil
+}
+
+// loadRoute returns the single best route for an alias. In model-wise mode the
+// pool may hold several providers, so callers that need failover should use
+// loadRoutes instead.
+func (s *Server) loadRoute(ctx context.Context, alias string) (routeRuntime, error) {
+	routes, err := s.loadRoutes(ctx, alias)
+	if err != nil {
+		return routeRuntime{}, err
+	}
+	return routes[0], nil
+}
+
+// loadRoutes resolves an alias to every route that can serve it. Provider-wise
+// mode yields at most one route; model-wise mode yields one route per provider
+// that publishes the same public alias, ordered oldest first so the rotation
+// cursor stays stable across restarts.
+func (s *Server) loadRoutes(ctx context.Context, alias string) ([]routeRuntime, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT `+routeColumns+`
+		FROM model_routes m
+		JOIN providers p ON p.id = m.provider_id
+		WHERE m.public_alias = $1 AND `+routeFilter+`
+		ORDER BY m.created_at, m.id
+	`, alias)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	routes := make([]routeRuntime, 0, 1)
+	for rows.Next() {
+		route, err := scanRoute(rows)
+		if err != nil {
+			return nil, err
+		}
+		routes = append(routes, route)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(routes) == 0 {
+		return nil, pgx.ErrNoRows
+	}
+	return routes, nil
 }
 
 func (s *Server) loadCredentials(ctx context.Context, providerID, modelID string) ([]credentialRuntime, error) {
@@ -311,7 +358,7 @@ func (s *Server) settings(ctx context.Context) (AppSettings, []byte, error) {
 	err := s.db.QueryRow(ctx, `
 		SELECT gateway_key_prefix, metadata_retention_days, body_retention_days,
 		       max_wait_ms, default_provider_timeout_seconds,
-		       COALESCE(default_anthropic_provider_id, ''), gateway_key_hash
+		       COALESCE(default_anthropic_provider_id, ''), routing_mode, gateway_key_hash
 		FROM app_settings WHERE id = 1
 	`).Scan(
 		&settings.GatewayKeyPrefix,
@@ -320,6 +367,7 @@ func (s *Server) settings(ctx context.Context) (AppSettings, []byte, error) {
 		&settings.MaxWaitMS,
 		&settings.DefaultProviderTimeoutSecs,
 		&settings.DefaultAnthropicProviderID,
+		&settings.RoutingMode,
 		&keyHash,
 	)
 	return settings, keyHash, err
