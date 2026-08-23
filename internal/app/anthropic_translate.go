@@ -59,14 +59,14 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, err
 		role, _ := message["role"].(string)
 		switch role {
 		case "system", "developer":
-			content, err := anthropicText(message["content"])
+			content, err := anthropicContentToChat(message["content"])
 			if err != nil {
 				return nil, err
 			}
 			messages = append(messages, map[string]any{"role": "system", "content": content})
 			continue
 		case "tool":
-			content, err := anthropicText(message["content"])
+			content, err := anthropicContentToChat(message["content"])
 			if err != nil {
 				return nil, err
 			}
@@ -100,17 +100,11 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, err
 			case "text":
 				parts = append(parts, map[string]any{"type": "text", "text": block["text"]})
 			case "image":
-				source, _ := block["source"].(map[string]any)
-				var url string
-				switch source["type"] {
-				case "base64":
-					url = "data:" + fmt.Sprint(source["media_type"]) + ";base64," + fmt.Sprint(source["data"])
-				case "url":
-					url = fmt.Sprint(source["url"])
-				default:
-					return nil, anthropicUnsupportedError{Feature: "image source"}
+				image, err := anthropicImageToChat(block)
+				if err != nil {
+					return nil, err
 				}
-				parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": url}})
+				parts = append(parts, image)
 			case "tool_use":
 				encoded, err := json.Marshal(block["input"])
 				if err != nil {
@@ -121,7 +115,7 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, err
 					"function": map[string]any{"name": block["name"], "arguments": string(encoded)},
 				})
 			case "tool_result":
-				content, err := anthropicText(block["content"])
+				content, err := anthropicContentToChat(block["content"])
 				if err != nil {
 					return nil, err
 				}
@@ -415,6 +409,63 @@ func anthropicText(raw any) (string, error) {
 		parts = append(parts, fmt.Sprint(block["text"]))
 	}
 	return strings.Join(parts, "\n"), nil
+}
+
+func anthropicContentToChat(raw any) (any, error) {
+	if raw == nil {
+		return "", nil
+	}
+	if text, ok := raw.(string); ok {
+		return text, nil
+	}
+	blocks, ok := raw.([]any)
+	if !ok {
+		return nil, anthropicUnsupportedError{Feature: "message content"}
+	}
+	parts := make([]any, 0, len(blocks))
+	for _, rawBlock := range blocks {
+		block, ok := rawBlock.(map[string]any)
+		if !ok {
+			return nil, anthropicUnsupportedError{Feature: "content block"}
+		}
+		switch block["type"] {
+		case "text":
+			parts = append(parts, map[string]any{"type": "text", "text": block["text"]})
+		case "image":
+			image, err := anthropicImageToChat(block)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, image)
+		case "thinking", "redacted_thinking":
+			// These are Anthropic-only history blocks and have no OpenAI equivalent.
+		default:
+			return nil, anthropicUnsupportedError{Feature: fmt.Sprint(block["type"])}
+		}
+	}
+	if len(parts) == 0 {
+		return "", nil
+	}
+	if len(parts) == 1 {
+		if part, ok := parts[0].(map[string]any); ok && part["type"] == "text" {
+			return part["text"], nil
+		}
+	}
+	return parts, nil
+}
+
+func anthropicImageToChat(block map[string]any) (map[string]any, error) {
+	source, _ := block["source"].(map[string]any)
+	var url string
+	switch source["type"] {
+	case "base64":
+		url = "data:" + fmt.Sprint(source["media_type"]) + ";base64," + fmt.Sprint(source["data"])
+	case "url":
+		url = fmt.Sprint(source["url"])
+	default:
+		return nil, anthropicUnsupportedError{Feature: "image source"}
+	}
+	return map[string]any{"type": "image_url", "image_url": map[string]any{"url": url}}, nil
 }
 
 func openAIText(raw any) (string, error) {

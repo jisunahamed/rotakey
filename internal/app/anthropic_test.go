@@ -116,7 +116,10 @@ func TestTranslateClaudeCodeHistoryRolesToChat(t *testing.T) {
 				map[string]any{"type": "thinking", "thinking": "Hidden reasoning"},
 				map[string]any{"type": "text", "text": "I need a tool."},
 			}},
-			map[string]any{"role": "tool", "tool_use_id": "call_1", "content": "Done"},
+			map[string]any{"role": "tool", "tool_use_id": "call_1", "content": []any{
+				map[string]any{"type": "text", "text": "Done"},
+				map[string]any{"type": "image", "source": map[string]any{"type": "url", "url": "https://example.com/result.png"}},
+			}},
 			map[string]any{"role": "user", "content": "Continue"},
 		},
 	})
@@ -136,6 +139,10 @@ func TestTranslateClaudeCodeHistoryRolesToChat(t *testing.T) {
 	tool, _ := messages[2].(map[string]any)
 	if tool["tool_call_id"] != "call_1" {
 		t.Fatalf("tool message = %#v", tool)
+	}
+	content, _ := tool["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("tool content = %#v", tool)
 	}
 }
 
