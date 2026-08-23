@@ -146,6 +146,27 @@ func TestTranslateClaudeCodeHistoryRolesToChat(t *testing.T) {
 	}
 }
 
+func TestTranslateClaudeToolReferencesAsNoOp(t *testing.T) {
+	chat, err := translateAnthropicRequestToChat(map[string]any{
+		"messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{
+			"type": "tool_result", "tool_use_id": "tool_search_1", "content": []any{
+				map[string]any{"type": "tool_reference", "tool_name": "lookup_weather"},
+			},
+		}}}},
+	})
+	if err != nil {
+		t.Fatalf("tool reference translation failed: %v", err)
+	}
+	messages, _ := chat["messages"].([]any)
+	if len(messages) != 1 {
+		t.Fatalf("translated tool reference = %#v", chat)
+	}
+	tool, _ := messages[0].(map[string]any)
+	if tool["role"] != "tool" || tool["tool_call_id"] != "tool_search_1" || tool["content"] != "" {
+		t.Fatalf("tool reference result = %#v", tool)
+	}
+}
+
 func TestParallelToolSettingTranslatesToAnthropic(t *testing.T) {
 	message, err := translateChatRequestToAnthropic(map[string]any{
 		"messages":            []any{map[string]any{"role": "user", "content": "Hi"}},

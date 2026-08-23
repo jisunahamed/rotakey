@@ -439,6 +439,9 @@ func anthropicContentToChat(raw any) (any, error) {
 			parts = append(parts, image)
 		case "thinking", "redacted_thinking":
 			// These are Anthropic-only history blocks and have no OpenAI equivalent.
+		case "tool_reference":
+			// Deferred tool discovery is an Anthropic-only optimization. Every
+			// client function definition is already sent to the OpenAI upstream.
 		default:
 			return nil, anthropicUnsupportedError{Feature: fmt.Sprint(block["type"])}
 		}
