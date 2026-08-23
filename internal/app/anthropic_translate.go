@@ -57,7 +57,27 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, err
 			return nil, anthropicUnsupportedError{Feature: "message"}
 		}
 		role, _ := message["role"].(string)
-		if role != "user" && role != "assistant" {
+		switch role {
+		case "system", "developer":
+			content, err := anthropicText(message["content"])
+			if err != nil {
+				return nil, err
+			}
+			messages = append(messages, map[string]any{"role": "system", "content": content})
+			continue
+		case "tool":
+			content, err := anthropicText(message["content"])
+			if err != nil {
+				return nil, err
+			}
+			toolCallID, _ := message["tool_call_id"].(string)
+			if toolCallID == "" {
+				toolCallID, _ = message["tool_use_id"].(string)
+			}
+			messages = append(messages, map[string]any{"role": "tool", "tool_call_id": toolCallID, "content": content})
+			continue
+		case "user", "assistant":
+		default:
 			return nil, anthropicUnsupportedError{Feature: "message role"}
 		}
 		if text, ok := message["content"].(string); ok {
@@ -108,6 +128,9 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, err
 				toolResults = append(toolResults, map[string]any{
 					"role": "tool", "tool_call_id": block["tool_use_id"], "content": content,
 				})
+			case "thinking", "redacted_thinking":
+				// OpenAI chat has no equivalent history block. It is safe to omit
+				// this prior reasoning while preserving the assistant's visible output.
 			default:
 				return nil, anthropicUnsupportedError{Feature: fmt.Sprint(block["type"])}
 			}

@@ -108,6 +108,37 @@ func TestAnthropicMetadataAndCacheHintsAreIgnoredCrossProtocol(t *testing.T) {
 	}
 }
 
+func TestTranslateClaudeCodeHistoryRolesToChat(t *testing.T) {
+	chat, err := translateAnthropicRequestToChat(map[string]any{
+		"messages": []any{
+			map[string]any{"role": "developer", "content": "Be concise."},
+			map[string]any{"role": "assistant", "content": []any{
+				map[string]any{"type": "thinking", "thinking": "Hidden reasoning"},
+				map[string]any{"type": "text", "text": "I need a tool."},
+			}},
+			map[string]any{"role": "tool", "tool_use_id": "call_1", "content": "Done"},
+			map[string]any{"role": "user", "content": "Continue"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Claude Code history translation failed: %v", err)
+	}
+	messages, _ := chat["messages"].([]any)
+	if len(messages) != 4 {
+		t.Fatalf("translated history = %#v", chat)
+	}
+	for index, want := range []string{"system", "assistant", "tool", "user"} {
+		message, _ := messages[index].(map[string]any)
+		if message["role"] != want {
+			t.Fatalf("message %d = %#v, want role %q", index, message, want)
+		}
+	}
+	tool, _ := messages[2].(map[string]any)
+	if tool["tool_call_id"] != "call_1" {
+		t.Fatalf("tool message = %#v", tool)
+	}
+}
+
 func TestParallelToolSettingTranslatesToAnthropic(t *testing.T) {
 	message, err := translateChatRequestToAnthropic(map[string]any{
 		"messages":            []any{map[string]any{"role": "user", "content": "Hi"}},
