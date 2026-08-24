@@ -110,6 +110,7 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /v1/files/{id}/content", s.requireGatewayKey(http.HandlerFunc(s.handleAnthropicFileContent)))
 
 	s.registerAdminRoutes(mux)
+	s.registerPortableRoutes(mux)
 	mux.HandleFunc("GET /", s.serveWeb)
 	return s.requestIDMiddleware(s.securityHeaders(s.recoverMiddleware(mux)))
 }

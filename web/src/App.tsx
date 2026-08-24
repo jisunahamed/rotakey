@@ -11,6 +11,7 @@ import {
   CircleGauge,
   Clipboard,
   Database,
+  Download,
   FileClock,
   Github,
   KeyRound,
@@ -25,6 +26,7 @@ import {
   ShieldCheck,
   Sun,
   Trash2,
+  Upload,
   X
 } from "lucide-react";
 import { api, APIError, setCSRF } from "./api";
@@ -41,6 +43,7 @@ import {
   emptyPolicy,
   type Credential,
   type DiscoveredModel,
+  type ImportResult,
   type ModelRoute,
   type Overview,
   type Provider,
@@ -2688,11 +2691,94 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
             .finally(() => setBusy(false));
         }}>{busy ? "Saving…" : "Save settings"}</Button>
       </div>
+      <ConfigTransfer notify={notify} />
       <section className="security-baseline">
         <ShieldCheck size={19} />
         <div><strong>Security baseline active</strong><p>Encrypted provider secrets · HttpOnly sessions · CSRF checks · private-network SSRF blocking · strict browser policy</p></div>
       </section>
     </>
+  );
+}
+
+// ConfigTransfer writes the whole provider, model, key and limit setup to one
+// file and replays it. Keys are included by default so an import is a complete
+// setup rather than a shell that still needs every secret pasted back in.
+function ConfigTransfer({ notify }: { notify: (message: string, tone?: "success" | "danger") => void }) {
+  const [busy, setBusy] = useState<"export" | "import" | null>(null);
+  const [includeSecrets, setIncludeSecrets] = useState(true);
+  const [result, setResult] = useState<ImportResult | null>(null);
+
+  const exportConfig = async () => {
+    setBusy("export");
+    try {
+      // Export is a POST so the CSRF check applies; a bundle with plaintext keys
+      // must not be reachable by a cross-site GET on the session cookie.
+      const bundle = await api<Record<string, unknown>>(`/api/admin/config/export?secrets=${includeSecrets}`, { method: "POST" });
+      const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15);
+      const url = URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }));
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `rotakey-config-${stamp}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      notify(includeSecrets ? "Configuration exported with API keys. Store the file like a password." : "Configuration exported without API keys.");
+    } catch (caught) {
+      notify(errorMessage(caught), "danger");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const importConfig = async (file: File) => {
+    setBusy("import");
+    setResult(null);
+    try {
+      const bundle = JSON.parse(await file.text());
+      const imported = await api<ImportResult>("/api/admin/config/import", { method: "POST", json: bundle });
+      setResult(imported);
+      const created = imported.providers_created + imported.models_created + imported.credentials_created;
+      notify(`Setup restored: ${imported.providers_created + imported.providers_updated} provider${imported.providers_created + imported.providers_updated === 1 ? "" : "s"}, ${imported.models_created + imported.models_updated} model route${imported.models_created + imported.models_updated === 1 ? "" : "s"}, ${imported.credentials_created + imported.credentials_updated} API key${imported.credentials_created + imported.credentials_updated === 1 ? "" : "s"}${created === 0 ? " (all already present)" : ""}.`, imported.warnings.length > 0 ? "danger" : "success");
+    } catch (caught) {
+      notify(caught instanceof SyntaxError ? "That file is not valid JSON." : errorMessage(caught), "danger");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="settings-list config-transfer">
+      {/* These rows hold buttons rather than a single control, so they are plain
+          divs: a wrapping label would steal clicks and nest interactive labels. */}
+      <div className="settings-row">
+        <span><strong>Export configuration</strong><small>Writes every provider, model route, API key and rate limit to one JSON file, sorted A-to-Z. Import it on another install to reproduce this setup.</small></span>
+        <div>
+          <label className="config-transfer__secrets"><input type="checkbox" checked={includeSecrets} onChange={(event) => setIncludeSecrets(event.target.checked)} /><span>Include API keys</span></label>
+          <Button variant="quiet" disabled={busy !== null} onClick={() => void exportConfig()}><Download size={14} /> {busy === "export" ? "Exporting…" : "Export"}</Button>
+        </div>
+      </div>
+      <div className="settings-row">
+        <span><strong>Import configuration</strong><small>Replays a bundle in one transaction. Providers match on identifier and models on alias, so re-importing updates instead of duplicating.</small></span>
+        <div>
+          <input id="config-import-file" type="file" accept="application/json,.json" style={{ display: "none" }} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void importConfig(file); }} />
+          <Button variant="quiet" disabled={busy !== null} onClick={() => document.getElementById("config-import-file")?.click()}><Upload size={14} /> {busy === "import" ? "Importing…" : "Import"}</Button>
+        </div>
+      </div>
+      {result && (
+        <div className="config-transfer__result">
+          <strong>Import summary</strong>
+          <ul>
+            <li>Routing mode set to {result.routing_mode}-wise</li>
+            <li>Providers: {result.providers_created} created · {result.providers_updated} updated</li>
+            <li>Model routes: {result.models_created} created · {result.models_updated} updated</li>
+            <li>API keys: {result.credentials_created} created · {result.credentials_updated} updated{result.credentials_skipped > 0 ? ` · ${result.credentials_skipped} skipped` : ""}</li>
+          </ul>
+          {result.credentials_unverified > 0 && <InlineNotice tone="danger">{result.credentials_unverified} imported API key{result.credentials_unverified === 1 ? " was" : "s were"} saved without contacting the provider. Use Test on each provider to confirm they work.</InlineNotice>}
+          {result.warnings.map((warning) => <InlineNotice key={warning} tone="danger">{warning}</InlineNotice>)}
+        </div>
+      )}
+    </section>
   );
 }
 

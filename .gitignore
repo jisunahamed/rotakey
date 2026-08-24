@@ -5,6 +5,7 @@
 web/node_modules/
 web/dist/
 web/*.tsbuildinfo
+.tmp-go/
 web/vite.config.js
 web/vite.config.d.ts
 .playwright-cli/

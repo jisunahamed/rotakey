@@ -276,3 +276,18 @@ export type SettingsUpdateResult = {
   aliases_rewritten: number;
   alias_conflicts: string[];
 };
+
+/** Returned by POST /api/admin/config/import, which reports what the bundle
+ * created or updated so the operator can see the whole setup landed. */
+export type ImportResult = {
+  routing_mode: RoutingMode;
+  providers_created: number;
+  providers_updated: number;
+  models_created: number;
+  models_updated: number;
+  credentials_created: number;
+  credentials_updated: number;
+  credentials_skipped: number;
+  credentials_unverified: number;
+  warnings: string[];
+};

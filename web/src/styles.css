@@ -2024,6 +2024,53 @@ button.table-row:hover {
   margin-top: 14px;
 }
 
+/* The transfer rows carry a checkbox next to a button, so they need more room
+   than the fixed-width numeric controls the other settings rows use. */
+.config-transfer {
+  margin-top: 28px;
+}
+
+.config-transfer .settings-row > div {
+  width: auto;
+  flex-shrink: 0;
+  gap: 14px;
+}
+
+.config-transfer__secrets {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.config-transfer__secrets input {
+  width: auto;
+}
+
+.config-transfer__result {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 15px 17px;
+  border-top: 1px solid var(--line);
+}
+
+.config-transfer__result strong {
+  font-size: 0.8rem;
+}
+
+.config-transfer__result ul {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
 .security-baseline {
   display: flex;
   align-items: flex-start;
