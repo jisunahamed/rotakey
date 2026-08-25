@@ -291,3 +291,13 @@ export type ImportResult = {
   credentials_unverified: number;
   warnings: string[];
 };
+
+/** Returned by PUT /api/admin/providers/{id}/state. When a provider is turned
+ * off, aliases_stranded names the public aliases no other enabled provider can
+ * serve, which is the difference between draining one pool member and taking a
+ * model off the gateway. */
+export type ProviderStateResult = {
+  enabled: boolean;
+  aliases_stranded: string[];
+  warnings: string[];
+};

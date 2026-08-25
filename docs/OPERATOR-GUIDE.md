@@ -60,6 +60,14 @@ Provider models and API keys are collapsed sections on the Providers page. Open 
 
 Two keys at `40 RPM` give the provider an aggregate `80 RPM`. Removing a key lowers it to `40 RPM`. A model-specific `10 RPM` does not replace the shared `40 RPM`: that model must satisfy both limits and is effectively capped at the tighter available bucket.
 
+### Turning a provider off
+
+**Turn off** in the provider inspector header removes that provider from routing immediately without deleting anything. Its keys, model routes, limits and overrides are kept, so **Turn on** restores the previous setup exactly. Use this instead of Delete for an upstream that is failing, over budget, or being rotated out.
+
+Turning off does not run the connection re-check that saving connection settings does. That is deliberate: the usual reason to turn a provider off is that its upstream is already broken, and a disable must not be blocked by a failing probe.
+
+Before applying, Rotakey checks which public aliases no other enabled provider can serve and reports them. An alias that another enabled provider also serves keeps working — that provider simply leaves the pool. An alias only this provider carries stops serving until it is turned back on. If the provider is also the default Anthropic resource provider, Files and Batches fail until another one is chosen in System settings.
+
 ## 5. Rate-limit glossary
 
 Every field is optional. Blank means unlimited for that dimension.

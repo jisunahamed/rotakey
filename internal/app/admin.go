@@ -38,6 +38,7 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/admin/providers", admin(s.handleCreateProvider))
 	mux.Handle("PUT /api/admin/providers/{id}", admin(s.handleUpdateProvider))
 	mux.Handle("DELETE /api/admin/providers/{id}", admin(s.handleDeleteProvider))
+	mux.Handle("PUT /api/admin/providers/{id}/state", admin(s.handleSetProviderEnabled))
 	mux.Handle("POST /api/admin/providers/inspect", admin(s.handleInspectUnsavedProvider))
 	mux.Handle("POST /api/admin/providers/{id}/test", admin(s.handleTestProvider))
 	mux.Handle("POST /api/admin/providers/{id}/models", admin(s.handleCreateModel))

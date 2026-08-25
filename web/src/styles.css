@@ -888,6 +888,13 @@ h3 {
   white-space: nowrap;
 }
 
+/* The header now carries turn off, test, edit and delete, which is one button
+   more than fits a narrow inspector, so the row wraps instead of squeezing. */
+.inspector-header .button-row {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .inspector-stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

@@ -19,6 +19,7 @@ import {
   Menu,
   Moon,
   Plus,
+  Power,
   RefreshCw,
   Route,
   Search,
@@ -47,6 +48,7 @@ import {
   type ModelRoute,
   type Overview,
   type Provider,
+  type ProviderStateResult,
   type RatePolicy,
   type RequestLog,
   type RoutingMode,
@@ -1191,6 +1193,11 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
           </section>
           {selected && (
             <section className={`resource-inspector${providerInspectorOpen ? " is-open" : ""}`}>
+              {!selected.enabled && (
+                <InlineNotice tone="danger">
+                  This provider is turned off. Its routes are excluded from every request until it is turned back on.
+                </InlineNotice>
+              )}
               {selected.credentials.some((credential) => credential.validation_error) && (
                 <InlineNotice tone="danger">
                   {selected.credentials.filter((credential) => credential.validation_error).length} API key warning detected. Open the marked key to replace or re-check it.
@@ -1204,6 +1211,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                 </div>
                 <div className="button-row">
                   <button className="console-icon resource-inspector-close" onClick={() => setProviderInspectorOpen(false)} aria-label="Close provider inspector"><X size={15} /></button>
+                  <ProviderPowerButton provider={selected} onDone={complete} notify={notify} />
                   <Button variant="quiet" onClick={() => void testProvider(selected, notify)}><Activity size={15} /> Test</Button>
                   <Button variant="quiet" onClick={() => setPanel({ type: "provider", provider: selected })}>Edit</Button>
                   <Button
@@ -1373,6 +1381,64 @@ function ProviderCapacityStrip({ provider }: { provider: Provider }) {
       </div>
       <p>Shared limits from every ready API key are combined. Usage lowers remaining capacity; adding or removing a key recalculates the total.</p>
     </section>
+  );
+}
+
+// ProviderPowerButton turns a provider's traffic off without opening the edit
+// form. Disabling is the safe response to a broken upstream, so it must not
+// depend on the rest of the form validating or on the base URL re-check.
+function ProviderPowerButton({
+  provider,
+  onDone,
+  notify
+}: {
+  provider: Provider;
+  onDone: (message: string) => void;
+  notify: (message: string, tone?: "success" | "danger") => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const turningOff = provider.enabled;
+
+  const apply = async () => {
+    setBusy(true);
+    try {
+      const result = await api<ProviderStateResult>(`/api/admin/providers/${provider.id}/state`, {
+        method: "PUT",
+        json: { enabled: !turningOff }
+      });
+      // The warnings describe live traffic that just stopped, so they are shown
+      // as the notification rather than folded into a success line.
+      if (result.warnings.length > 0) {
+        result.warnings.forEach((warning) => notify(warning, "danger"));
+        onDone(`${provider.name} is off.`);
+        return;
+      }
+      onDone(turningOff
+        ? `${provider.name} is off. Its routes are excluded from routing.`
+        : `${provider.name} is on and eligible for routing again.`);
+    } catch (caught) {
+      notify(errorMessage(caught), "danger");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Button
+      variant="quiet"
+      disabled={busy}
+      aria-label={`${turningOff ? "Turn off" : "Turn on"} provider ${provider.name}`}
+      onClick={() => {
+        // Turning off stops real traffic, so it is confirmed; turning on only
+        // adds capacity and needs no prompt.
+        if (turningOff && !confirm(`Turn off ${provider.name}? Its model routes stop receiving traffic until it is turned back on.`)) {
+          return;
+        }
+        void apply();
+      }}
+    >
+      <Power size={14} /> {busy ? "Saving…" : turningOff ? "Turn off" : "Turn on"}
+    </Button>
   );
 }
 
