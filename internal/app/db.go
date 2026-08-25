@@ -273,6 +273,7 @@ func (s *Server) loadCredentialsForModels(ctx context.Context, providerID string
 			c.id, c.provider_id, c.label, c.secret_cipher, c.secret_suffix,
 			c.is_primary, c.enabled, c.status, c.cooldown_until,
 			c.last_validated_at, c.validation_error, c.created_at, c.updated_at,
+			c.balance_usd::float8, c.balance_spent_usd::float8,
 			r.scope_key, r.rps, r.rpm, r.rpd, r.tps, r.tpm, r.tpd, r.tpr
 		FROM credentials c
 		LEFT JOIN rate_policies r
@@ -296,13 +297,15 @@ func (s *Server) loadCredentialsForModels(ctx context.Context, providerID string
 			lastValidated                       *time.Time
 			validationError                     string
 			createdAt, updatedAt                time.Time
+			balance                             *float64
+			spent                               float64
 			scope                               *string
 			policy                              RatePolicy
 		)
 		if err := rows.Scan(
 			&id, &provider, &label, &ciphertext, &suffix,
 			&isPrimary, &enabled, &status, &cooldown, &lastValidated, &validationError,
-			&createdAt, &updatedAt,
+			&createdAt, &updatedAt, &balance, &spent,
 			&scope, &policy.RPS, &policy.RPM, &policy.RPD, &policy.TPS,
 			&policy.TPM, &policy.TPD, &policy.TPR,
 		); err != nil {
@@ -327,6 +330,8 @@ func (s *Server) loadCredentialsForModels(ctx context.Context, providerID string
 				ValidationError: validationError,
 				Limits:          RatePolicy{},
 				ModelLimits:     map[string]RatePolicy{},
+				BalanceUSD:      balance,
+				BalanceSpentUSD: spent,
 				CreatedAt:       createdAt,
 				UpdatedAt:       updatedAt,
 			}, Secret: secret}

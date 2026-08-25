@@ -172,6 +172,13 @@ func validateImportProviderChildren(provider *ExportProvider) error {
 		if !credential.Limits.Valid() {
 			return fmt.Errorf("rate limits for API key %q are invalid", credential.Label)
 		}
+		if credential.BalanceUSD != nil &&
+			(*credential.BalanceUSD < 0 || *credential.BalanceUSD > maxCredentialBalanceUSD) {
+			return fmt.Errorf("the balance for API key %q is invalid", credential.Label)
+		}
+		if credential.BalanceSpentUSD < 0 || credential.BalanceSpentUSD > maxCredentialBalanceUSD {
+			return fmt.Errorf("the recorded spend for API key %q is invalid", credential.Label)
+		}
 		for alias, policy := range credential.ModelLimits {
 			if !policy.Valid() {
 				return fmt.Errorf("model limits for %q on API key %q are invalid", alias, credential.Label)

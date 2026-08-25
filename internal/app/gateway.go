@@ -681,6 +681,10 @@ func (s *Server) selectCredentialWithCosts(
 				})
 				continue
 			}
+			if decision := balanceRoutingDecision(*candidate); decision != nil {
+				decisions = append(decisions, *decision)
+				continue
+			}
 			cooldown, err := s.redis.TTL(ctx, "cooldown:"+candidate.ID).Result()
 			if err != nil {
 				return nil, reservation{}, 0, nil, err
@@ -798,7 +802,7 @@ func (s *Server) selectBatchCredential(
 		minRetry := time.Duration(math.MaxInt64)
 		for _, index := range credentialSelectionOrder(credentials, cursor) {
 			candidate := &credentials[index]
-			if !candidate.Enabled || candidate.Status == "quarantined" {
+			if !candidate.Enabled || candidate.Status == "quarantined" || candidate.BalanceExhausted() {
 				continue
 			}
 			cooldown, err := s.redis.TTL(ctx, "cooldown:"+candidate.ID).Result()
@@ -1231,6 +1235,13 @@ func (s *Server) storeRequestLog(ctx context.Context, input logInput) {
 		protocolOrDefault(input.PublicProtocol), protocolOrDefault(input.UpstreamProtocol), input.UpstreamRequestID)
 	if err != nil {
 		s.logger.Warn("request log write failed", "request_id", input.RequestID, "error", err)
+	}
+	// Balance is charged from the same place the log is written so every counted
+	// request is also a charged request. Only requests that actually consumed
+	// tokens are billed: a rejection that never reached the model costs nothing.
+	if input.Credential.ID != "" && input.InputTokens+input.OutputTokens > 0 {
+		s.recordCredentialSpend(ctx, input.Credential.ID,
+			requestSpendUSD(input.Route.Model, input.InputTokens, input.OutputTokens))
 	}
 }
 

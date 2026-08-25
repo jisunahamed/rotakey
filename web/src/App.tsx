@@ -43,6 +43,7 @@ import {
 import {
   emptyPolicy,
   type Credential,
+  type CreditTotals,
   type DiscoveredModel,
   type ImportResult,
   type ModelRoute,
@@ -633,7 +634,7 @@ function OverviewPage({
             </div>
           </header>
 
-          <section className="status-ledger" aria-label={`${range} gateway status`}>
+          <section className={`status-ledger${overview.summary.credit.tracked_keys > 0 ? " status-ledger--credit" : ""}`} aria-label={`${range} gateway status`}>
             <LedgerMetric label="Routes ready" value={`${overview.summary.routes_ready}/${overview.summary.routes_total}`} tone={overview.summary.routes_ready < overview.summary.routes_total ? "danger" : "healthy"} />
             <LedgerMetric label="API keys ready" value={`${overview.summary.keys_ready}/${overview.summary.keys_total}`} tone={overview.summary.keys_warning ? "warning" : "healthy"} />
             <LedgerMetric label="Requests" value={formatNumber(overview.summary.requests)} />
@@ -641,6 +642,13 @@ function OverviewPage({
             <LedgerMetric label="P95 latency" value={`${formatNumber(overview.summary.latency_p95_ms)} ms`} />
             <LedgerMetric label="Tokens" value={formatCompact(overview.summary.tokens)} />
             <LedgerMetric label="Estimated cost" value={formatUSD(overview.summary.estimated_cost_usd)} />
+            {overview.summary.credit.tracked_keys > 0 && (
+              <LedgerMetric
+                label="Key balance left"
+                value={`${formatUSD(overview.summary.credit.remaining_usd)} / ${formatUSD(overview.summary.credit.balance_usd)}`}
+                tone={creditTone(overview.summary.credit)}
+              />
+            )}
           </section>
 
           <div className={`ops-console__workspace${selected ? " has-inspector" : ""}`}>
@@ -751,6 +759,14 @@ function LedgerMetric({ label, value, tone = "default" }: { label: string; value
   return <div className={`ledger-metric ledger-metric--${tone}`}><span>{label}</span><strong>{value}</strong></div>;
 }
 
+/** creditTone mirrors the backend's 20% low-balance threshold so a key the API
+ * has already alerted on does not still read as healthy on the dashboard. */
+function creditTone(credit: CreditTotals): "default" | "warning" | "danger" {
+  if (credit.exhausted_keys > 0 || credit.remaining_usd <= 0) return "danger";
+  if (credit.balance_usd > 0 && credit.remaining_usd / credit.balance_usd <= 0.2) return "warning";
+  return "default";
+}
+
 function ConsolePanelHeader({ eyebrow, title, detail }: { eyebrow: string; title: string; detail?: string }) {
   return (
     <header className="console-panel__header">
@@ -849,7 +865,7 @@ function ProviderCapacityGroup({
         <button className="provider-debug-toggle" onClick={onToggle} aria-expanded={expanded} aria-controls={`provider-models-${provider.id}`}>
           <ChevronDown size={15} />
           <StatusDot state={!provider.enabled ? "disabled" : provider.keys_ready ? "healthy" : "exhausted"} />
-          <span><strong>{provider.name}</strong><small>{provider.models_ready}/{provider.models_total} models ready · {provider.keys_ready}/{provider.keys_total} keys ready</small></span>
+          <span><strong>{provider.name}</strong><small>{provider.models_ready}/{provider.models_total} models ready · {provider.keys_ready}/{provider.keys_total} keys ready{provider.credit.tracked_keys > 0 ? ` · ${formatUSD(provider.credit.remaining_usd)} balance left` : ""}</small></span>
         </button>
         <div className="limit-preview">
           {capacityDimensions.map((dimension) => <LimitCell key={dimension} dimension={dimension} limit={provider.capacity[dimension]} />)}
@@ -958,11 +974,21 @@ function OverviewInspector({
       {credential && (
         <>
           {credential.validation_error && <InlineNotice tone="danger">{credential.validation_error}</InlineNotice>}
+          {credential.credit?.exhausted && (
+            <InlineNotice tone="danger">
+              This key has spent its {formatUSD(credential.credit.balance_usd)} of balance, so the router skips it. Raise the balance on the provider page to bring it back.
+            </InlineNotice>
+          )}
           <div className="inspector-definition">
             <Definition label="Status" value={credential.status} />
             <Definition label="Secret" value={`•••• ${credential.secret_suffix}`} />
             <Definition label="Routing role" value={[credential.primary ? "primary" : "", credential.cursor ? "next" : ""].filter(Boolean).join(" · ") || "fallback"} />
             <Definition label="Validated" value={credential.last_validated_at ? formatRelativeTime(credential.last_validated_at) : "not recorded"} />
+            <Definition
+              label="Balance left"
+              value={credential.credit ? `${formatUSD(credential.credit.remaining_usd)} / ${formatUSD(credential.credit.balance_usd)}` : "not tracked"}
+            />
+            <Definition label="Spent" value={credential.credit ? formatUSD(credential.credit.spent_usd) : "—"} />
           </div>
           <HeadroomReadout label="Request limit" headroom={credential.request_headroom} />
           <HeadroomReadout label="Token limit" headroom={credential.token_headroom} />
@@ -975,6 +1001,12 @@ function OverviewInspector({
             <Definition label="Keys ready" value={`${provider.keys_ready}/${provider.keys_total}`} />
             <Definition label="Key warnings" value={String(provider.keys_warning)} />
             <Definition label="State" value={provider.enabled ? "enabled" : "disabled"} />
+            {provider.credit.tracked_keys > 0 && (
+              <>
+                <Definition label="Balance left" value={`${formatUSD(provider.credit.remaining_usd)} / ${formatUSD(provider.credit.balance_usd)}`} />
+                <Definition label="Keys out of balance" value={`${provider.credit.exhausted_keys}/${provider.credit.tracked_keys} tracked`} />
+              </>
+            )}
           </div>
           <div className="inspector-limit-grid">
             {capacityDimensions.map((dimension) => <LimitCell key={dimension} dimension={dimension} limit={provider.capacity[dimension]} />)}
@@ -1285,7 +1317,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                           <small>
                             {credential.validation_error
                               ? credential.validation_error
-                              : `${credential.is_primary ? "PRIMARY · " : ""}•••• ${credential.secret_suffix}`}
+                              : `${credential.is_primary ? "PRIMARY · " : ""}•••• ${credential.secret_suffix}${credentialBalanceNote(credential)}`}
                           </small>
                         </span>
                         <LimitSummary policy={credential.limits} />
@@ -1344,6 +1376,15 @@ function LimitSummary({ policy }: { policy: RatePolicy }) {
   const active = Object.entries(policy).filter(([, value]) => value !== null);
   if (!active.length) return <span className="muted">No limits</span>;
   return <span className="mono-summary">{active.slice(0, 2).map(([key, value]) => `${key.toUpperCase()} ${value}`).join(" · ")}{active.length > 2 ? ` +${active.length - 2}` : ""}</span>;
+}
+
+/** credentialBalanceNote appends the credit left to a key's row, and returns an
+ * empty string for untracked keys so the pool list looks unchanged on installs
+ * that do not use balances. */
+function credentialBalanceNote(credential: Credential) {
+  if (credential.balance_usd === null || credential.balance_usd === undefined) return "";
+  const remaining = Math.max(0, credential.balance_usd - credential.balance_spent_usd);
+  return remaining <= 0 ? " · out of balance" : ` · ${formatUSD(remaining)} left`;
 }
 
 const capacityDimensions = ["rps", "rpm", "rpd", "tps", "tpm", "tpd", "tpr"] as const;
@@ -1833,6 +1874,12 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
   const [isPrimary, setIsPrimary] = useState(credential?.is_primary ?? false);
   const [enabled, setEnabled] = useState(credential?.enabled ?? true);
   const [limits, setLimits] = useState<RatePolicy>(credential?.limits ?? emptyPolicy());
+  // The balance is held as the raw text so an empty field stays distinguishable
+  // from a zero balance: empty means "do not track", 0 means "nothing left".
+  const [balance, setBalance] = useState(
+    credential?.balance_usd === null || credential?.balance_usd === undefined ? "" : String(credential.balance_usd)
+  );
+  const [resetSpend, setResetSpend] = useState(false);
   const [inspection, setInspection] = useState<CredentialInspection | null>(null);
   const [checkedSecret, setCheckedSecret] = useState("");
   const [selectedModels, setSelectedModels] = useState<Record<string, string>>({});
@@ -1882,17 +1929,23 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
       await checkKey();
       return;
     }
+    const trimmedBalance = balance.trim();
+    const parsedBalance = trimmedBalance === "" ? null : Number(trimmedBalance);
+    if (parsedBalance !== null && (!Number.isFinite(parsedBalance) || parsedBalance < 0)) {
+      notify("Enter the API key balance as a positive USD amount, or leave it blank to stop tracking it.", "danger");
+      return;
+    }
     setBusy(true);
     try {
       let discovered: DiscoveredModel[] = inspection.models;
       if (credential) {
         const result = await api<{ models: DiscoveredModel[] }>(`/api/admin/credentials/${credential.id}`, {
           method: "PUT",
-          json: { label, secret, is_primary: isPrimary, enabled, limits }
+          json: { label, secret, is_primary: isPrimary, enabled, limits, balance_usd: parsedBalance, reset_spend: resetSpend }
         });
         discovered = result.models ?? discovered;
       } else {
-        const credentials = [{ label, secret, is_primary: isPrimary, enabled, limits }];
+        const credentials = [{ label, secret, is_primary: isPrimary, enabled, limits, balance_usd: parsedBalance }];
         const result = await api<{ models: DiscoveredModel[] }>(`/api/admin/providers/${provider.id}/credentials`, {
           method: "POST",
           json: { credentials }
@@ -1956,6 +2009,13 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
         />
       )}
       <fieldset><legend>Shared API key limits</legend><p className="fieldset-note">Requests from every model under this provider consume these limits together. Blank means no limit.</p><RateFields value={limits} onChange={setLimits} /></fieldset>
+      <CredentialBalanceFields
+        credential={credential}
+        balance={balance}
+        onBalanceChange={setBalance}
+        resetSpend={resetSpend}
+        onResetSpendChange={setResetSpend}
+      />
       {credential && provider.models.length > 0 && (
         <fieldset>
           <legend>Optional model-specific limit</legend>
@@ -1973,6 +2033,62 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
         <Button disabled={busy} onClick={() => void save()}>{busy ? "Working…" : inspection?.valid ? credential ? "Save API key & routes" : "Add API key & routes" : "Check API key first"}</Button>
       </div>
     </Sheet>
+  );
+}
+
+// CredentialBalanceFields records how much credit sits on one API key. The
+// balance is optional on purpose: most installs never track it, and a blank
+// field has to keep meaning "untracked" rather than "empty".
+function CredentialBalanceFields({ credential, balance, onBalanceChange, resetSpend, onResetSpendChange }: {
+  credential?: Credential;
+  balance: string;
+  onBalanceChange: (value: string) => void;
+  resetSpend: boolean;
+  onResetSpendChange: (value: boolean) => void;
+}) {
+  const spent = credential?.balance_spent_usd ?? 0;
+  const tracked = balance.trim() !== "";
+  const parsed = Number(balance.trim());
+  const remaining = tracked && Number.isFinite(parsed) ? Math.max(0, parsed - (resetSpend ? 0 : spent)) : null;
+
+  return (
+    <fieldset>
+      <legend>API key balance</legend>
+      <p className="fieldset-note">
+        Optional. Record the credit on this key and Rotakey subtracts the estimated cost of every request it serves.
+        A key with nothing left is skipped by the router, so traffic moves to your other keys instead of failing upstream.
+        Leave it blank to not track a balance on this key.
+      </p>
+      <div className="field-pair">
+        <label className="field">
+          <span>Balance <small>USD</small></span>
+          <input
+            type="number" min="0" step="0.01" inputMode="decimal" placeholder="Not tracked"
+            value={balance} onChange={(event) => onBalanceChange(event.target.value)}
+          />
+        </label>
+        {credential && (
+          <label className="field">
+            <span>Spent so far <small>estimated</small></span>
+            <input value={formatUSD(spent)} readOnly disabled />
+          </label>
+        )}
+      </div>
+      {remaining !== null && (
+        <p className="fieldset-note">
+          Remaining after this change: <strong>{formatUSD(remaining)}</strong>
+          {remaining <= 0 && " · this key will stop receiving traffic."}
+        </p>
+      )}
+      {credential && spent > 0 && (
+        <Toggle
+          checked={resetSpend}
+          onChange={onResetSpendChange}
+          label="Reset the spend counter"
+          description={`Use this after topping the key up upstream. Clears the recorded ${formatUSD(spent)} so the new balance starts fresh.`}
+        />
+      )}
+    </fieldset>
   );
 }
 

@@ -280,6 +280,12 @@
   border-left: 1px solid var(--console-line);
 }
 
+/* The balance cell only exists when some API key tracks credit, so the column
+   count follows the cells that are actually rendered. */
+.status-ledger--credit {
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+}
+
 .ledger-metric {
   min-width: 0;
   padding: 11px 13px 12px;

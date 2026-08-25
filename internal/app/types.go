@@ -100,8 +100,37 @@ type CredentialView struct {
 	ValidationError string                `json:"validation_error,omitempty"`
 	Limits          RatePolicy            `json:"limits"`
 	ModelLimits     map[string]RatePolicy `json:"model_limits"`
-	CreatedAt       time.Time             `json:"created_at"`
-	UpdatedAt       time.Time             `json:"updated_at"`
+	// BalanceUSD is the credit the operator loaded onto this key, or nil when the
+	// key's balance is not tracked. Nil and zero mean different things: untracked
+	// keys route forever, a tracked key stops routing once its credit is used up.
+	BalanceUSD *float64 `json:"balance_usd,omitempty"`
+	// BalanceSpentUSD accumulates the estimated cost of every request this key
+	// served. It is kept on the row rather than derived from request_logs so a
+	// retention sweep cannot silently refill the key.
+	BalanceSpentUSD float64   `json:"balance_spent_usd"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// BalanceRemainingUSD reports the credit left on the key, or nil when the
+// balance is not tracked. It never goes negative: an overspent key reads as zero
+// so both the console and the routing check see the same "nothing left".
+func (c CredentialView) BalanceRemainingUSD() *float64 {
+	if c.BalanceUSD == nil {
+		return nil
+	}
+	remaining := *c.BalanceUSD - c.BalanceSpentUSD
+	if remaining < 0 {
+		remaining = 0
+	}
+	return &remaining
+}
+
+// BalanceExhausted reports whether a tracked key has no credit left, which is
+// what removes it from routing.
+func (c CredentialView) BalanceExhausted() bool {
+	remaining := c.BalanceRemainingUSD()
+	return remaining != nil && *remaining <= 0
 }
 
 type credentialRuntime struct {

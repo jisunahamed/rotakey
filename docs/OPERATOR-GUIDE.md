@@ -41,6 +41,7 @@ The range selector (`1h`, `24h`, `7d`) changes traffic statistics, error history
 | Tokens | Recorded input plus output tokens. Usage can be conservative when a stream ends without upstream usage data. |
 | P50 latency | The median: half of requests completed faster and half slower. |
 | P95 latency | 95% of requests completed within this time; the slowest 5% took longer. It exposes tail slowdown better than an average. |
+| Key balance left | Credit remaining across every API key that tracks a balance, against the total loaded. Only shown when at least one key tracks one. |
 
 A very high P95 with a normal P50 usually means a smaller group of requests is waiting, streaming for a long time, retrying, or hitting a slow upstream.
 
@@ -67,6 +68,18 @@ Two keys at `40 RPM` give the provider an aggregate `80 RPM`. Removing a key low
 Turning off does not run the connection re-check that saving connection settings does. That is deliberate: the usual reason to turn a provider off is that its upstream is already broken, and a disable must not be blocked by a failing probe.
 
 Before applying, Rotakey checks which public aliases no other enabled provider can serve and reports them. An alias that another enabled provider also serves keeps working — that provider simply leaves the pool. An alias only this provider carries stops serving until it is turned back on. If the provider is also the default Anthropic resource provider, Files and Batches fail until another one is chosen in System settings.
+
+### Per-API-key balance
+
+Each API key can record how much credit sits on that upstream account. Open the key in **Providers → Credential pool** and set **Balance (USD)** to the amount you loaded. The field is optional and blank is the default: a key with no balance routes exactly as it always did.
+
+Rotakey cannot read a provider's real balance, so it tracks spend instead. Every request a key serves adds its estimated cost — the same arithmetic behind the Overview cost column — to that key's running total. Blank means "not tracked". `0` means "spent".
+
+A key with nothing left is skipped by the router, exactly like one that is rate limited, and its status reads **exhausted**. Traffic moves to your other keys instead of failing upstream. When every key for a model is out of credit, the caller gets `503 balance_exhausted` rather than a `429` with `Retry-After`, because retrying cannot fix a spent key — only a top-up can.
+
+The balance appears in four places: the **Key balance left** metric in the Overview ledger, remaining credit in each provider's Overview header, **Balance left** and **Spent** in the Overview key inspector, and a per-key note in the provider's credential pool list. The attention queue warns at 20% remaining and raises a critical alert once a key stops serving.
+
+After topping a key up with the provider, raise its **Balance** and enable **Reset the spend counter** in the same save. The reset is an explicit choice rather than something inferred from the balance changing, so correcting a typo in the amount does not silently clear the meter. Balances and their recorded spend travel in configuration exports, so a restored key keeps the credit it had left instead of looking freshly topped up.
 
 ## 5. Rate-limit glossary
 
@@ -183,7 +196,7 @@ For streaming cross-protocol calls, Rotakey also handles providers that ignore `
 | --- | --- |
 | Healthy | No action required. |
 | Partial | Some keys are unavailable; inspect the credential path. |
-| Exhausted | Wait for reset, add capacity, or adjust a verified limit. |
+| Exhausted | Wait for reset, add capacity, adjust a verified limit, or top up the key's balance. |
 | Cooldown | Inspect the upstream `429` and `Retry-After`. |
 | Quarantined | Replace/fix the key, then re-check it. |
 | Disabled | Enable only after configuration and connection tests pass. |
@@ -202,6 +215,7 @@ Reset labels count down once per second in the inspector. Capacity values use co
 - `409` while deleting a key: a live File or Batch is pinned to it. Delete the mapped resources first.
 - `404 DeploymentNotFound`: the upstream model/deployment ID does not exist at that provider or region. Correct the upstream ID; the public alias may stay unchanged.
 - `429 rate_limit_exceeded`: all eligible keys are full or upstream reported a limit that is stricter than configured. Inspect the limiting bucket and `Retry-After`.
+- `503 balance_exhausted`: every API key for that model has spent its recorded balance. Raise the balance on one of them, or clear the balance to stop tracking it.
 - `503`: Redis/database/readiness dependency is unavailable, or no safe routing decision can be made.
 - `502 upstream_stream_invalid`: the provider returned HTTP `200` for a streaming request but supplied neither valid Anthropic SSE nor a valid JSON Message. Test the provider/model and inspect the upstream request ID.
 - High latency: compare P50/P95, inspect attempts for waits/retries, and test the provider directly from the console.

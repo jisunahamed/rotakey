@@ -234,6 +234,14 @@ func (s *Server) servePooled(
 			return
 		}
 		if selected == nil {
+			// An out-of-credit pool is not a rate limit: retrying cannot help, so it
+			// is reported as a configuration problem rather than as backpressure.
+			if balanceBlockedEveryCandidate(decisions) {
+				result.Status, result.ErrorCode, result.ErrorMessage = http.StatusServiceUnavailable, "balance_exhausted", "Every API key for this model has spent its balance. Add balance to one of them to resume."
+				s.writePoolError(w, r, req.PublicMode, result.Status, result.ErrorCode, result.ErrorMessage)
+				s.storePoolLog(r.Context(), req, result, attempts, decisions)
+				return
+			}
 			w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(retryAfter.Seconds())))))
 			result.Status, result.ErrorCode, result.ErrorMessage = http.StatusTooManyRequests, "rate_limit_exceeded", "Every provider and credential for this model is at capacity."
 			s.writePoolError(w, r, req.PublicMode, result.Status, result.ErrorCode, result.ErrorMessage)

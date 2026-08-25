@@ -31,7 +31,9 @@ func (s *Server) providerCapacity(ctx context.Context, credentials []CredentialV
 	}
 	ready := make([]CredentialView, 0, len(credentials))
 	for _, credential := range credentials {
-		if credential.Enabled && credential.Status == "healthy" {
+		// A key with no credit left is not ready: the router skips it, so counting
+		// its rate limits as available capacity would overstate the provider.
+		if credential.Enabled && credential.Status == "healthy" && !credential.BalanceExhausted() {
 			ready = append(ready, credential)
 		}
 	}

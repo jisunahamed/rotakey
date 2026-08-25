@@ -135,7 +135,7 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 	credentialRows, err := s.db.Query(ctx, `
 		SELECT c.id, c.provider_id, c.label, c.secret_suffix, c.is_primary, c.enabled, c.status,
 		       c.cooldown_until, c.last_validated_at, c.validation_error,
-		       c.created_at, c.updated_at,
+		       c.created_at, c.updated_at, c.balance_usd::float8, c.balance_spent_usd::float8,
 		       r.scope_key, r.rps, r.rpm, r.rpd, r.tps, r.tpm, r.tpd, r.tpr
 		FROM credentials c
 		LEFT JOIN rate_policies r ON r.credential_id = c.id
@@ -155,12 +155,15 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 			lastValidated                         *time.Time
 			validationError                       string
 			createdAt, updatedAt                  time.Time
+			balance                               *float64
+			spent                                 float64
 			scope                                 *string
 			policy                                RatePolicy
 		)
 		if err := credentialRows.Scan(
 			&id, &providerID, &label, &suffix, &isPrimary, &enabled, &status,
-			&cooldown, &lastValidated, &validationError, &createdAt, &updatedAt, &scope,
+			&cooldown, &lastValidated, &validationError, &createdAt, &updatedAt,
+			&balance, &spent, &scope,
 			&policy.RPS, &policy.RPM, &policy.RPD, &policy.TPS,
 			&policy.TPM, &policy.TPD, &policy.TPR,
 		); err != nil {
@@ -178,6 +181,7 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 				IsPrimary: isPrimary, Enabled: enabled, Status: status, CooldownUntil: cooldown,
 				LastValidatedAt: lastValidated, ValidationError: validationError,
 				Limits: RatePolicy{}, ModelLimits: map[string]RatePolicy{},
+				BalanceUSD: balance, BalanceSpentUSD: spent,
 				CreatedAt: createdAt, UpdatedAt: updatedAt,
 			}
 			credentialIndex[id] = view
@@ -693,6 +697,27 @@ type credentialInput struct {
 	Enabled         *bool      `json:"enabled,omitempty"`
 	AllowUnverified bool       `json:"allow_unverified,omitempty"`
 	Limits          RatePolicy `json:"limits"`
+	// BalanceUSD is the credit loaded onto this key. Omitted or null means the
+	// balance is not tracked, which is why it is a pointer rather than a zero
+	// value: 0 has to mean "this key is spent", not "no balance given".
+	BalanceUSD *float64 `json:"balance_usd,omitempty"`
+	// ResetSpend zeroes the running spend total, which is how an operator records
+	// a top-up: raise the balance, reset the meter.
+	ResetSpend bool `json:"reset_spend,omitempty"`
+}
+
+// maxCredentialBalanceUSD caps the balance at the column's precision
+// (NUMERIC(16,6)) so a typo becomes a clear error instead of a database failure
+// mid-transaction.
+const maxCredentialBalanceUSD = 1e9
+
+// validBalance rejects negative and absurd amounts. An unset balance is valid:
+// it is how a key opts out of tracking.
+func (c credentialInput) validBalance() bool {
+	if c.BalanceUSD == nil {
+		return true
+	}
+	return *c.BalanceUSD >= 0 && *c.BalanceUSD <= maxCredentialBalanceUSD
 }
 
 func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request) {
@@ -717,6 +742,10 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 		if len(credential.Label) < 1 || len(credential.Label) > 100 ||
 			len(credential.Secret) < 8 || len(credential.Secret) > 8192 || !credential.Limits.Valid() {
 			writeError(w, http.StatusBadRequest, "invalid_credential", "API key label, value, or rate limits are invalid.")
+			return
+		}
+		if !credential.validBalance() {
+			writeError(w, http.StatusBadRequest, "invalid_balance", "The API key balance must be a positive USD amount.")
 			return
 		}
 	}
@@ -782,10 +811,10 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 		if _, err := tx.Exec(r.Context(), `
 			INSERT INTO credentials
 			    (id, provider_id, label, secret_cipher, secret_suffix, is_primary,
-			     enabled, status, last_validated_at, validation_error)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),$9)
+			     enabled, status, last_validated_at, validation_error, balance_usd)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),$9,$10)
 		`, id, r.PathValue("id"), credential.Label, encrypted, secretSuffix(credential.Secret),
-			credential.IsPrimary, enabled, status, validationError); err != nil {
+			credential.IsPrimary, enabled, status, validationError, credential.BalanceUSD); err != nil {
 			writeError(w, http.StatusConflict, "credential_conflict", "Credential labels must be unique inside a provider.")
 			return
 		}
@@ -813,6 +842,10 @@ func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) 
 	input.Label = strings.TrimSpace(input.Label)
 	if input.Label == "" || len(input.Label) > 100 || !input.Limits.Valid() {
 		writeError(w, http.StatusBadRequest, "invalid_credential", "API key label or limits are invalid.")
+		return
+	}
+	if !input.validBalance() {
+		writeError(w, http.StatusBadRequest, "invalid_balance", "The API key balance must be a positive USD amount.")
 		return
 	}
 	var providerID string
@@ -879,6 +912,12 @@ func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) 
 	if !enabled {
 		status = "disabled"
 	}
+	// A top-up is "raise the balance and clear the meter", so the reset is an
+	// explicit flag rather than something inferred from the balance changing.
+	spendReset := ""
+	if input.ResetSpend {
+		spendReset = ", balance_spent_usd=0"
+	}
 	var affected int64
 	if replacement != "" {
 		encrypted, err := s.vault.Encrypt([]byte(replacement))
@@ -889,8 +928,9 @@ func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) 
 		commandTag, err := tx.Exec(r.Context(), `
 			UPDATE credentials SET label=$2, secret_cipher=$3, secret_suffix=$4,
 			    is_primary=$5, enabled=$6, status=$7, cooldown_until=NULL, consecutive_failures=0,
-			    validation_error='', last_validated_at=NOW(), updated_at=NOW() WHERE id=$1
-		`, r.PathValue("id"), input.Label, encrypted, secretSuffix(replacement), input.IsPrimary, enabled, status)
+			    validation_error='', last_validated_at=NOW(), balance_usd=$8,
+			    updated_at=NOW()`+spendReset+` WHERE id=$1
+		`, r.PathValue("id"), input.Label, encrypted, secretSuffix(replacement), input.IsPrimary, enabled, status, input.BalanceUSD)
 		if err != nil {
 			writeError(w, http.StatusConflict, "credential_update_failed", "Credential could not be updated.")
 			return
@@ -899,12 +939,12 @@ func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) 
 	} else {
 		query := `
 			UPDATE credentials SET label=$2, is_primary=$3, enabled=$4, status=$5,
-			    cooldown_until=NULL, consecutive_failures=0, updated_at=NOW()`
+			    balance_usd=$6, cooldown_until=NULL, consecutive_failures=0, updated_at=NOW()` + spendReset
 		if shouldInspect {
 			query += `, validation_error='', last_validated_at=NOW()`
 		}
 		query += ` WHERE id=$1`
-		commandTag, err := tx.Exec(r.Context(), query, r.PathValue("id"), input.Label, input.IsPrimary, enabled, status)
+		commandTag, err := tx.Exec(r.Context(), query, r.PathValue("id"), input.Label, input.IsPrimary, enabled, status, input.BalanceUSD)
 		if err != nil {
 			writeError(w, http.StatusConflict, "credential_update_failed", "Credential could not be updated.")
 			return

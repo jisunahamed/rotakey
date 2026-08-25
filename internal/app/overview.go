@@ -57,6 +57,10 @@ type overviewSummary struct {
 	LatencyP95MS     int64   `json:"latency_p95_ms"`
 	MaxWaitMS        int     `json:"max_wait_ms"`
 	GatewayKeyReady  bool    `json:"gateway_key_ready"`
+	// Credit sums the loaded balance across every key that tracks one. It is
+	// independent of the selected range: a balance is a standing figure, not
+	// something that happened in the last 24 hours.
+	Credit creditTotals `json:"credit"`
 }
 
 type overviewPoint struct {
@@ -78,6 +82,7 @@ type overviewProvider struct {
 	KeysWarning   int                      `json:"keys_warning"`
 	Capacity      map[string]overviewLimit `json:"capacity"`
 	ValidationBad int                      `json:"validation_warnings"`
+	Credit        creditTotals             `json:"credit"`
 }
 
 type overviewLimit struct {
@@ -109,6 +114,9 @@ type overviewCredential struct {
 	CooldownUntil   *time.Time        `json:"cooldown_until,omitempty"`
 	Request         *overviewHeadroom `json:"request_headroom,omitempty"`
 	Token           *overviewHeadroom `json:"token_headroom,omitempty"`
+	// Credit is absent for keys whose balance is not tracked, so the console can
+	// stay silent about money on installs that do not use the feature.
+	Credit *creditRemaining `json:"credit,omitempty"`
 }
 
 type overviewRoute struct {
@@ -250,10 +258,16 @@ func (s *Server) buildAdminOverview(ctx context.Context, rawRange string) (admin
 		summary.ProvidersTotal++
 		for _, credential := range provider.Credentials {
 			summary.KeysTotal++
-			if credential.Enabled && credential.Status == "healthy" && !redisState.CooldownUnknown[credential.ID] &&
+			credit := credentialCredit(credential)
+			providerView.Credit.addCredit(credit)
+			if credential.Enabled && credential.Status == "healthy" && !credential.BalanceExhausted() &&
+				!redisState.CooldownUnknown[credential.ID] &&
 				redisState.Cooldowns[credential.ID] <= 0 {
 				providerView.KeysReady++
 				summary.KeysReady++
+			}
+			if alert := balanceAlert(provider.Name, credential); alert != nil {
+				result.Alerts = append(result.Alerts, *alert)
 			}
 			if credential.ValidationError != "" || credential.Status == "quarantined" {
 				providerView.KeysWarning++
@@ -267,6 +281,7 @@ func (s *Server) buildAdminOverview(ctx context.Context, rawRange string) (admin
 				})
 			}
 		}
+		summary.Credit.merge(providerView.Credit)
 		if provider.Enabled && providerView.KeysReady > 0 {
 			summary.ProvidersReady++
 		}
@@ -584,7 +599,7 @@ func cachedCredentialCapacity(
 	result := overviewCredential{
 		ID: credential.ID, Label: credential.Label, SecretSuffix: credential.SecretSuffix,
 		Primary: credential.IsPrimary, Status: "healthy", ValidationError: credential.ValidationError,
-		LastValidatedAt: credential.LastValidatedAt,
+		LastValidatedAt: credential.LastValidatedAt, Credit: credentialCredit(credential),
 	}
 	if !credential.Enabled {
 		result.Status = "disabled"
@@ -592,6 +607,12 @@ func cachedCredentialCapacity(
 	}
 	if credential.Status == "quarantined" {
 		result.Status = "quarantined"
+		return result
+	}
+	// A spent key is reported as exhausted for the same reason a rate-limited one
+	// is: the router will pass over it. Credit says which of the two it was.
+	if credential.BalanceExhausted() {
+		result.Status = "exhausted"
 		return result
 	}
 	if snapshot.CooldownUnknown[credential.ID] {
@@ -680,7 +701,7 @@ func aggregateProviderCapacity(
 	for _, dimension := range aggregateDimensions {
 		aggregate := overviewLimit{}
 		for _, credential := range credentials {
-			if !credential.Enabled || credential.Status != "healthy" ||
+			if !credential.Enabled || credential.Status != "healthy" || credential.BalanceExhausted() ||
 				snapshot.CooldownUnknown[credential.ID] || snapshot.Cooldowns[credential.ID] > 0 {
 				continue
 			}

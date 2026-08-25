@@ -146,6 +146,10 @@ func (s *Server) selectPoolCandidate(
 				})
 				continue
 			}
+			if decision := balanceRoutingDecision(credential); decision != nil {
+				decisions = append(decisions, *decision)
+				continue
+			}
 			cooldown, err := s.redis.TTL(ctx, "cooldown:"+credential.ID).Result()
 			if err != nil {
 				return nil, reservation{}, 0, nil, err

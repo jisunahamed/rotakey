@@ -84,6 +84,10 @@ type ExportCredential struct {
 	Enabled     bool                  `json:"enabled"`
 	Limits      RatePolicy            `json:"limits"`
 	ModelLimits map[string]RatePolicy `json:"model_limits,omitempty"`
+	// BalanceUSD and BalanceSpentUSD travel together so a restored key keeps the
+	// credit it had left rather than appearing freshly topped up.
+	BalanceUSD      *float64 `json:"balance_usd,omitempty"`
+	BalanceSpentUSD float64  `json:"balance_spent_usd,omitempty"`
 }
 
 func (s *Server) registerPortableRoutes(mux *http.ServeMux) {
@@ -182,6 +186,7 @@ func exportProvider(provider Provider, aliasByModelID, secrets map[string]string
 		entry := ExportCredential{
 			Label: credential.Label, IsPrimary: credential.IsPrimary,
 			Enabled: credential.Enabled, Limits: credential.Limits, ModelLimits: limits,
+			BalanceUSD: credential.BalanceUSD, BalanceSpentUSD: credential.BalanceSpentUSD,
 		}
 		if withSecrets {
 			entry.Secret = secrets[credential.ID]

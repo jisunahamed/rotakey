@@ -42,6 +42,25 @@ export type ModelRoute = {
   updated_at: string;
 };
 
+/** A tracked API key's credit. Absent when the operator does not track a balance
+ * on that key, which is a different state from having spent it all. */
+export type CreditRemaining = {
+  balance_usd: number;
+  spent_usd: number;
+  remaining_usd: number;
+  exhausted: boolean;
+};
+
+/** Credit summed over the keys that track a balance. tracked_keys separates
+ * "nobody tracks a balance" from "every tracked key is empty". */
+export type CreditTotals = {
+  tracked_keys: number;
+  balance_usd: number;
+  spent_usd: number;
+  remaining_usd: number;
+  exhausted_keys: number;
+};
+
 export type Credential = {
   id: string;
   provider_id: string;
@@ -55,6 +74,9 @@ export type Credential = {
   validation_error?: string;
   limits: RatePolicy;
   model_limits: Record<string, RatePolicy>;
+  /** null or absent means this key's balance is not tracked. */
+  balance_usd?: number | null;
+  balance_spent_usd: number;
   created_at: string;
   updated_at: string;
 };
@@ -114,6 +136,7 @@ export type Overview = {
     latency_p95_ms: number;
     max_wait_ms: number;
     gateway_key_ready: boolean;
+    credit: CreditTotals;
   };
   series: Array<{
     timestamp: string;
@@ -133,6 +156,7 @@ export type Overview = {
     keys_warning: number;
     validation_warnings: number;
     capacity: Record<string, OverviewLimit>;
+    credit: CreditTotals;
   }>;
   routes: Array<{
     id: string;
@@ -172,6 +196,7 @@ export type Overview = {
       cooldown_until?: string;
       request_headroom?: OverviewHeadroom;
       token_headroom?: OverviewHeadroom;
+      credit?: CreditRemaining;
     }>;
   }>;
   alerts: Array<{

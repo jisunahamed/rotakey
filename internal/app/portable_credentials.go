@@ -83,9 +83,11 @@ func (s *Server) upsertImportedCredential(ctx context.Context, tx pgx.Tx, provid
 		// Keep the existing secret and only refresh the surrounding settings.
 		if _, execErr := tx.Exec(ctx, `
 			UPDATE credentials SET is_primary=$2, enabled=$3, status=$4,
+			    balance_usd=$5, balance_spent_usd=$6,
 			    cooldown_until=NULL, consecutive_failures=0, updated_at=NOW()
 			WHERE id=$1
-		`, existingID, credential.IsPrimary, credential.Enabled, status); execErr != nil {
+		`, existingID, credential.IsPrimary, credential.Enabled, status,
+			credential.BalanceUSD, credential.BalanceSpentUSD); execErr != nil {
 			return "", false, fmt.Errorf("API key %q could not be updated", credential.Label)
 		}
 		return existingID, false, nil
@@ -98,10 +100,12 @@ func (s *Server) upsertImportedCredential(ctx context.Context, tx pgx.Tx, provid
 		if _, execErr := tx.Exec(ctx, `
 			UPDATE credentials SET secret_cipher=$2, secret_suffix=$3, is_primary=$4,
 			    enabled=$5, status=$6, cooldown_until=NULL, consecutive_failures=0,
-			    validation_error=$7, last_validated_at=NULL, updated_at=NOW()
+			    validation_error=$7, last_validated_at=NULL, balance_usd=$8,
+			    balance_spent_usd=$9, updated_at=NOW()
 			WHERE id=$1
 		`, existingID, encrypted, secretSuffix(credential.Secret), credential.IsPrimary,
-			credential.Enabled, status, validationError); execErr != nil {
+			credential.Enabled, status, validationError,
+			credential.BalanceUSD, credential.BalanceSpentUSD); execErr != nil {
 			return "", false, fmt.Errorf("API key %q could not be updated", credential.Label)
 		}
 		return existingID, false, nil
@@ -110,10 +114,11 @@ func (s *Server) upsertImportedCredential(ctx context.Context, tx pgx.Tx, provid
 	if _, execErr := tx.Exec(ctx, `
 		INSERT INTO credentials
 		    (id, provider_id, label, secret_cipher, secret_suffix, is_primary,
-		     enabled, status, validation_error)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		     enabled, status, validation_error, balance_usd, balance_spent_usd)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 	`, id, providerID, credential.Label, encrypted, secretSuffix(credential.Secret),
-		credential.IsPrimary, credential.Enabled, status, validationError); execErr != nil {
+		credential.IsPrimary, credential.Enabled, status, validationError,
+		credential.BalanceUSD, credential.BalanceSpentUSD); execErr != nil {
 		return "", false, fmt.Errorf("API key %q could not be created", credential.Label)
 	}
 	return id, true, nil
