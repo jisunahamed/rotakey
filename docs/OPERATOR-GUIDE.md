@@ -41,7 +41,7 @@ The range selector (`1h`, `24h`, `7d`) changes traffic statistics, error history
 | Tokens | Recorded input plus output tokens. Usage can be conservative when a stream ends without upstream usage data. |
 | P50 latency | The median: half of requests completed faster and half slower. |
 | P95 latency | 95% of requests completed within this time; the slowest 5% took longer. It exposes tail slowdown better than an average. |
-| Key balance left | Credit remaining across every API key that tracks a balance, against the total loaded. Only shown when at least one key tracks one. |
+| Balance left | Credit still available across every API key that tracks a balance, after spend. Only shown when at least one key tracks one. |
 
 A very high P95 with a normal P50 usually means a smaller group of requests is waiting, streaming for a long time, retrying, or hitting a slow upstream.
 
@@ -71,13 +71,17 @@ Before applying, Rotakey checks which public aliases no other enabled provider c
 
 ### Per-API-key balance
 
-Each API key can record how much credit sits on that upstream account. Open the key in **Providers → Credential pool** and set **Balance (USD)** to the amount you loaded. The field is optional and blank is the default: a key with no balance routes exactly as it always did.
+Set **Balance per key** in the provider's connection settings and every key you add to that provider starts with that figure. This is the field to use for an account with a dozen keys: type the credit once instead of once per key. When the provider already has keys, the same field offers **Apply to all existing keys**, which records a top-up across the account — every key's balance becomes the new figure and its recorded spend is cleared.
+
+One key can still differ from the rest. Open it in **Providers → Credential pool** and set its own **Balance (USD)**. Both fields are optional and blank is the default: a key with no balance routes exactly as it always did.
 
 Rotakey cannot read a provider's real balance, so it tracks spend instead. Every request a key serves adds its estimated cost — the same arithmetic behind the Overview cost column — to that key's running total. Blank means "not tracked". `0` means "spent".
 
+When a request finishes without a recorded key — it failed before one was picked, for instance — its cost is charged to the provider instead of being dropped, and comes off the provider's remaining credit. The provider inspector labels that figure **Charged provider-wide** so a gap between the per-key numbers and the provider total explains itself.
+
 A key with nothing left is skipped by the router, exactly like one that is rate limited, and its status reads **exhausted**. Traffic moves to your other keys instead of failing upstream. When every key for a model is out of credit, the caller gets `503 balance_exhausted` rather than a `429` with `Retry-After`, because retrying cannot fix a spent key — only a top-up can.
 
-The balance appears in four places: the **Key balance left** metric in the Overview ledger, remaining credit in each provider's Overview header, **Balance left** and **Spent** in the Overview key inspector, and a per-key note in the provider's credential pool list. The attention queue warns at 20% remaining and raises a critical alert once a key stops serving.
+The console shows what is left rather than what was loaded: the **Balance left** metric in the Overview ledger, remaining credit on each provider's Overview row and in its inspector, and **Balance left**, **Spent**, **Calls on this key** and **Tokens on this key** in the Overview key inspector — which is where you see which key is burning the credit. The credential path in a route inspector carries each key's call count and remaining figure inline, and the provider's credential pool list notes it per key. The attention queue warns at 20% remaining and raises a critical alert once a key stops serving.
 
 After topping a key up with the provider, raise its **Balance** and enable **Reset the spend counter** in the same save. The reset is an explicit choice rather than something inferred from the balance changing, so correcting a typo in the amount does not silently clear the meter. Balances and their recorded spend travel in configuration exports, so a restored key keeps the credit it had left instead of looking freshly topped up.
 
@@ -158,9 +162,13 @@ Every public `model` field is a Rotakey alias, never an upstream model ID.
 | Public request → upstream provider | Behavior |
 | --- | --- |
 | Anthropic → Anthropic | Native pass-through. Content blocks, thinking, prompt caching, citations, Files, server/client tools, safe `anthropic-*` headers, and unknown SSE event types are preserved. |
-| Anthropic → OpenAI | Text, images, system prompts, tool calls/results, tool choice, stop sequences, and streaming are translated. Claude Code metadata plus thinking/context/container/output controls and prompt-cache hints are accepted and omitted. Citations, Files, and server tools return `400 unsupported_feature`. |
-| OpenAI Chat/Responses → OpenAI | Existing OpenAI-compatible behavior is unchanged. |
+| Anthropic → OpenAI | Text, images, system prompts, tool calls/results, tool choice, stop sequences, and streaming are translated. Claude Code metadata plus thinking/context/container/output controls and prompt-cache hints are accepted and omitted. Anthropic-only extras such as citations hints are dropped from the block and named in the request log rather than failing the call. Files and server tools still need a native Anthropic route. |
+| OpenAI Chat/Responses → OpenAI | Existing OpenAI-compatible behavior is unchanged. A route whose upstream publishes only `/responses` serves Chat callers by translating into it and back. |
 | OpenAI Chat/Responses → Anthropic | Core text, images, JSON function tools, tool results, stop controls, usage, and streaming are translated to Messages. Use `/v1/messages` for the full Anthropic feature surface. |
+
+No caller's choice of protocol is a dead end. Every public protocol reaches every upstream shape, through Chat's shape as the middle step when it has to: an Anthropic call to a Responses-only route crosses Messages → Chat → Responses on the way in and back on the way out. A route is refused only when its upstream publishes no usable endpoint at all.
+
+When a provider answers `404` at `/responses`, Rotakey finishes that request on Chat Completions instead of returning the error, and remembers the absence for a day so later requests start there. Fields the upstream cannot accept are dropped and listed in the request attempt log; only a request with nothing left to send — no input at all — returns `400`.
 
 Provider protocol is selected during onboarding. Use the official quick setup button for OpenAI or Anthropic; Rotakey also normalizes a pasted official root, `/models`, or inference endpoint to the correct `/v1` base URL. Anthropic-compatible providers default to `x-api-key` and version `2023-06-01`. Redirects and proxy instructions remain blocked. For a `305`, `404`, `405`, or non-standard model catalog: verify the base URL, keep redirects disabled, use **Manual model ID**, and save. Rotakey makes a minimal `/messages` probe with the chosen model. A failed probe leaves the route unsaved and shows the provider error.
 
@@ -177,7 +185,7 @@ Every new route receives a server-owned capability profile:
 - **Catalog verified** means the configured API key returned the model in its authenticated catalog. This avoids one paid inference probe for every model in a large bulk selection.
 - **Probe verified** means a manually entered or individually created model completed a bounded real core request before save. Invalid, inaccessible, retired, or malformed models are rejected.
 - The profile distinguishes `native`, `translated`, `gateway_normalized`, `off`, `unknown`, and `native_unverified`. Unknown is intentional: provider catalogs rarely publish reliable per-model tool, JSON, thinking, and streaming capabilities, and Rotakey does not claim support without evidence.
-- Anthropic-native routes expose Messages natively and Chat/Responses through translation. OpenAI Chat routes expose Chat natively and the supported Messages/Responses subsets through translation. Responses-only routes are not falsely exposed through Chat.
+- Anthropic-native routes expose Messages natively and Chat/Responses through translation. OpenAI Chat routes expose Chat natively and the supported Messages/Responses subsets through translation. A Responses-only route serves Chat and Messages callers by translating through Chat's shape into `/responses`, and the inspector labels those paths `translated` so the extra hop is visible.
 - The Model route inspector shows verification state and the effective Chat, Responses, Messages, streaming, tools, and thinking path. Use **Recheck model** to run the bounded core probe again for an existing route; a failed probe is stored and shown without deleting the route.
 
 Model probing sends a one-token request and respects the configured provider timeout, capped at 120 seconds. On a connection, authorization, throttling, or upstream-server failure, Rotakey can try up to three healthy credentials before marking the route unavailable. It never stores or displays a probe secret.
@@ -186,7 +194,7 @@ Files are pinned to the default Anthropic resource provider and the selected cre
 
 Batch reservations count every item against shared request/token buckets and against each item's model-specific buckets in one atomic reservation. Anthropic usage reconciliation includes input, output, cache-create, and cache-read tokens. Streaming without final usage remains conservatively reserved. Upload/download content is streamed, and captured-body logging never stores File binary content. Default request ceilings are 32 MB for Messages/token count, 256 MB for Batches, and 500 MB for Files.
 
-Providers do not all accept the same optional fields. A model route can strip known unsupported parameters and Rotakey records removed or replaced fields in the request attempt log. For example, one upstream may reject `thinking`, while another requires `max_completion_tokens` instead of `max_tokens`. Configure adaptation narrowly for the affected route. Responses or cross-protocol features that cannot be translated faithfully return `400 unsupported_feature` instead of being silently discarded.
+Providers do not all accept the same optional fields. A model route can strip known unsupported parameters and Rotakey records removed or replaced fields in the request attempt log. For example, one upstream may reject `thinking`, while another requires `max_completion_tokens` instead of `max_tokens`. Configure adaptation narrowly for the affected route. A cross-protocol field with no equivalent upstream is dropped and named in that same removed-parameters list rather than failing the call, so a translated request still returns an answer; check the list when a response omits something you asked for.
 
 For streaming cross-protocol calls, Rotakey also handles providers that ignore `stream:true` and return a regular Anthropic JSON Message: it synthesizes named Anthropic SSE events and then emits the requested public protocol. Empty, malformed, or non-Message HTTP `200` responses return/log `502 upstream_stream_invalid`; they are no longer recorded as successful blank responses.
 

@@ -9,6 +9,8 @@ web/*.tsbuildinfo
 web/vite.config.js
 web/vite.config.d.ts
 .playwright-cli/
+# Per-machine tool permissions. .claude/launch.json is shared, this one is not.
+.claude/settings.local.json
 output/
 backups/
 coverage/

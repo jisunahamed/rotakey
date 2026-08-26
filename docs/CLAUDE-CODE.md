@@ -134,7 +134,7 @@ Keep the gateway key in your shell, secret manager, or OS credential tooling. Ne
 | Anthropic-compatible | Native Messages, streaming, tools, thinking, prompt caching, citations, and safe `anthropic-*` headers pass through. |
 | OpenAI-compatible | Rotakey translates core text, images, system prompts, client function tools/results, tool choice, stop sequences, and streaming. Claude Code history roles are normalized. Metadata, thinking/context/container/output controls, prior reasoning blocks, tool-discovery references, and prompt-cache hints are accepted but omitted because this protocol has no equivalent. |
 
-For the fullest Claude Code feature set, choose a native Anthropic-compatible model route. Data-bearing Anthropic features without a faithful target-protocol equivalent, such as citations, Files, and server tools, return `400 unsupported_feature` with a request ID.
+For the fullest Claude Code feature set, choose a native Anthropic-compatible model route. On a translated route, data-bearing Anthropic features with no target-protocol equivalent — citations hints, Files, and server tools — are dropped from the request and named in the attempt log and the `X-Rotakey-Removed-Parameters` response header, so the call still returns an answer without them.
 
 ## Verify before opening Claude Code
 
@@ -162,7 +162,7 @@ Open **Admin → Request logs** to confirm the public protocol, translated/nativ
 | Claude Code calls `api.anthropic.com` | `ANTHROPIC_BASE_URL` was not exported in the shell that launched Claude Code. It must be the Rotakey host root. |
 | Alias not visible in `/model` | Enable discovery and update Claude Code. IDs not beginning with `claude` or `anthropic` must be selected explicitly or added with `ANTHROPIC_CUSTOM_MODEL_OPTION`. |
 | `404` model not found | Use the Rotakey public alias exactly as returned by `/v1/models`, including case and `/`. Confirm the route is enabled. |
-| `400 unsupported_feature` | The selected route crosses protocols and the request used a feature with no safe translation. Inspect Request logs; use a native Anthropic route or disable that feature. |
+| A reply omits a feature you asked for | The route crosses protocols, so the field had no equivalent upstream and was dropped rather than failed. Request logs list it under removed parameters, and the response carries the same list in `X-Rotakey-Removed-Parameters`. Use a native Anthropic route to keep the feature. |
 | Blank response with HTTP `200` | Current Rotakey repairs a provider that returns a normal JSON Message despite `stream:true`. If the body is empty or malformed, Request logs show `502 upstream_stream_invalid` rather than a false success. |
 | `429` | Every eligible API key is at a configured/shared/model limit or upstream cooldown. Inspect the limiting bucket and reset countdown. |
 | `503` | Redis/database readiness or safe routing is unavailable. Rotakey fails closed instead of bypassing limits. |

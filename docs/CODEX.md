@@ -129,10 +129,13 @@ the Rotakey master key and can be replayed only through the same deployment.
 It is a bounded continuity snapshot, not OpenAI's proprietary encrypted
 compaction payload.
 
-Hosted OpenAI tools, background mode, conversation IDs, file references,
-foreign encrypted compaction items, and other features without a safe
-cross-provider representation return `400 unsupported_feature` on translated
-routes. WebSocket Responses transport is disabled so Codex uses HTTP/SSE.
+Hosted OpenAI tools, background mode, conversation IDs, and file references have
+no safe cross-provider representation, so on a translated route Rotakey drops
+them, names each one in the request attempt log and the
+`X-Rotakey-Removed-Parameters` header, and still returns the model's answer. A
+compaction item encrypted by a different Rotakey deployment is the one exception:
+it cannot be decrypted, so it returns `400 unsupported_feature`. WebSocket
+Responses transport is disabled so Codex uses HTTP/SSE.
 
 ## Troubleshooting
 
@@ -147,8 +150,11 @@ routes. WebSocket Responses transport is disabled so Codex uses HTTP/SSE.
 - `output_text is not supported when translating Responses API requests`:
   upgrade Rotakey to v0.2.7 or newer so assistant output history can be
   replayed through translated Chat routes.
-- `unsupported_feature`: use a native Responses route or remove the unsupported
-  hosted/file/conversation feature.
+- `unsupported_feature`: a compaction item from another Rotakey deployment. Start
+  a fresh Codex session, or point Codex at the deployment that wrote it.
+- A response that omits something you asked for: check the attempt's removed
+  parameters. Translated routes drop what the upstream cannot express instead of
+  failing; use a native Responses route to keep the feature.
 - Config parse error: run `rotakey-codex rollback`, then `doctor`.
 
 The authoritative Codex configuration fields are documented in the
