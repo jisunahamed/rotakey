@@ -531,6 +531,14 @@
   overflow-y: auto;
 }
 
+/* The expander is a row in the scrolling list, so it sits flush with the items
+   above it rather than floating in the panel's own padding. */
+.attention-more {
+  justify-self: start;
+  padding: var(--space-4) 0 var(--space-2);
+  font-size: var(--text-micro);
+}
+
 .attention-item {
   display: grid;
   width: 100%;
@@ -713,6 +721,12 @@
 }
 
 .manual-model-entry .field { margin: 0; }
+
+/* Spans both tracks so the field and its button keep their baseline when the note
+   appears. */
+.manual-model-entry__note {
+  grid-column: 1 / -1;
+}
 
 /* Both grids hold the same limit cells, so they share the frame — but not the
    track count. The preview sits in a provider row and lays all seven limits out

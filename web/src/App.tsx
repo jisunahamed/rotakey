@@ -123,6 +123,13 @@ function useMediaQuery(query: string): boolean {
   return matches;
 }
 
+type Note = { id: number; tone: "success" | "danger"; message: string };
+
+/** Past this many the stack is taller than the corner it lives in, and the oldest
+ *  message has been on screen long enough to have been read. Errors are exempt from
+ *  the timer but not from this — the newest four are the ones that matter. */
+const toastLimit = 4;
+
 function App() {
   const [phase, setPhase] = useState<AuthPhase>("loading");
   const [username, setUsername] = useState("");
@@ -134,39 +141,52 @@ function App() {
   });
   const [gatewayKey, setGatewayKey] = useState("");
   const [version, setVersion] = useState<VersionInfo | null>(null);
-  const [toast, setToast] = useState<{ tone: "success" | "danger"; message: string; id: number } | null>(null);
-  const toastTimer = useRef<number | null>(null);
+  const [toasts, setToasts] = useState<Note[]>([]);
+  // One timer per message, keyed by id. A timer that outlives its message — because
+  // the operator dismissed it, or it was pushed off the end of the stack — fires
+  // against an id that is no longer there and does nothing.
+  const toastTimers = useRef(new Map<number, number>());
+  const toastID = useRef(0);
 
-  // Each notification cancels the previous one's timer. Without that, two
-  // messages inside one window share a single countdown, and the second is
-  // cleared by the first one's timeout — which is how the "traffic has stopped"
-  // warnings raised when a provider is turned off used to disappear in a blink.
-  // Long messages also get proportionally longer on screen, and failures stay
-  // until dismissed, because an error the operator missed is an error unfixed.
+  // Notifications stack instead of replacing each other. One slot meant a run of
+  // messages from a single action — importing a config reports a warning per
+  // skipped row — showed only whichever arrived last, and the operator had no way
+  // to know the others existed. Failures stay until dismissed, because an error
+  // nobody read is an error nobody fixed; everything else leaves on its own, and
+  // longer text gets proportionally longer to read it in.
   const notify = useCallback((message: string, tone: "success" | "danger" = "success") => {
-    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-    const id = Date.now() + Math.random();
-    setToast({ message, tone, id });
-    if (tone === "danger") {
-      toastTimer.current = null;
-      return;
-    }
+    const id = ++toastID.current;
+    setToasts((current) => {
+      // The same sentence twice is one thing happening twice, not two things. It
+      // moves to the front of the queue and re-announces rather than stacking a
+      // duplicate the operator now has to dismiss twice.
+      const next = [...current.filter((note) => note.message !== message), { id, tone, message }];
+      return next.slice(-toastLimit);
+    });
+    if (tone === "danger") return;
     const linger = Math.min(12000, Math.max(4200, message.length * 55));
-    toastTimer.current = window.setTimeout(() => {
-      setToast((current) => (current?.id === id ? null : current));
-      toastTimer.current = null;
-    }, linger);
+    toastTimers.current.set(
+      id,
+      window.setTimeout(() => {
+        toastTimers.current.delete(id);
+        setToasts((current) => current.filter((note) => note.id !== id));
+      }, linger)
+    );
   }, []);
 
-  const dismissToast = useCallback(() => {
-    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-    toastTimer.current = null;
-    setToast(null);
+  const dismissToast = useCallback((id: number) => {
+    const timer = toastTimers.current.get(id);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      toastTimers.current.delete(id);
+    }
+    setToasts((current) => current.filter((note) => note.id !== id));
   }, []);
 
   useEffect(
     () => () => {
-      if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+      toastTimers.current.forEach((timer) => window.clearTimeout(timer));
+      toastTimers.current.clear();
     },
     []
   );
@@ -213,6 +233,12 @@ function App() {
   // a keyboard operator is never left tabbing through a panel they cannot see.
   const menuButton = useRef<HTMLButtonElement | null>(null);
   const rail = useRef<HTMLElement | null>(null);
+  // Set when the drawer closes because the operator picked a section rather than
+  // dismissing it. Returning focus to the hamburger would be right for a dismissal
+  // and wrong here: the page behind has just been replaced, and focus belongs at
+  // the top of the new one.
+  const navigated = useRef(false);
+  const workspace = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (!menuOpen) return;
     rail.current?.querySelector<HTMLAnchorElement>(".nav-item")?.focus();
@@ -225,6 +251,11 @@ function App() {
     return () => {
       document.removeEventListener("keydown", onKeyDown);
       document.body.style.overflow = previousOverflow;
+      if (navigated.current) {
+        navigated.current = false;
+        workspace.current?.focus();
+        return;
+      }
       menuButton.current?.focus();
     };
   }, [menuOpen]);
@@ -243,6 +274,7 @@ function App() {
   }, []);
 
   const navigate = (next: Page, query?: Record<string, string>) => {
+    if (menuOpen) navigated.current = true;
     setPage(next);
     setMenuOpen(false);
     const search = query ? `?${new URLSearchParams(query).toString()}` : "";
@@ -294,19 +326,25 @@ function App() {
     );
   }
 
-  const toastBody = toast && (
-    <div className={`toast toast--${toast.tone}`} key={toast.id}>
-      {toast.tone === "success" ? (
+  const noteRow = (note: Note) => (
+    <div className={`toast toast--${note.tone}`} key={note.id}>
+      {note.tone === "success" ? (
         <Check size={16} aria-hidden="true" />
       ) : (
         <AlertTriangle size={16} aria-hidden="true" />
       )}
-      <span className="toast__message">{toast.message}</span>
-      <button className="icon-button toast__close" onClick={dismissToast} aria-label="Dismiss this message">
+      <span className="toast__message">{note.message}</span>
+      <button
+        className="icon-button toast__close"
+        onClick={() => dismissToast(note.id)}
+        aria-label="Dismiss this message"
+      >
         <X size={15} aria-hidden="true" />
       </button>
     </div>
   );
+  const failures = toasts.filter((note) => note.tone === "danger");
+  const confirmations = toasts.filter((note) => note.tone !== "danger");
 
   return (
     <div className="app-shell">
@@ -402,7 +440,7 @@ function App() {
           <strong>Rotakey</strong>
           <ThemeButton theme={theme} setTheme={setTheme} />
         </header>
-        <main className="main-pane" id="workspace" tabIndex={-1}>
+        <main className="main-pane" id="workspace" tabIndex={-1} ref={workspace}>
           {page === "overview" && <OverviewPage navigate={navigate} notify={notify} />}
           {page === "providers" && <ProvidersPage notify={notify} />}
           {page === "models" && <ModelsPage navigate={navigate} notify={notify} />}
@@ -430,18 +468,19 @@ function App() {
           notify={notify}
         />
       )}
-      {/* Two regions, each with a fixed role, and the toast renders into whichever
-          one matches its tone. One shared wrapper that swapped role and aria-live
-          at the same moment its text arrived was no better than inserting the
-          region late: a screen reader that had already registered the node as
-          polite could announce an error quietly, or miss it. Both wrappers need no
-          styling — the toast itself is position: fixed, so an empty block leaves no
-          trace. */}
-      <div role="status" aria-live="polite">
-        {toast?.tone !== "danger" && toastBody}
-      </div>
-      <div role="alert" aria-live="assertive">
-        {toast?.tone === "danger" && toastBody}
+      <div className="toast-dock">
+        {/* Two regions, each with a fixed role, and a message renders into whichever
+            one matches its tone. One shared wrapper that swapped role and aria-live
+            at the same moment its text arrived was no better than inserting the
+            region late: a screen reader that had already registered the node as
+            polite could announce an error quietly, or miss it. Failures sit above
+            confirmations so an error is never pushed off-screen by a success. */}
+        <div className="toast-stack" role="alert" aria-live="assertive">
+          {failures.map(noteRow)}
+        </div>
+        <div className="toast-stack" role="status" aria-live="polite">
+          {confirmations.map(noteRow)}
+        </div>
       </div>
     </div>
   );
@@ -1033,6 +1072,13 @@ function ModelUsageRanking({ routes, range }: { routes: Overview["routes"]; rang
 }
 
 function AttentionQueue({ alerts, onSelect }: { alerts: Overview["alerts"]; onSelect: (alert: Overview["alerts"][number]) => void }) {
+  // Six rows is what the panel holds without becoming the whole page. The heading
+  // counts every alert, so a longer queue used to promise more than the list showed
+  // and the rest could not be reached from here at all.
+  const shown = 6;
+  const [expanded, setExpanded] = useState(false);
+  const visible = expanded ? alerts : alerts.slice(0, shown);
+  const hidden = alerts.length - visible.length;
   return (
     <section className="console-panel attention-panel">
       <ConsolePanelHeader eyebrow="Attention queue" title={alerts.length ? `${alerts.length} need attention` : "All clear"} />
@@ -1040,7 +1086,7 @@ function AttentionQueue({ alerts, onSelect }: { alerts: Overview["alerts"]; onSe
         <div className="all-clear"><Check size={16} aria-hidden="true" /><span><strong>No intervention needed</strong><small>Routes and API keys are ready.</small></span></div>
       ) : (
         <div className="attention-list">
-          {alerts.slice(0, 6).map((alert) => (
+          {visible.map((alert) => (
             <button key={alert.id} className={`attention-item attention-item--${alert.severity}`} onClick={() => onSelect(alert)} aria-label={`${alert.severity === "critical" ? "Critical" : alert.severity === "warning" ? "Warning" : "Note"}: ${alert.title}. ${alert.detail}`}>
               <AlertTriangle size={14} aria-hidden="true" />
               {/* The row is one line by design and the detail is ellipsised, so the
@@ -1051,6 +1097,11 @@ function AttentionQueue({ alerts, onSelect }: { alerts: Overview["alerts"]; onSe
               <ChevronRight size={13} aria-hidden="true" />
             </button>
           ))}
+          {(hidden > 0 || expanded) && (
+            <button type="button" className="link-button attention-more" onClick={() => setExpanded((current) => !current)}>
+              {hidden > 0 ? `Show ${hidden} more` : `Show only the first ${shown}`}
+            </button>
+          )}
         </div>
       )}
     </section>
@@ -1503,18 +1554,26 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
     | { type: "import"; providerID: string }
     | { type: "credential"; providerID: string; credentialID?: string }
   >(null);
+  // The ten-second refresh and an explicit one after a save overlap, and the two
+  // are not guaranteed to land in the order they were sent. Without this, the
+  // slower of the two wins: a provider deleted a moment ago comes back in the
+  // list, and gets re-selected because it is still the id in the address bar.
+  const generation = useRef(0);
 
   const load = useCallback(async () => {
+    const mine = ++generation.current;
     setError("");
     try {
       const result = await api<{ providers: Provider[] }>("/api/admin/providers");
+      if (mine !== generation.current) return;
       const normalized = normalizeProviders(result.providers);
       setProviders(normalized);
       setSelectedID((current) => normalized.some((provider) => provider.id === current) ? current : normalized[0]?.id || "");
     } catch (caught) {
+      if (mine !== generation.current) return;
       setError(caught instanceof Error ? caught.message : "Providers could not be loaded.");
     } finally {
-      setLoading(false);
+      if (mine === generation.current) setLoading(false);
     }
   }, []);
   useEffect(() => {
@@ -1544,6 +1603,36 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
     notify(message);
     void load();
   };
+
+  // A panel holds ids, and the ten-second reload can find that one of them is gone
+  // — someone deleted the provider in another tab, or a key was revoked upstream.
+  // The panel used to just disappear mid-edit. Worse, a credential id that stopped
+  // resolving left the panel mounted in "Add API key" mode with the operator's
+  // fields still filled in, so the next Save was a POST that created a second key
+  // instead of a PUT that updated the first. Now the panel closes and says which
+  // record went away.
+  const missingRecord = (() => {
+    if (loading || !panel || panel.type === "wizard") return null;
+    const owner = providers.find((provider) => provider.id === panel.providerID);
+    if (!owner) return "provider";
+    if (panel.type === "credential" && panel.credentialID
+      && !owner.credentials.some((credential) => credential.id === panel.credentialID)) return "credential";
+    if (panel.type === "model" && panel.modelID
+      && !owner.models.some((model) => model.id === panel.modelID)) return "model";
+    return null;
+  })();
+  useEffect(() => {
+    if (!missingRecord) return;
+    setPanel(null);
+    notify(
+      missingRecord === "provider"
+        ? "That provider is no longer here, so the panel closed. Anything unsaved in it was not applied."
+        : missingRecord === "credential"
+          ? "That API key is no longer here, so the panel closed. Anything unsaved in it was not applied."
+          : "That model route is no longer here, so the panel closed. Anything unsaved in it was not applied.",
+      "danger"
+    );
+  }, [missingRecord, notify]);
 
   return (
     <div className="resource-page provider-page">
@@ -1750,10 +1839,13 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
         </div>
       )}
       {panel?.type === "wizard" && <ProviderWizard onClose={() => setPanel(null)} onComplete={complete} />}
-      {panelProvider && panel?.type === "provider" && <ProviderForm provider={panelProvider} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
-      {panelProvider && panel?.type === "model" && <ModelForm provider={panelProvider} model={panelProvider.models.find((model) => model.id === panel.modelID)} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
-      {panelProvider && panel?.type === "import" && <ModelImportForm provider={panelProvider} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
-      {panelProvider && panel?.type === "credential" && <CredentialForm provider={panelProvider} credential={panelProvider.credentials.find((credential) => credential.id === panel.credentialID)} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
+      {/* `missingRecord` gates all four so the panel is never rendered against a
+          record that has gone: one render in add-mode with the edit fields still
+          filled is enough to turn the next Save into a duplicate. */}
+      {panelProvider && !missingRecord && panel?.type === "provider" && <ProviderForm provider={panelProvider} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
+      {panelProvider && !missingRecord && panel?.type === "model" && <ModelForm provider={panelProvider} model={panelProvider.models.find((model) => model.id === panel.modelID)} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
+      {panelProvider && !missingRecord && panel?.type === "import" && <ModelImportForm provider={panelProvider} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
+      {panelProvider && !missingRecord && panel?.type === "credential" && <CredentialForm provider={panelProvider} credential={panelProvider.credentials.find((credential) => credential.id === panel.credentialID)} onClose={() => setPanel(null)} onComplete={complete} onRefresh={() => void load()} notify={notify} />}
     </div>
   );
 }
@@ -2057,7 +2149,18 @@ function ProviderWizard({ onClose, onComplete }: { onClose: () => void; onComple
       onComplete(`Provider saved with ${credentialSummary} and ${routes.length} model route${routes.length === 1 ? "" : "s"}.`);
     } catch (caught) {
       if (createdID) {
-        await api(`/api/admin/providers/${createdID}`, { method: "DELETE" }).catch(() => undefined);
+        // The provider was created and something after it failed, so the half-built
+        // provider is removed. If that removal also fails there is a provider on the
+        // list with no keys, and saying so is the difference between the operator
+        // deleting it and wondering where it came from.
+        try {
+          await api(`/api/admin/providers/${createdID}`, { method: "DELETE" });
+        } catch {
+          setError(
+            `${errorMessage(caught)} The provider was created before this failed and could not be removed — ${provider.name.trim() || "it"} is in the provider list with no API keys. Delete it there, or open it and finish the setup.`
+          );
+          return;
+        }
       }
       setError(errorMessage(caught));
     } finally {
@@ -2139,6 +2242,13 @@ function ProviderWizard({ onClose, onComplete }: { onClose: () => void; onComple
             if (step === 0) {
               if (!provider.name.trim() || !provider.base_url.trim()) {
                 setError("Provider name and base URL are required.");
+                return;
+              }
+              // The balance field says what is wrong with it in place; the step
+              // guard has to agree, or Continue carries an unusable figure into the
+              // key step and the wizard fails at the very end instead.
+              if (balanceInvalid(provider.default_key_balance)) {
+                setError(providerBalanceError(provider.default_key_balance));
                 return;
               }
               setStep(1);
@@ -2305,11 +2415,18 @@ function ProviderFields({ value, onChange, existingKeys }: { value: ProviderDraf
         </label>
         {balanceError && <div id={balanceErrorID}><InlineNotice tone="danger">{balanceError}</InlineNotice></div>}
         {existingKeys !== undefined && existingKeys > 0 && (
+          /* Applying the figure to every key needs a figure. The toggle used to be
+             live-looking but inert while the field above was blank — clicking it did
+             nothing and said nothing. Now it is disabled, and its own description
+             says what to do to make it available. */
           <Toggle
             checked={value.apply_balance_to_existing_keys && value.default_key_balance.trim() !== ""}
+            disabled={value.default_key_balance.trim() === ""}
             onChange={(apply_balance_to_existing_keys) => onChange({ ...value, apply_balance_to_existing_keys })}
             label={`Apply to all ${existingKeys} existing key${existingKeys === 1 ? "" : "s"}`}
-            description="Records a top-up across the whole account: every key's balance becomes this figure and its recorded spend is cleared."
+            description={value.default_key_balance.trim() === ""
+              ? "Enter a balance per key above to use this."
+              : "Records a top-up across the whole account: every key's balance becomes this figure and its recorded spend is cleared."}
           />
         )}
       </fieldset>
@@ -2345,6 +2462,13 @@ function ProviderForm({ provider, onClose, onComplete, notify }: { provider: Pro
       <form
         onSubmit={(event) => {
           event.preventDefault();
+          // The balance field renders its own bound error, but nothing stopped the
+          // submit: a typed "-5" was sent, and the server's rejection came back as
+          // a toast that said less than the message already on screen.
+          if (balanceInvalid(draft.default_key_balance)) {
+            notify(providerBalanceError(draft.default_key_balance), "danger");
+            return;
+          }
           setBusy(true);
           void api(`/api/admin/providers/${provider.id}`, { method: "PUT", json: providerPayload(draft) })
             .then(() => onComplete(`${draft.name} updated.`))
@@ -2477,7 +2601,7 @@ type CredentialInspection = {
   warning?: string;
 };
 
-function CredentialForm({ provider, credential, onClose, onComplete, notify }: { provider: Provider; credential?: Credential; onClose: () => void; onComplete: (message: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
+function CredentialForm({ provider, credential, onClose, onComplete, onRefresh, notify }: { provider: Provider; credential?: Credential; onClose: () => void; onComplete: (message: string) => void; onRefresh: () => void; notify: (message: string, tone?: "success" | "danger") => void }) {
   const ask = useConfirm();
   const [label, setLabel] = useState(credential?.label ?? "");
   const [secret, setSecret] = useState("");
@@ -2502,6 +2626,10 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
   const [deleting, setDeleting] = useState(false);
   const [labelTouched, setLabelTouched] = useState(false);
   const [secretTouched, setSecretTouched] = useState(false);
+  // Saving the model limit is its own request, separate from the panel's Save.
+  // Both buttons used to call onComplete, which closes the panel — so saving a
+  // model limit threw away every other edit in the form without saying so.
+  const [limitBusy, setLimitBusy] = useState<"save" | "clear" | null>(null);
   const fieldID = useId();
 
   useEffect(() => {
@@ -2712,9 +2840,46 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
           <p className="fieldset-note">Leave this unset to use only the shared key limit. When set, both shared and model limits must have capacity.</p>
           <label className="field"><span>Model route</span><select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)}>{provider.models.map((model) => <option key={model.id} value={model.id}>{model.public_alias}</option>)}</select></label>
           <RateFields value={modelLimits} onChange={setModelLimits} compact />
+          {/* These two save and clear one model's limit on this key and nothing
+              else, so they stay in the panel: the operator may have a replacement
+              key typed above, and closing would discard it. */}
           <div className="button-row">
-            <Button type="button" variant="quiet" onClick={() => void api(`/api/admin/credentials/${credential.id}/model-limits/${selectedModel}`, { method: "PUT", json: modelLimits }).then(() => onComplete("Model limit saved on 1 API key.")).catch((caught) => notify(errorMessage(caught), "danger"))}>Save model limit</Button>
-            {credential.model_limits[selectedModel] && <Button type="button" variant="quiet" onClick={() => void api(`/api/admin/credentials/${credential.id}/model-limits/${selectedModel}`, { method: "DELETE" }).then(() => onComplete("Shared limit in use on 1 API key.")).catch((caught) => notify(errorMessage(caught), "danger"))}>Use shared limit</Button>}
+            <Button
+              type="button"
+              variant="quiet"
+              disabled={limitBusy !== null}
+              onClick={() => {
+                setLimitBusy("save");
+                void api(`/api/admin/credentials/${credential.id}/model-limits/${selectedModel}`, { method: "PUT", json: modelLimits })
+                  .then(() => {
+                    notify(`Model limit saved on ${credential.label}.`);
+                    onRefresh();
+                  })
+                  .catch((caught) => notify(errorMessage(caught), "danger"))
+                  .finally(() => setLimitBusy(null));
+              }}
+            >
+              {limitBusy === "save" ? "Saving…" : "Save model limit"}
+            </Button>
+            {credential.model_limits[selectedModel] && (
+              <Button
+                type="button"
+                variant="quiet"
+                disabled={limitBusy !== null}
+                onClick={() => {
+                  setLimitBusy("clear");
+                  void api(`/api/admin/credentials/${credential.id}/model-limits/${selectedModel}`, { method: "DELETE" })
+                    .then(() => {
+                      notify(`${credential.label} is back on the shared key limit for this route.`);
+                      onRefresh();
+                    })
+                    .catch((caught) => notify(errorMessage(caught), "danger"))
+                    .finally(() => setLimitBusy(null));
+                }}
+              >
+                {limitBusy === "clear" ? "Clearing…" : "Use shared limit"}
+              </Button>
+            )}
           </div>
         </fieldset>
       )}
@@ -2909,6 +3074,14 @@ function ModelCatalog({
   const selectedCount = Object.keys(selected).length;
   const selectedVisibleCount = selectable.filter((model) => selected[model.id] !== undefined).length;
   const allVisibleSelected = selectable.length > 0 && selectedVisibleCount === selectable.length;
+  const manualNoteID = useId();
+  const manualModelNote = (() => {
+    const typed = manualModel.trim();
+    if (!typed) return "";
+    if (existingIDs.has(typed)) return "This model is already routed on this provider.";
+    if (selected[typed] !== undefined) return "This model is already in the selection below.";
+    return "";
+  })();
   const toggleVisible = (checked: boolean) => {
     const next = { ...selected };
     for (const model of selectable) {
@@ -2938,13 +3111,28 @@ function ModelCatalog({
         </span>
       </label>
       <div className="manual-model-entry">
-        <label className="field"><span>Manual model ID <small>Use this when the provider does not expose a model catalog</small></span><input value={manualModel} onChange={(event) => setManualModel(event.target.value)} placeholder="claude-model-id" /></label>
-        <Button type="button" variant="quiet" disabled={!manualModel.trim() || existingIDs.has(manualModel.trim())} onClick={() => {
+        {/* A typed id that is already routed, or already in the selection, used to
+            leave the button dead with nothing said. The note states which of the two
+            it is, and is bound to the input so it is announced too. It sits below
+            both controls rather than inside the label, so appearing does not push
+            the button out of line with the field. */}
+        <label className="field">
+          <span>Manual model ID <small>Use this when the provider does not expose a model catalog</small></span>
+          <input
+            value={manualModel}
+            onChange={(event) => setManualModel(event.target.value)}
+            placeholder="claude-model-id"
+            aria-invalid={manualModelNote ? true : undefined}
+            aria-describedby={manualModelNote ? manualNoteID : undefined}
+          />
+        </label>
+        <Button type="button" variant="quiet" disabled={!manualModel.trim() || Boolean(manualModelNote)} onClick={() => {
           const upstream = manualModel.trim();
           if (!upstream) return;
           onChange({ ...selected, [upstream]: defaultPublicAlias(provider.slug, upstream, routingMode) });
           setManualModel("");
         }}><Plus size={14} aria-hidden="true" /> Add model ID</Button>
+        {manualModelNote && <small className="field-error manual-model-entry__note" id={manualNoteID}>{manualModelNote}</small>}
       </div>
       <div className="model-catalog__list">
         {visible.map((model) => {
@@ -3019,28 +3207,49 @@ function ModelsPage({
   const [probeResults, setProbeResults] = useState<Record<string, ModelProbeResult>>({});
   const [probeProgress, setProbeProgress] = useState({ completed: 0, total: 0, passed: 0, blocked: 0, failed: 0 });
   const [bulkChecking, setBulkChecking] = useState(false);
+  // What the live region says, as opposed to the counter the eye reads. A sweep of
+  // two hundred routes announced every single one; this speaks at quarters.
+  const [sweepNote, setSweepNote] = useState("");
+  // A sweep issues one request per route and there is no way to abort them all, so
+  // it is stopped between routes: the loop checks this before taking the next one.
+  const stopSweep = useRef(false);
+  // Set false on unmount so the sweep stops writing to state and raising toasts for
+  // a page the operator has already left.
+  const mounted = useRef(true);
+  useEffect(() => () => {
+    mounted.current = false;
+    stopSweep.current = true;
+  }, []);
   const [deletingFailed, setDeletingFailed] = useState(false);
   const [rechecking, setRechecking] = useState(false);
   const [deletingRoute, setDeletingRoute] = useState(false);
   const [selectedID, setSelectedID] = useState(() => new URLSearchParams(location.search).get("model") || "");
   const routingMode = useRoutingMode();
+  // Loads are versioned so a slow reply cannot overwrite a newer one. A route
+  // deleted from the inspector triggers an immediate reload while a background one
+  // is still in flight; without this the older list wins and the deleted route is
+  // back on screen and re-selected.
+  const generation = useRef(0);
   // Only the first load blanks the page. A reload after a probe or a delete keeps
   // the list and the open inspector in place, because replacing the workbench
   // with a skeleton throws away the operator's position mid-task.
   const load = useCallback(async (background = false) => {
+    const mine = ++generation.current;
     if (!background) setLoading(true);
     try {
       const result = await api<{ providers: Provider[] }>("/api/admin/providers");
+      if (mine !== generation.current) return;
       const normalized = normalizeProviders(result.providers);
       setProviders(normalized);
       setError("");
       const available = normalized.flatMap((provider) => provider.models);
       setSelectedID((current) => available.some((model) => model.id === current) ? current : available[0]?.id || "");
     } catch (caught) {
+      if (mine !== generation.current) return;
       setError(errorMessage(caught));
       if (!background) notify(errorMessage(caught), "danger");
     } finally {
-      setLoading(false);
+      if (mine === generation.current) setLoading(false);
     }
   }, [notify]);
   const reload = useCallback(() => load(true), [load]);
@@ -3079,35 +3288,56 @@ function ModelsPage({
       : { state: "blocked" as const, error: "waiting for a healthy API key" }])));
     setProbeProgress({ completed: blockedModels.length, total: models.length, passed: 0, blocked: blockedModels.length, failed: 0 });
     setBulkChecking(true);
+    stopSweep.current = false;
+    setSweepNote(`Checking ${targets.length} model route${targets.length === 1 ? "" : "s"}.`);
     let cursor = 0;
     let completed = 0;
     let passed = 0;
     let blocked = blockedModels.length;
     let failed = 0;
+    // One announcement per probed model is 200 announcements on a real install,
+    // which is a screen reader talking over itself for a minute. The readout keeps
+    // ticking for the eye; the live region speaks at quarters and at the end.
+    const milestone = Math.max(1, Math.ceil(targets.length / 4));
     const worker = async () => {
       while (cursor < targets.length) {
+        if (stopSweep.current || !mounted.current) return;
         const model = targets[cursor++];
         try {
           await api(`/api/admin/models/${model.id}/probe`, { method: "POST" });
           passed++;
-          setProbeResults((current) => ({ ...current, [model.id]: { state: "passed" } }));
+          if (mounted.current) setProbeResults((current) => ({ ...current, [model.id]: { state: "passed" } }));
         } catch (caught) {
           if (caught instanceof APIError && caught.code === "model_probe_blocked") {
             blocked++;
-            setProbeResults((current) => ({ ...current, [model.id]: { state: "blocked", error: errorMessage(caught) } }));
+            if (mounted.current) setProbeResults((current) => ({ ...current, [model.id]: { state: "blocked", error: errorMessage(caught) } }));
           } else {
             failed++;
-            setProbeResults((current) => ({ ...current, [model.id]: { state: "failed", error: errorMessage(caught) } }));
+            if (mounted.current) setProbeResults((current) => ({ ...current, [model.id]: { state: "failed", error: errorMessage(caught) } }));
           }
         } finally {
           completed++;
-          setProbeProgress({ completed: completed + blockedModels.length, total: models.length, passed, blocked, failed });
+          if (mounted.current) {
+            setProbeProgress({ completed: completed + blockedModels.length, total: models.length, passed, blocked, failed });
+            if (completed % milestone === 0 && completed < targets.length) {
+              setSweepNote(`${completed} of ${targets.length} checked.`);
+            }
+          }
         }
       }
     };
     await worker();
+    // The page can be left while a sweep of two hundred routes is running, and
+    // every write after that point is against a component that is gone.
+    if (!mounted.current) return;
     setBulkChecking(false);
-    notify(`${passed} model${passed === 1 ? "" : "s"} live · ${blocked} waiting for keys${failed ? ` · ${failed} unavailable` : ""}.`, failed ? "danger" : "success");
+    const stopped = stopSweep.current;
+    const summary = `${passed} model${passed === 1 ? "" : "s"} live · ${blocked} waiting for keys${failed ? ` · ${failed} unavailable` : ""}.`;
+    setSweepNote(stopped ? `Stopped after ${completed} of ${targets.length}. ${summary}` : summary);
+    notify(
+      stopped ? `Check stopped after ${completed} of ${targets.length} routes. ${summary}` : summary,
+      failed ? "danger" : "success"
+    );
     await load(true);
   };
 
@@ -3173,16 +3403,26 @@ function ModelsPage({
               <label><span className="sr-only">Provider</span><select value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)}><option value="">All providers</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
             </div>
             <section className={`model-sweep${bulkChecking ? " is-running" : ""}`}>
-              <div className="model-sweep__readout" aria-live="polite">
+              {/* The counter is for the eye and changes once per route, so it is
+                  hidden from the live region; the region carries the milestone
+                  sentence instead. */}
+              <div className="model-sweep__readout" aria-hidden="true">
                 <span>Live model sweep</span>
                 <strong>{bulkChecking ? `${probeProgress.completed}/${probeProgress.total} checked` : probeProgress.total ? `${probeProgress.passed} live · ${probeProgress.blocked} waiting${probeProgress.failed ? ` · ${probeProgress.failed} unavailable` : ""}` : `${models.filter((model) => healthyKeyCount(model) > 0).length} routes ready · ${models.filter((model) => healthyKeyCount(model) === 0).length} waiting for keys`}</strong>
               </div>
+              <p className="sr-only" role="status" aria-live="polite">{sweepNote}</p>
               <div className="model-sweep__track" role="progressbar" aria-label="Model check progress" aria-valuemin={0} aria-valuemax={probeProgress.total || models.length} aria-valuenow={probeProgress.completed}>
                 <span style={{ width: `${probeProgress.total ? (probeProgress.completed / probeProgress.total) * 100 : 0}%` }} />
               </div>
               <div className="button-row">
                 {failedProbeIDs.length > 0 && <Button variant="danger" disabled={bulkChecking || deletingFailed} onClick={() => void deleteFailedModels()}><Trash2 size={13} aria-hidden="true" /> {deletingFailed ? "Deleting…" : `Delete ${failedProbeIDs.length} failed route${failedProbeIDs.length === 1 ? "" : "s"}`}</Button>}
-                <Button variant="quiet" disabled={bulkChecking || deletingFailed} onClick={() => void checkAllModels()}><Activity size={13} aria-hidden="true" /> {bulkChecking ? "Checking all…" : "Check all models"}</Button>
+                {/* A sweep of every route takes minutes and used to have no way out
+                    but a page reload, which threw away the results already in. */}
+                {bulkChecking ? (
+                  <Button variant="quiet" onClick={() => { stopSweep.current = true; }}>Stop checking</Button>
+                ) : (
+                  <Button variant="quiet" disabled={deletingFailed} onClick={() => void checkAllModels()}><Activity size={13} aria-hidden="true" /> Check all models</Button>
+                )}
               </div>
             </section>
             {/* Column labels for the eye only: each row below is a button, not a
@@ -3389,6 +3629,12 @@ function LogsPage() {
   const [attemptsOpen, setAttemptsOpen] = useState(false);
   const [bodiesOpen, setBodiesOpen] = useState(false);
   const [logInspectorOpen, setLogInspectorOpen] = useState(false);
+  // The list is the newest 100 rows and it reloads every two seconds, so on a busy
+  // gateway the request being read scrolls out of the window while it is open. The
+  // inspector used to close itself at that moment, mid-sentence. It now keeps the
+  // last copy of the record it was showing and says the row has left the list, so
+  // reading a failure is not a race against traffic.
+  const [detached, setDetached] = useState<RequestLog | null>(null);
   // Below 900px the inspector covers the log list, so it behaves as an overlay:
   // focus moves in, Tab stays inside, Escape closes, focus returns to the row.
   const inspectorFloating = useMediaQuery("(max-width: 900px)");
@@ -3421,7 +3667,6 @@ function LogsPage() {
       }));
       setLogs(normalized);
       setError("");
-      setSelectedID((current) => (current && normalized.some((log) => log.id === current) ? current : null));
     } catch (caught) {
       if (mine !== generation.current) return;
       setError(errorMessage(caught));
@@ -3436,6 +3681,14 @@ function LogsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+  // Changing a filter is a request for a different list, so the open request is let
+  // go rather than held as one that aged out — it did not age out, it stopped
+  // matching what was asked for.
+  useEffect(() => {
+    setSelectedID(null);
+    setDetached(null);
+    setLogInspectorOpen(false);
+  }, [debouncedQuery, status]);
   useEffect(() => {
     const timer = window.setInterval(() => void loadRef.current(true), 2000);
     return () => {
@@ -3443,7 +3696,15 @@ function LogsPage() {
       generation.current += 1;
     };
   }, []);
-  const selected = useMemo(() => logs.find((log) => log.id === selectedID) ?? null, [logs, selectedID]);
+  const listed = useMemo(() => logs.find((log) => log.id === selectedID) ?? null, [logs, selectedID]);
+  // A row that aged out is still shown, from the copy kept when it was last in the
+  // list. `detached` is only consulted for the id currently selected, so it cannot
+  // resurrect a previous selection.
+  const selected = listed ?? (detached && detached.id === selectedID ? detached : null);
+  const agedOut = selected !== null && listed === null;
+  useEffect(() => {
+    if (listed) setDetached(listed);
+  }, [listed]);
   useEffect(() => {
     const params = new URLSearchParams();
     if (query) params.set("q", query);
@@ -3505,12 +3766,13 @@ function LogsPage() {
             ) : logs.length === 0 ? (
               query || status ? (
                 <EmptyState
+                  level={2}
                   title="No requests match these filters"
                   description="Nothing in the retained window matches the search or status you picked."
                   action={<Button variant="quiet" onClick={() => { setQuery(""); setStatus(""); }}>Clear filters</Button>}
                 />
               ) : (
-                <EmptyState title="No requests yet" description="Send a request through /v1 and it appears here within two seconds." />
+                <EmptyState level={2} title="No requests yet" description="Send a request through /v1 and it appears here within two seconds." />
               )
             ) : logs.map((log) => (
               <button
@@ -3548,6 +3810,11 @@ function LogsPage() {
               <div role="listitem"><span>Latency</span><strong>{selected.latency_ms} ms</strong></div>
               <div role="listitem"><span>Tokens</span><strong title={`${selected.input_tokens} input · ${selected.output_tokens} output`}>{formatCompact(selected.input_tokens)} in · {formatCompact(selected.output_tokens)} out</strong></div>
             </div>
+            {agedOut && (
+              <InlineNotice>
+                This request has scrolled out of the newest 100, so it is no longer in the list. What is shown here is the last reading of it.
+              </InlineNotice>
+            )}
             {selected.running ? <InlineNotice>Request is running. This inspector will switch to the final status automatically.</InlineNotice> : selected.status_code >= 400 && <LogDiagnosis log={selected} />}
             <section className={`inspector-disclosure log-disclosure${attemptsOpen ? " is-open" : ""}`}>
               <button type="button" onClick={() => setAttemptsOpen((current) => !current)} aria-expanded={attemptsOpen}><ChevronDown size={14} aria-hidden="true" /><span><strong>Routing attempts</strong><small>{selected.attempts.length} recorded</small></span></button>

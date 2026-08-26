@@ -290,15 +290,19 @@ export function Toggle({
   checked,
   onChange,
   label,
-  description
+  description,
+  disabled = false
 }: {
   checked: boolean;
   onChange: (next: boolean) => void;
   label: string;
   description?: string;
+  /** A toggle that cannot act yet says so, rather than silently refusing to move.
+   * Use `description` to state what would make it available. */
+  disabled?: boolean;
 }) {
   return (
-    <label className="toggle-row">
+    <label className={`toggle-row ${disabled ? "is-disabled" : ""}`}>
       <span>
         <strong>{label}</strong>
         {description && <small>{description}</small>}
@@ -307,6 +311,7 @@ export function Toggle({
         className="toggle-input"
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.checked)}
       />
     </label>

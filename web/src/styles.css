@@ -1247,6 +1247,22 @@ fieldset legend {
   transform: translateX(16px);
 }
 
+/* A toggle that is not available yet reads as unavailable — the label dims with the
+   control, so the pair is never a live-looking switch that refuses to move. Its
+   description says what would make it available. */
+.toggle-row.is-disabled {
+  cursor: default;
+}
+
+.toggle-row.is-disabled strong {
+  color: var(--text-muted);
+}
+
+.toggle-input:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
 fieldset {
   display: grid;
   gap: var(--space-6);
@@ -2012,15 +2028,35 @@ fieldset legend {
   height: 16px;
 }
 
-/* The toast is the only thing in the console that genuinely floats over the
-   page, so it is the only thing that carries the float shadow. */
-.toast {
+/* Notifications are anchored once, here, rather than each one pinning itself to the
+   same corner — which is what kept the console to a single visible message. The dock
+   is the fixed element and the two live regions inside it are ordinary blocks, so
+   messages stack in the corner while errors and confirmations keep the separate
+   aria-live wrappers they need. pointer-events are off on the empty dock so it never
+   swallows a click on the page underneath it, and back on for each message so its
+   dismiss button still works. */
+.toast-dock {
   position: fixed;
   z-index: 70;
   right: 22px;
   bottom: 22px;
   display: flex;
   max-width: min(420px, calc(100vw - 44px));
+  flex-direction: column;
+  gap: var(--space-4);
+  pointer-events: none;
+}
+
+.toast-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* The toast is the only thing in the console that genuinely floats over the
+   page, so it is the only thing that carries the float shadow. */
+.toast {
+  display: flex;
   align-items: center;
   gap: var(--space-4);
   padding: var(--space-5);
@@ -2030,6 +2066,15 @@ fieldset legend {
   border-left: 3px solid var(--live);
   box-shadow: var(--lift-float);
   font-size: var(--text-mini);
+  pointer-events: auto;
+  animation: toast-in var(--dur-state) var(--ease);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
 }
 
 .toast--danger {
@@ -2089,6 +2134,19 @@ fieldset legend {
   font-size: var(--text-mini);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* The stack is kept but folded away: the operator needs the way out of the failure
+   before they need the text to report it. */
+.crash-panel details {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.crash-panel summary {
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: var(--text-mini);
 }
 
 .page-skeleton {
@@ -2628,7 +2686,7 @@ fieldset legend {
     font-size: var(--text-2xl);
   }
 
-  .toast {
+  .toast-dock {
     right: 14px;
     bottom: 14px;
     max-width: calc(100vw - 28px);
