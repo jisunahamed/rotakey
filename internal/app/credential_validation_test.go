@@ -280,3 +280,100 @@ func TestRetryModelProbeWithAnotherCredential(t *testing.T) {
 		}
 	}
 }
+
+// TestProbeCorrectsNativeResponsesClaim covers the misconfiguration behind the
+// gateway's 404 loop: a route marked "Responses natively" against an
+// OpenAI-compatible provider that only implements Chat Completions. The probe
+// has to discover that and clear the flag, so /v1/responses traffic is
+// translated from the first request rather than failing once per call.
+func TestProbeCorrectsNativeResponsesClaim(t *testing.T) {
+	var sawResponsesProbe bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/chat/completions":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"a"}}]}`))
+		case "/v1/responses":
+			sawResponsesProbe = true
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte("404 page not found"))
+		default:
+			t.Fatalf("unexpected probe path %q", r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+
+	provider := Provider{
+		BaseURL: upstream.URL + "/v1", APIFormat: "openai", AuthHeader: "Authorization",
+		AuthScheme: "Bearer", TimeoutSeconds: 60, AllowPrivateNetwork: true,
+	}
+	input := modelInput{UpstreamModel: "nvidia/llama-3.3-nemotron-super-49b-v1.5", SupportsChat: true, SupportsResponses: true}
+	status, profile, _, _, err := probeProviderModelWithSecret(context.Background(), provider, &input, []byte("valid-key"))
+	if err != nil || status != "probe_verified" {
+		t.Fatalf("probe = %q, err = %v", status, err)
+	}
+	if !sawResponsesProbe {
+		t.Fatal("the probe never checked whether /responses exists")
+	}
+	if input.SupportsResponses {
+		t.Fatal("a provider without /responses kept its native Responses claim")
+	}
+	if profile["responses"] != "translated" {
+		t.Fatalf("capability profile responses = %q, want translated", profile["responses"])
+	}
+}
+
+// A provider that does serve /responses must keep the flag: any rejection other
+// than 404 says the endpoint exists and this model or payload was the problem.
+func TestProbeKeepsNativeResponsesWhenEndpointExists(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/chat/completions":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"a"}}]}`))
+		case "/v1/responses":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"max_output_tokens must be at least 16"}}`))
+		default:
+			t.Fatalf("unexpected probe path %q", r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+
+	input := modelInput{UpstreamModel: "gpt-5", SupportsChat: true, SupportsResponses: true}
+	if _, profile, _, _, err := probeProviderModelWithSecret(context.Background(), Provider{
+		BaseURL: upstream.URL + "/v1", APIFormat: "openai", AuthHeader: "Authorization",
+		AuthScheme: "Bearer", TimeoutSeconds: 60, AllowPrivateNetwork: true,
+	}, &input, []byte("valid-key")); err != nil {
+		t.Fatalf("probe: %v", err)
+	} else if profile["responses"] != "native" {
+		t.Fatalf("capability profile responses = %q, want native", profile["responses"])
+	}
+	if !input.SupportsResponses {
+		t.Fatal("a provider serving /responses lost its native claim")
+	}
+}
+
+// A chat-only route is never asked about /responses: nothing would be learned
+// and it costs the operator an extra upstream call per model.
+func TestProbeSkipsResponsesCheckForChatOnlyRoutes(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/responses" {
+			t.Fatal("a chat-only route probed /responses")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"a"}}]}`))
+	}))
+	defer upstream.Close()
+
+	input := modelInput{UpstreamModel: "small-model", SupportsChat: true}
+	if _, _, _, _, err := probeProviderModelWithSecret(context.Background(), Provider{
+		BaseURL: upstream.URL + "/v1", APIFormat: "openai", AuthHeader: "Authorization",
+		AuthScheme: "Bearer", TimeoutSeconds: 60, AllowPrivateNetwork: true,
+	}, &input, []byte("valid-key")); err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if input.SupportsResponses {
+		t.Fatal("a chat-only route gained native Responses")
+	}
+}

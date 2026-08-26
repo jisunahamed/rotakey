@@ -107,6 +107,16 @@ func planTokenCosts(plans map[string]upstreamPlan) map[string]int64 {
 	return costs
 }
 
+// routeModelIDs lists the model routes in a pool, which is the key the
+// compatibility caches are stored under.
+func routeModelIDs(routes []routeRuntime) []string {
+	ids := make([]string, 0, len(routes))
+	for _, route := range routes {
+		ids = append(ids, route.Model.ID)
+	}
+	return ids
+}
+
 // poolRetryTimeout takes the most generous deadline in the pool so a slow but
 // permitted provider is not cut short by a stricter sibling's timeout.
 func poolRetryTimeout(routes []routeRuntime, isStream bool) time.Duration {
@@ -190,7 +200,13 @@ func (s *Server) servePooled(
 		return
 	}
 
-	state := dispatchState{Replaced: map[string]string{}}
+	state := dispatchState{Replaced: map[string]string{}, NativeResponsesUnavailable: map[string]bool{}}
+	if req.PublicMode == messageModeResponses {
+		// A provider that answered 404 at /responses within the last day is not
+		// asked again: the first request already established that the endpoint is
+		// absent, so every later one starts on the Chat translation.
+		state.NativeResponsesUnavailable = s.responsesEndpointMissing(r.Context(), routeModelIDs(routes))
+	}
 	plans, err := s.buildPoolPlans(r.Context(), req, candidates, state)
 	if err != nil {
 		var unsupported unsupportedFeatureError
@@ -280,10 +296,17 @@ func (s *Server) servePooled(
 		}
 		result.ErrorCode, result.ErrorMessage = outcome.ErrorCode, outcome.ErrorMessage
 
-		if len(outcome.LearnedStrip) > 0 || len(outcome.LearnedReplace) > 0 {
+		if len(outcome.LearnedStrip) > 0 || len(outcome.LearnedReplace) > 0 || outcome.NativeResponsesMissing {
 			state.Removed = appendUniqueStrings(state.Removed, outcome.LearnedStrip...)
 			for from, to := range outcome.LearnedReplace {
 				state.Replaced[from] = to
+			}
+			if outcome.NativeResponsesMissing {
+				state.NativeResponsesUnavailable[candidate.Route.Model.ID] = true
+				s.rememberResponsesEndpointMissing(r.Context(), candidate.Route.Model.ID)
+				s.logger.Info("provider has no Responses endpoint; translating to Chat Completions",
+					"request_id", req.RequestID, "model", candidate.Route.Model.PublicAlias,
+					"provider", candidate.Route.Provider.Name)
 			}
 			rebuilt, rebuildErr := s.buildPoolPlans(r.Context(), req, candidates, state)
 			if rebuildErr != nil {
@@ -477,13 +500,29 @@ func (s *Server) runAttempt(
 			}
 		}
 		s.markUpstreamFailure(r.Context(), credential.ID, response.StatusCode, response.Header, errorBody)
-		return s.writeAttemptFailure(w, r, req, response, errorBody, wasTruncated, record, credential, upstreamRequestID)
+		return s.writeAttemptFailure(w, r, req, plan, response, errorBody, wasTruncated, record, credential, upstreamRequestID)
 	}
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		body, wasTruncated, _ := boundedBody(response.Body, minInt64(s.cfg.MaxResponseBytes, 2<<20))
 		_ = response.Body.Close()
 		_ = s.limiter.AdjustTokens(r.Context(), reserved, 0)
+		// A 404 on /responses means the provider does not serve that endpoint at
+		// all: an OpenAI-compatible host that only implements Chat Completions
+		// answers this way for every model, so the route's own configuration is
+		// what is wrong, not the key or the model. Retry the same candidate with
+		// the Chat translation instead of burning the pool on a path that cannot
+		// exist. The credential is left untouched because it never got to fail.
+		if response.StatusCode == http.StatusNotFound && plan.Path == "/responses" && allowCompatibility {
+			record.Error = "responses_endpoint_missing"
+			record.ErrorMessage = "Provider has no Responses endpoint; retried as Chat Completions."
+			record.Retryable = true
+			return attemptOutcome{
+				Record: record, Status: response.StatusCode,
+				UpstreamRequestID: upstreamRequestID, Compatibility: true, ResetSkips: true,
+				NativeResponsesMissing: true,
+			}
+		}
 		s.markUpstreamFailure(r.Context(), credential.ID, response.StatusCode, response.Header, body)
 		if anthropicRetryableStatus(response.StatusCode) {
 			// Nothing has been written yet, so another provider may still serve
@@ -497,7 +536,7 @@ func (s *Server) runAttempt(
 				ResponseBody: body, Truncated: wasTruncated, UpstreamRequestID: upstreamRequestID,
 			}
 		}
-		return s.writeAttemptFailure(w, r, req, response, body, wasTruncated, record, credential, upstreamRequestID)
+		return s.writeAttemptFailure(w, r, req, plan, response, body, wasTruncated, record, credential, upstreamRequestID)
 	}
 
 	s.markCredentialSuccess(r.Context(), credential.ID)
@@ -558,6 +597,7 @@ func (s *Server) writeAttemptFailure(
 	w http.ResponseWriter,
 	r *http.Request,
 	req dispatchRequest,
+	plan upstreamPlan,
 	response *http.Response,
 	body []byte,
 	truncated bool,
@@ -566,7 +606,7 @@ func (s *Server) writeAttemptFailure(
 	upstreamRequestID string,
 ) attemptOutcome {
 	code := upstreamErrorCode(body)
-	message := upstreamErrorMessage(body, credential.Secret)
+	message := upstreamFailureMessage(response.StatusCode, plan.Path, upstreamErrorMessage(body, credential.Secret))
 	record.Error, record.ErrorMessage, record.Retryable = code, message, false
 	copyResponseHeaders(w, req.PublicMode, response.Header)
 	sameProtocol := (req.PublicMode == messageModeAnthropic) == (upstreamProtocolIsAnthropic(response))
@@ -581,6 +621,28 @@ func (s *Server) writeAttemptFailure(
 		Done: true, Record: record, Status: response.StatusCode,
 		ErrorCode: code, ErrorMessage: message, ResponseBody: body, Truncated: truncated,
 		UpstreamRequestID: upstreamRequestID,
+	}
+}
+
+// upstreamFailureMessage keeps the provider's own words when it sent any, and
+// otherwise says what the status means for this endpoint. A bare "404 page not
+// found" is the common answer from an OpenAI-compatible host that does not serve
+// the path the route asked for, and it carries no JSON message to forward, so
+// without this the console can only report "upstream_error".
+func upstreamFailureMessage(status int, path, message string) string {
+	if message != "" {
+		return message
+	}
+	if status != http.StatusNotFound {
+		return ""
+	}
+	switch path {
+	case "/responses":
+		return "The provider has no Responses endpoint at this base URL. Turn off \"Upstream supports Responses natively\" for this route, or correct the provider base URL."
+	case "/messages":
+		return "The provider has no Messages endpoint at this base URL. Check the provider base URL and API format."
+	default:
+		return "The provider does not serve this model at " + path + ". Check the upstream model ID and the provider base URL."
 	}
 }
 

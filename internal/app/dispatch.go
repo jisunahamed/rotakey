@@ -30,6 +30,11 @@ type dispatchRequest struct {
 type dispatchState struct {
 	Removed  []string
 	Replaced map[string]string
+	// NativeResponsesUnavailable holds the model IDs whose provider answered 404
+	// at /responses during this request. A provider that never implemented the
+	// endpoint rejects every model the same way, so the retry translates to Chat
+	// Completions instead of asking a second time.
+	NativeResponsesUnavailable map[string]bool
 }
 
 // upstreamPlan is one candidate's translated view of the public request.
@@ -69,6 +74,10 @@ type attemptOutcome struct {
 	// ResetSkips clears the per-request skip set, because a request-shape
 	// failure is not the credential's fault.
 	ResetSkips bool
+	// NativeResponsesMissing reports that this candidate's provider has no
+	// /responses endpoint, so every later plan for that model translates to Chat
+	// Completions.
+	NativeResponsesMissing bool
 	// Compatibility marks that this attempt consumed a compatibility retry.
 	Compatibility bool
 }
@@ -106,7 +115,7 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 		}
 		plan.Path = "/chat/completions"
 		plan.Translated = true
-	case req.PublicMode == messageModeResponses && route.Model.SupportsResponses:
+	case req.PublicMode == messageModeResponses && servesNativeResponses(route, state):
 		plan.Path = "/responses"
 	case req.PublicMode == messageModeResponses:
 		if payload, err = translateResponsesRequest(payload); err != nil {
@@ -147,6 +156,14 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 		return upstreamPlan{}, err
 	}
 	return plan, nil
+}
+
+// servesNativeResponses reports whether a request may be sent to the provider's
+// own /responses endpoint. A route configured for native Responses against a
+// provider that has since answered 404 there is translated to Chat Completions
+// instead, because asking again can only fail the same way.
+func servesNativeResponses(route routeRuntime, state dispatchState) bool {
+	return route.Model.SupportsResponses && !state.NativeResponsesUnavailable[route.Model.ID]
 }
 
 // wireEndpoint names the upstream endpoint for compatibility learning, which is

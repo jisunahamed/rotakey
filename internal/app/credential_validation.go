@@ -719,6 +719,13 @@ func probeProviderModelWithSecret(ctx context.Context, provider Provider, input 
 			}
 		}
 		now := time.Now().UTC()
+		if native, checked := probeNativeResponses(probeContext, provider, input, secret, path); checked {
+			// The chat probe passed, so a 404 here is the endpoint's absence rather
+			// than a bad model or key: most OpenAI-compatible hosts implement only
+			// Chat Completions. Recording that now means /v1/responses traffic is
+			// translated from the first request instead of failing once per route.
+			input.SupportsResponses = native
+		}
 		profile := modelCapabilityProfile(provider, input, "probe")
 		return "probe_verified", profile, &now, response.StatusCode, nil
 	}
@@ -726,7 +733,46 @@ func probeProviderModelWithSecret(ctx context.Context, provider Provider, input 
 	if message == "" {
 		message = fmt.Sprintf("provider returned HTTP %d", response.StatusCode)
 	}
+	if response.StatusCode == http.StatusNotFound && path == "/responses" {
+		return "failed", nil, nil, response.StatusCode, fmt.Errorf(
+			"provider has no %s endpoint at this base URL; turn on Chat Completions for this route or correct the base URL. Provider said: %s",
+			strings.TrimPrefix(path, "/"), message)
+	}
 	return "failed", nil, nil, response.StatusCode, fmt.Errorf("model capability probe failed: %s", message)
+}
+
+// probeNativeResponses checks whether an OpenAI-compatible provider really
+// serves /responses for a route that claims it does. It reports the verified
+// value and whether the check ran at all; the caller keeps the configured flag
+// when it did not.
+func probeNativeResponses(ctx context.Context, provider Provider, input *modelInput, secret []byte, probedPath string) (bool, bool) {
+	if provider.APIFormat == "anthropic" || !input.SupportsResponses || probedPath == "/responses" {
+		return false, false
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"model":             upstreamModelForProvider(provider, input.UpstreamModel),
+		"input":             "Reply with one character.",
+		"max_output_tokens": 1,
+	})
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimRight(provider.BaseURL, "/")+"/responses", strings.NewReader(string(payload)))
+	if err != nil {
+		return false, false
+	}
+	applyProviderHeaders(request, provider, secret)
+	client, err := upstreamClient(provider)
+	if err != nil {
+		return false, false
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return false, false
+	}
+	defer response.Body.Close()
+	_, _, _ = boundedBody(response.Body, 1<<20)
+	// Only an outright 404 disproves the endpoint. Any other rejection — a bad
+	// parameter, a quota, a per-model restriction — says the endpoint exists.
+	return response.StatusCode != http.StatusNotFound, true
 }
 
 func modelProbeTimeout(provider Provider) time.Duration {

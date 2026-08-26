@@ -619,6 +619,9 @@ func (s *Server) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "model_update_failed", "Model could not be updated.")
 		return
 	}
+	// The route may have been edited precisely to fix a wrong base URL or to turn
+	// native Responses off, so the learned 404 must not outlive the edit.
+	s.forgetResponsesEndpointMissing(r.Context(), r.PathValue("id"))
 	s.audit(r.Context(), adminIDFromContext(r.Context()), "model.update", "model", r.PathValue("id"), map[string]any{"alias": input.PublicAlias})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -662,6 +665,9 @@ func (s *Server) handleProbeModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "model_probe_save_failed", "Capability result could not be saved.")
 		return
 	}
+	// The probe has just measured the endpoint directly, so its answer replaces
+	// whatever a past request learned.
+	s.forgetResponsesEndpointMissing(r.Context(), r.PathValue("id"))
 	s.audit(r.Context(), adminIDFromContext(r.Context()), "model.probe", "model", r.PathValue("id"), map[string]any{"status": status})
 	writeJSON(w, http.StatusOK, map[string]any{"capability_status": status, "capability_profile": profile, "checked_at": checkedAt})
 }

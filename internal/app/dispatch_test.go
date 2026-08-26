@@ -2,6 +2,8 @@ package app
 
 import (
 	"encoding/json"
+	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -117,5 +119,89 @@ func TestWireEndpointIsKeyedByUpstreamShape(t *testing.T) {
 		if got := (upstreamPlan{Path: path}).wireEndpoint(); got != "chat" {
 			t.Fatalf("wire endpoint for %s = %q, want chat", path, got)
 		}
+	}
+}
+
+// TestNativeResponsesFallsBackAfterEndpointMissing is the guard for an
+// OpenAI-compatible provider that publishes a model catalog but implements only
+// Chat Completions: the first /v1/responses call learns the endpoint is absent
+// and every later plan for that route translates instead of repeating the 404.
+func TestNativeResponsesFallsBackAfterEndpointMissing(t *testing.T) {
+	route := routeRuntime{
+		Model:    ModelRoute{ID: "mdl_1", SupportsChat: true, SupportsResponses: true},
+		Provider: Provider{APIFormat: "openai"},
+	}
+	fresh := dispatchState{NativeResponsesUnavailable: map[string]bool{}}
+	if !servesNativeResponses(route, fresh) {
+		t.Fatal("a route configured for native Responses was translated on the first attempt")
+	}
+	learned := dispatchState{NativeResponsesUnavailable: map[string]bool{"mdl_1": true}}
+	if servesNativeResponses(route, learned) {
+		t.Fatal("a provider that answered 404 at /responses was asked a second time")
+	}
+	// The flag is per route, so one provider's missing endpoint must not divert
+	// another provider in the same pool.
+	sibling := routeRuntime{
+		Model:    ModelRoute{ID: "mdl_2", SupportsChat: true, SupportsResponses: true},
+		Provider: Provider{APIFormat: "openai"},
+	}
+	if !servesNativeResponses(sibling, learned) {
+		t.Fatal("another route in the pool lost native Responses")
+	}
+	chatOnly := routeRuntime{
+		Model:    ModelRoute{ID: "mdl_3", SupportsChat: true},
+		Provider: Provider{APIFormat: "openai"},
+	}
+	if servesNativeResponses(chatOnly, fresh) {
+		t.Fatal("a chat-only route was sent to /responses")
+	}
+}
+
+func TestResponsesMissingKeyIsScopedToTheRoute(t *testing.T) {
+	if got := responsesMissingKey("mdl_1"); got != "compatibility:no-responses:mdl_1" {
+		t.Fatalf("responses cache key = %q", got)
+	}
+	if responsesMissingKey("mdl_1") == responsesMissingKey("mdl_2") {
+		t.Fatal("two routes share one responses cache key")
+	}
+}
+
+func TestRouteModelIDsListsThePool(t *testing.T) {
+	ids := routeModelIDs([]routeRuntime{
+		{Model: ModelRoute{ID: "mdl_1"}},
+		{Model: ModelRoute{ID: "mdl_2"}},
+	})
+	if len(ids) != 2 || ids[0] != "mdl_1" || ids[1] != "mdl_2" {
+		t.Fatalf("pool model IDs = %v", ids)
+	}
+	if got := routeModelIDs(nil); len(got) != 0 {
+		t.Fatalf("empty pool = %v", got)
+	}
+}
+
+// TestUpstreamFailureMessageExplainsABarePathNotFound guards the operator-facing
+// text for a provider that answers a plain-text "404 page not found": there is no
+// JSON message to forward, so without this the console could only ever show
+// "upstream_error" with no hint at what to change.
+func TestUpstreamFailureMessageExplainsABarePathNotFound(t *testing.T) {
+	// The provider's own words always win.
+	if got := upstreamFailureMessage(http.StatusNotFound, "/responses", "model not found"); got != "model not found" {
+		t.Fatalf("provider message was replaced: %q", got)
+	}
+	// A silent non-404 has nothing endpoint-specific to say.
+	if got := upstreamFailureMessage(http.StatusForbidden, "/chat/completions", ""); got != "" {
+		t.Fatalf("non-404 invented a message: %q", got)
+	}
+	responses := upstreamFailureMessage(http.StatusNotFound, "/responses", "")
+	if !strings.Contains(responses, "Responses endpoint") {
+		t.Fatalf("responses 404 message = %q", responses)
+	}
+	messages := upstreamFailureMessage(http.StatusNotFound, "/messages", "")
+	if !strings.Contains(messages, "Messages endpoint") {
+		t.Fatalf("messages 404 message = %q", messages)
+	}
+	chat := upstreamFailureMessage(http.StatusNotFound, "/chat/completions", "")
+	if !strings.Contains(chat, "/chat/completions") {
+		t.Fatalf("chat 404 message = %q", chat)
 	}
 }

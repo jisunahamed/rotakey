@@ -527,6 +527,38 @@ func compatibilityReplaceKey(modelID, endpoint string) string {
 	return "compatibility:replace:" + modelID + ":" + endpoint
 }
 
+func responsesMissingKey(modelID string) string {
+	return "compatibility:no-responses:" + modelID
+}
+
+// responsesEndpointMissing reports whether this route's provider has already
+// answered 404 at /responses. The flag is remembered so the very first request
+// pays the wasted round trip and later ones go straight to the translation.
+func (s *Server) responsesEndpointMissing(ctx context.Context, modelIDs []string) map[string]bool {
+	missing := make(map[string]bool, len(modelIDs))
+	for _, modelID := range modelIDs {
+		if found, err := s.redis.Exists(ctx, responsesMissingKey(modelID)).Result(); err == nil && found > 0 {
+			missing[modelID] = true
+		}
+	}
+	return missing
+}
+
+func (s *Server) rememberResponsesEndpointMissing(ctx context.Context, modelID string) {
+	if err := s.redis.Set(ctx, responsesMissingKey(modelID), "404", adaptiveCompatibilityTTL).Err(); err != nil {
+		s.logger.Warn("responses endpoint cache write failed", "model_id", modelID, "error", err)
+	}
+}
+
+// forgetResponsesEndpointMissing drops the learned 404 so a route that has just
+// been edited or re-probed is trusted again. Without this a corrected base URL
+// would keep translating to Chat Completions until the cache expired.
+func (s *Server) forgetResponsesEndpointMissing(ctx context.Context, modelID string) {
+	if err := s.redis.Del(ctx, responsesMissingKey(modelID)).Err(); err != nil {
+		s.logger.Warn("responses endpoint cache reset failed", "model_id", modelID, "error", err)
+	}
+}
+
 func (s *Server) learnedCompatibilityParameters(ctx context.Context, modelID string) []string {
 	parameters, err := s.redis.SMembers(ctx, compatibilityStripKey(modelID)).Result()
 	if err != nil {
