@@ -217,3 +217,119 @@ func TestBalanceRoutingDecisionExplainsTheSkip(t *testing.T) {
 		t.Fatalf("decision = %#v", decision)
 	}
 }
+
+// TestBalanceRoutingDecisionNeverSkipsUntrackedKeys guards the opt-in promise of
+// the whole feature: an install that never loads a balance must keep routing even
+// after its keys have run up an arbitrary amount of recorded spend.
+func TestBalanceRoutingDecisionNeverSkipsUntrackedKeys(t *testing.T) {
+	untracked := credentialRuntime{CredentialView: balanceCredential(nil, 9_999)}
+	if decision := balanceRoutingDecision(untracked); decision != nil {
+		t.Fatalf("an untracked key was refused: %#v", decision)
+	}
+}
+
+// TestChargeUnattributedComesOffTheRemainingCredit covers the case where a
+// request ended before a key was picked: the cost still has to leave the
+// provider's remaining figure, or the dashboard shows credit that is gone.
+func TestChargeUnattributedComesOffTheRemainingCredit(t *testing.T) {
+	var totals creditTotals
+	totals.addCredit(credentialCredit(balanceCredential(usd(20), 5)))
+	totals.chargeUnattributed(2.5)
+
+	if totals.UnattributedSpentUSD != 2.5 {
+		t.Fatalf("unattributed spend = %v, want 2.5", totals.UnattributedSpentUSD)
+	}
+	// The pooled cost is folded into SpentUSD as well, which is what lets the
+	// console explain the gap between the keys' own figures and the provider's.
+	if totals.SpentUSD != 7.5 || totals.RemainingUSD != 12.5 {
+		t.Fatalf("totals = %#v, want spent 7.5 and remaining 12.5", totals)
+	}
+	if totals.BalanceUSD != 20 {
+		t.Fatalf("balance = %v, want the loaded credit to be untouched", totals.BalanceUSD)
+	}
+}
+
+// TestChargeUnattributedClampsRemainingAtZero keeps a provider that overspent its
+// pooled credit from reading as negative, which would render as a nonsense
+// balance and break the low-balance ratio.
+func TestChargeUnattributedClampsRemainingAtZero(t *testing.T) {
+	var totals creditTotals
+	totals.addCredit(credentialCredit(balanceCredential(usd(4), 1)))
+	totals.chargeUnattributed(10)
+
+	if totals.RemainingUSD != 0 {
+		t.Fatalf("remaining = %v, want 0 rather than a negative amount", totals.RemainingUSD)
+	}
+	// Spend is not clamped: the operator still needs to see that more was burnt
+	// than was ever loaded.
+	if totals.SpentUSD != 11 || totals.UnattributedSpentUSD != 10 {
+		t.Fatalf("totals = %#v, want spent 11 and unattributed 10", totals)
+	}
+}
+
+// TestChargeUnattributedIgnoresProvidersWithNoTrackedKeys documents that pooled
+// spend is dropped when nobody on the provider tracks a balance, so an install
+// that opted out never sees invented money figures.
+func TestChargeUnattributedIgnoresProvidersWithNoTrackedKeys(t *testing.T) {
+	var totals creditTotals
+	totals.addCredit(credentialCredit(balanceCredential(nil, 50)))
+	totals.chargeUnattributed(3)
+
+	if totals != (creditTotals{}) {
+		t.Fatalf("totals = %#v, want an untouched zero value", totals)
+	}
+}
+
+// TestChargeUnattributedIgnoresNonPositiveAmounts matters because the provider
+// row starts at zero spend, and every provider is charged unconditionally while
+// building the overview.
+func TestChargeUnattributedIgnoresNonPositiveAmounts(t *testing.T) {
+	totals := creditTotals{TrackedKeys: 1, BalanceUSD: 10, SpentUSD: 2, RemainingUSD: 8}
+	totals.chargeUnattributed(0)
+	totals.chargeUnattributed(-5)
+	want := creditTotals{TrackedKeys: 1, BalanceUSD: 10, SpentUSD: 2, RemainingUSD: 8}
+	if totals != want {
+		t.Fatalf("totals = %#v, want %#v", totals, want)
+	}
+}
+
+// TestCreditTotalsMergeCarriesUnattributedSpend keeps the gateway-wide figure
+// able to explain itself: without this the pooled spend would be visible per
+// provider but vanish from the header totals.
+func TestCreditTotalsMergeCarriesUnattributedSpend(t *testing.T) {
+	gateway := creditTotals{TrackedKeys: 1, BalanceUSD: 10, SpentUSD: 4, RemainingUSD: 6, UnattributedSpentUSD: 1}
+	gateway.merge(creditTotals{TrackedKeys: 1, BalanceUSD: 5, SpentUSD: 3, RemainingUSD: 2, UnattributedSpentUSD: 2.5})
+	if gateway.UnattributedSpentUSD != 3.5 {
+		t.Fatalf("unattributed spend = %v, want 3.5", gateway.UnattributedSpentUSD)
+	}
+	if gateway.SpentUSD != 7 || gateway.RemainingUSD != 8 {
+		t.Fatalf("merged = %#v, want spent 7 and remaining 8", gateway)
+	}
+}
+
+// TestApplyCredentialUsageAttachesTraffic covers the question the balance alone
+// cannot answer, "which key is burning the credit", which the console shows next
+// to the remaining figure.
+func TestApplyCredentialUsageAttachesTraffic(t *testing.T) {
+	credit := credentialCredit(balanceCredential(usd(10), 2))
+	applyCredentialUsage(credit, credentialUsage{Requests: 41, Errors: 3, Tokens: 9_100})
+	if credit.Requests != 41 || credit.Errors != 3 || credit.Tokens != 9_100 {
+		t.Fatalf("credit = %#v", credit)
+	}
+	// Usage is traffic for the selected range only and must not disturb the money
+	// figures, which accumulate on the credentials row instead.
+	if credit.RemainingUSD != 8 || credit.SpentUSD != 2 {
+		t.Fatalf("usage changed the balance figures: %#v", credit)
+	}
+}
+
+// TestApplyCredentialUsageIsANoOpForUntrackedKeys matters because the overview
+// walks every key and looks up its stats, including the untracked ones that
+// carry no credit at all.
+func TestApplyCredentialUsageIsANoOpForUntrackedKeys(t *testing.T) {
+	credit := credentialCredit(balanceCredential(nil, 0))
+	if credit != nil {
+		t.Fatalf("credit = %#v, want nil", credit)
+	}
+	applyCredentialUsage(credit, credentialUsage{Requests: 7})
+}

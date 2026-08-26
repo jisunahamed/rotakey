@@ -209,9 +209,17 @@ func (s *Server) servePooled(
 	}
 	plans, err := s.buildPoolPlans(r.Context(), req, candidates, state)
 	if err != nil {
+		// Only a request with nothing left to send reaches this point now that
+		// unsupported fields are dropped instead of refused, so the reason is
+		// reported verbatim whichever protocol raised it.
 		var unsupported unsupportedFeatureError
 		if errors.As(err, &unsupported) {
 			s.rejectPool(w, r, req, primary, http.StatusBadRequest, "unsupported_feature", unsupported.Error())
+			return
+		}
+		var crossProtocol anthropicUnsupportedError
+		if errors.As(err, &crossProtocol) {
+			s.rejectPool(w, r, req, primary, http.StatusBadRequest, "unsupported_feature", crossProtocol.Error())
 			return
 		}
 		s.rejectPool(w, r, req, primary, http.StatusBadRequest, "invalid_request", "Request could not be prepared for any provider.")
@@ -395,8 +403,9 @@ func copyResponseHeaders(w http.ResponseWriter, publicMode string, source http.H
 }
 
 // translateUpstreamResponse converts one provider's non-streaming answer into
-// the protocol the caller spoke. Every combination is covered because a pooled
-// alias can be served by an Anthropic or an OpenAI provider on any attempt.
+// the protocol the caller spoke. The upstream's own shape is read from the wire
+// endpoint rather than from a translated flag, because a route may now be sent
+// to /responses from any of the three public protocols.
 func translateUpstreamResponse(req dispatchRequest, plan upstreamPlan, body []byte) ([]byte, int64, int64, error) {
 	if plan.Format == "anthropic" {
 		switch req.PublicMode {
@@ -409,10 +418,21 @@ func translateUpstreamResponse(req dispatchRequest, plan upstreamPlan, body []by
 			return translateAnthropicResponseToChat(body, req.Alias)
 		}
 	}
-	switch {
-	case req.PublicMode == messageModeAnthropic:
+	if plan.wireEndpoint() == "responses" {
+		switch req.PublicMode {
+		case messageModeAnthropic:
+			return translateResponsesResponseToAnthropic(body, req.Alias)
+		case messageModeResponses:
+			payload, input, output := replaceResponseModel(body, req.Alias)
+			return payload, input, output, nil
+		default:
+			return translateResponsesResponseToChat(body, req.Alias)
+		}
+	}
+	switch req.PublicMode {
+	case messageModeAnthropic:
 		return translateChatResponseToAnthropic(body, req.Alias)
-	case plan.Translated:
+	case messageModeResponses:
 		return translateChatResponse(body, req.Alias)
 	default:
 		payload, input, output := replaceResponseModel(body, req.Alias)
@@ -719,9 +739,13 @@ func (s *Server) streamAttempt(
 		stats := &anthropicStreamStats{}
 		streamCode, streamErr = translateAnthropicStreamToOpenAI(source, w, req.Alias, capture, req.IncludeOpenAIUsage, stats)
 		inputTokens, outputTokens = stats.InputTokens, stats.OutputTokens
+	case plan.wireEndpoint() == "responses" && req.PublicMode == messageModeAnthropic:
+		streamCode, streamErr = translateResponsesStreamToAnthropic(source, w, req.Alias, capture)
+	case plan.wireEndpoint() == "responses" && req.PublicMode == messageModeChat:
+		streamCode, streamErr = translateResponsesStreamToChat(source, w, req.Alias, capture, req.IncludeOpenAIUsage)
 	case req.PublicMode == messageModeAnthropic:
 		streamCode, streamErr = translateOpenAIStreamToAnthropic(source, w, req.Alias, capture)
-	case plan.Translated:
+	case req.PublicMode == messageModeResponses && plan.wireEndpoint() != "responses":
 		streamErr = translateChatStream(source, w, req.Alias, capture)
 	default:
 		var captureWriter io.Writer

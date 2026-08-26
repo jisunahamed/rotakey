@@ -100,37 +100,76 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 	case format == "anthropic":
 		chat := payload
 		if req.PublicMode == messageModeResponses {
-			if chat, err = translateResponsesRequest(payload); err != nil {
+			var lost []string
+			if chat, lost, err = translateResponsesRequest(payload); err != nil {
 				return upstreamPlan{}, err
 			}
+			plan.Removed = lost
 		}
-		if payload, err = translateChatRequestToAnthropic(chat); err != nil {
+		var dropped []string
+		if payload, dropped, err = translateChatRequestToAnthropic(chat); err != nil {
 			return upstreamPlan{}, err
 		}
+		plan.Removed = appendUniqueStrings(plan.Removed, dropped...)
 		plan.Path = "/messages"
 		plan.Translated = true
+	case req.PublicMode == messageModeAnthropic && servesNativeResponses(route, state) && !route.Model.SupportsChat:
+		// A route that publishes only Responses can still answer an Anthropic
+		// caller: the request crosses through Chat's shape into Responses, and the
+		// answer crosses back. Refusing here was the last protocol dead end.
+		chat, dropped, chatErr := translateAnthropicRequestToChat(payload)
+		if chatErr != nil {
+			return upstreamPlan{}, chatErr
+		}
+		responses, lost, responsesErr := translateChatRequestToResponses(chat)
+		if responsesErr != nil {
+			return upstreamPlan{}, responsesErr
+		}
+		payload = responses
+		plan.Removed = appendUniqueStrings(dropped, lost...)
+		plan.Path = "/responses"
+		plan.Translated = true
 	case req.PublicMode == messageModeAnthropic:
-		if payload, err = translateAnthropicRequestToChat(payload); err != nil {
+		var dropped []string
+		if payload, dropped, err = translateAnthropicRequestToChat(payload); err != nil {
 			return upstreamPlan{}, err
 		}
+		plan.Removed = dropped
 		plan.Path = "/chat/completions"
 		plan.Translated = true
 	case req.PublicMode == messageModeResponses && servesNativeResponses(route, state):
 		plan.Path = "/responses"
 	case req.PublicMode == messageModeResponses:
-		if payload, err = translateResponsesRequest(payload); err != nil {
+		var dropped []string
+		if payload, dropped, err = translateResponsesRequest(payload); err != nil {
 			return upstreamPlan{}, err
 		}
+		plan.Removed = dropped
 		plan.Path = "/chat/completions"
+		plan.Translated = true
+	case !route.Model.SupportsChat && servesNativeResponses(route, state):
+		// The upstream serves only Responses, so a Chat caller's request is
+		// translated up into it rather than rejected as an unsupported endpoint.
+		var dropped []string
+		if payload, dropped, err = translateChatRequestToResponses(payload); err != nil {
+			return upstreamPlan{}, err
+		}
+		plan.Removed = dropped
+		plan.Path = "/responses"
 		plan.Translated = true
 	default:
 		plan.Path = "/chat/completions"
 	}
 
-	plan.Removed = stripTopLevelParameters(payload, route.Model.StripParameters)
+	plan.Removed = appendUniqueStrings(plan.Removed, stripTopLevelParameters(payload, route.Model.StripParameters)...)
 	plan.Removed = appendUniqueStrings(plan.Removed, stripTopLevelParameters(payload, s.learnedCompatibilityParameters(ctx, route.Model.ID))...)
 	plan.Removed = appendUniqueStrings(plan.Removed, stripTopLevelParameters(payload, state.Removed)...)
 	learned := s.learnedCompatibilityReplacements(ctx, route.Model.ID, plan.wireEndpoint())
+	if learned == nil {
+		// A Redis outage returns no learned repairs at all, and writing this
+		// request's own repairs into that nil map would panic mid-flight.
+		learned = map[string]string{}
+	}
 	for from, to := range state.Replaced {
 		learned[from] = to
 	}
@@ -175,18 +214,13 @@ func (p upstreamPlan) wireEndpoint() string {
 	return "chat"
 }
 
-// supportsEndpoint reports whether a route can serve the caller's protocol at
-// all, so unusable providers leave the pool before any request is sent.
+// routeSupportsRequest reports whether a route can serve the caller's protocol.
+// Every protocol can now be translated into every other, so the only route that
+// cannot serve is one whose upstream publishes no usable endpoint at all. A
+// caller's choice of protocol is no longer a reason to refuse.
 func routeSupportsRequest(route routeRuntime, req dispatchRequest) bool {
-	switch req.PublicMode {
-	case messageModeAnthropic:
-		return route.Model.SupportsMessages
-	case messageModeResponses:
-		if route.Provider.APIFormat == "anthropic" {
-			return route.Model.SupportsResponses || route.Model.SupportsChat
-		}
-		return route.Model.SupportsResponses || route.Model.SupportsChat
-	default:
-		return route.Model.SupportsChat
+	if route.Provider.APIFormat == "anthropic" {
+		return route.Model.SupportsMessages || route.Model.SupportsChat || route.Model.SupportsResponses
 	}
+	return route.Model.SupportsChat || route.Model.SupportsResponses
 }

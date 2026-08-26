@@ -107,9 +107,13 @@ func validateImportBundle(bundle *ExportBundle) error {
 			ExtraHeaders: provider.ExtraHeaders, TimeoutSeconds: provider.TimeoutSeconds,
 			Enabled: provider.Enabled, AllowPrivateNetwork: provider.AllowPrivateNetwork,
 			APIFormat: provider.APIFormat, AnthropicVersion: provider.AnthropicVersion,
+			DefaultKeyBalanceUSD: provider.DefaultKeyBalanceUSD,
 		}
 		if err := validateProviderInput(&input); err != nil {
 			return fmt.Errorf("provider %q: %w", provider.Name, err)
+		}
+		if provider.BalanceSpentUSD < 0 || provider.BalanceSpentUSD > maxCredentialBalanceUSD {
+			return fmt.Errorf("provider %q: the pooled spend must be a positive USD amount", provider.Name)
 		}
 		provider.Name, provider.Slug, provider.BaseURL = input.Name, input.Slug, input.BaseURL
 		provider.AuthHeader, provider.AuthScheme = input.AuthHeader, input.AuthScheme

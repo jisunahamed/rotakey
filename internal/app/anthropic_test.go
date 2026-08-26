@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -29,7 +30,7 @@ func TestTranslateAnthropicRequestToChatCoreSurface(t *testing.T) {
 		},
 		"tools": []any{map[string]any{"name": "weather", "description": "Weather", "input_schema": map[string]any{"type": "object"}}},
 	}
-	chat, err := translateAnthropicRequestToChat(source)
+	chat, _, err := translateAnthropicRequestToChat(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,13 +44,29 @@ func TestTranslateAnthropicRequestToChatCoreSurface(t *testing.T) {
 	}
 }
 
-func TestAnthropicOnlyFeaturesAreRejectedCrossProtocol(t *testing.T) {
-	for _, payload := range []map[string]any{
-		{"messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "Hi", "citations": map[string]any{"enabled": true}}}}}},
-	} {
-		if _, err := translateAnthropicRequestToChat(payload); err == nil {
-			t.Fatalf("unsupported payload was accepted: %#v", payload)
-		}
+// TestAnthropicOnlyFeaturesDegradeInsteadOfFailing pins the contract that
+// replaced the old cross-protocol refusal: an Anthropic-only extra such as a
+// citations hint is stripped from the block and the conversation still reaches
+// the model, because losing one convenience beats losing the whole request.
+func TestAnthropicOnlyFeaturesDegradeInsteadOfFailing(t *testing.T) {
+	chat, _, err := translateAnthropicRequestToChat(map[string]any{
+		"messages": []any{map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "text", "text": "Hi", "citations": map[string]any{"enabled": true}},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("Anthropic-only block was refused: %v", err)
+	}
+	messages, _ := chat["messages"].([]any)
+	if len(messages) != 1 {
+		t.Fatalf("translated messages = %#v", chat)
+	}
+	message, _ := messages[0].(map[string]any)
+	if message["content"] != "Hi" {
+		t.Fatalf("citation hint changed the text: %#v", message)
+	}
+	if strings.Contains(string(mustJSON(chat)), "citations") {
+		t.Fatalf("citation hint leaked to the OpenAI upstream: %#v", chat)
 	}
 }
 
@@ -64,7 +81,7 @@ func TestTranslateChatRequestToAnthropicTools(t *testing.T) {
 			map[string]any{"role": "tool", "tool_call_id": "call_1", "content": "done"},
 		},
 	}
-	message, err := translateChatRequestToAnthropic(source)
+	message, _, err := translateChatRequestToAnthropic(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +91,7 @@ func TestTranslateChatRequestToAnthropicTools(t *testing.T) {
 }
 
 func TestAnthropicMetadataAndCacheHintsAreIgnoredCrossProtocol(t *testing.T) {
-	chat, err := translateAnthropicRequestToChat(map[string]any{
+	chat, _, err := translateAnthropicRequestToChat(map[string]any{
 		"messages":           []any{map[string]any{"role": "user", "content": "Hi"}},
 		"metadata":           map[string]any{"user_id": "u1"},
 		"thinking":           map[string]any{"type": "enabled", "budget_tokens": 1024},
@@ -89,7 +106,7 @@ func TestAnthropicMetadataAndCacheHintsAreIgnoredCrossProtocol(t *testing.T) {
 			t.Fatalf("%s leaked into OpenAI request: %#v", field, chat)
 		}
 	}
-	chat, err = translateAnthropicRequestToChat(map[string]any{
+	chat, _, err = translateAnthropicRequestToChat(map[string]any{
 		"messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{
 			"type": "text", "text": "Hi", "cache_control": map[string]any{"type": "ephemeral"},
 		}}}},
@@ -100,16 +117,25 @@ func TestAnthropicMetadataAndCacheHintsAreIgnoredCrossProtocol(t *testing.T) {
 	if _, exists := chat["cache_control"]; exists {
 		t.Fatalf("cache hint leaked into OpenAI request: %#v", chat)
 	}
-	if _, err := translateChatRequestToAnthropic(map[string]any{
+	// reasoning_effort has no Messages equivalent, so it is now named in the
+	// dropped list and the request continues instead of failing.
+	message, dropped, err := translateChatRequestToAnthropic(map[string]any{
 		"messages":         []any{map[string]any{"role": "user", "content": "Hi"}},
 		"reasoning_effort": "high",
-	}); err == nil {
-		t.Fatal("OpenAI reasoning field was silently dropped")
+	})
+	if err != nil {
+		t.Fatalf("OpenAI reasoning field refused the request: %v", err)
+	}
+	if _, leaked := message["reasoning_effort"]; leaked {
+		t.Fatalf("reasoning_effort leaked to the Anthropic upstream: %#v", message)
+	}
+	if !slices.Contains(dropped, "reasoning_effort") {
+		t.Fatalf("reasoning_effort was dropped without being reported: %#v", dropped)
 	}
 }
 
 func TestTranslateClaudeCodeHistoryRolesToChat(t *testing.T) {
-	chat, err := translateAnthropicRequestToChat(map[string]any{
+	chat, _, err := translateAnthropicRequestToChat(map[string]any{
 		"messages": []any{
 			map[string]any{"role": "developer", "content": "Be concise."},
 			map[string]any{"role": "assistant", "content": []any{
@@ -147,7 +173,7 @@ func TestTranslateClaudeCodeHistoryRolesToChat(t *testing.T) {
 }
 
 func TestTranslateClaudeToolReferencesAsNoOp(t *testing.T) {
-	chat, err := translateAnthropicRequestToChat(map[string]any{
+	chat, _, err := translateAnthropicRequestToChat(map[string]any{
 		"messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{
 			"type": "tool_result", "tool_use_id": "tool_search_1", "content": []any{
 				map[string]any{"type": "tool_reference", "tool_name": "lookup_weather"},
@@ -168,8 +194,11 @@ func TestTranslateClaudeToolReferencesAsNoOp(t *testing.T) {
 }
 
 func TestParallelToolSettingTranslatesToAnthropic(t *testing.T) {
-	message, err := translateChatRequestToAnthropic(map[string]any{
-		"messages":            []any{map[string]any{"role": "user", "content": "Hi"}},
+	message, _, err := translateChatRequestToAnthropic(map[string]any{
+		"messages": []any{map[string]any{"role": "user", "content": "Hi"}},
+		"tools": []any{map[string]any{"type": "function", "function": map[string]any{
+			"name": "lookup", "parameters": map[string]any{"type": "object"},
+		}}},
 		"parallel_tool_calls": false,
 	})
 	if err != nil {
@@ -179,10 +208,22 @@ func TestParallelToolSettingTranslatesToAnthropic(t *testing.T) {
 	if choice["type"] != "auto" || choice["disable_parallel_tool_use"] != true {
 		t.Fatalf("tool choice = %#v", choice)
 	}
+	// Anthropic rejects tool_choice without tools, so the setting is dropped with
+	// the tool list it depended on rather than sent alone.
+	bare, _, err := translateChatRequestToAnthropic(map[string]any{
+		"messages":            []any{map[string]any{"role": "user", "content": "Hi"}},
+		"parallel_tool_calls": false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, leaked := bare["tool_choice"]; leaked {
+		t.Fatalf("tool_choice survived without tools: %#v", bare)
+	}
 }
 
 func TestOpenAIStreamOptionsTranslateToAnthropic(t *testing.T) {
-	message, err := translateChatRequestToAnthropic(map[string]any{
+	message, _, err := translateChatRequestToAnthropic(map[string]any{
 		"messages":       []any{map[string]any{"role": "user", "content": "Hi"}},
 		"stream":         true,
 		"stream_options": map[string]any{"include_usage": true},

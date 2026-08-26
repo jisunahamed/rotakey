@@ -38,11 +38,21 @@ type Provider struct {
 	AllowPrivateNetwork bool              `json:"allow_private_network"`
 	APIFormat           string            `json:"api_format"`
 	AnthropicVersion    string            `json:"anthropic_version"`
-	CreatedAt           time.Time         `json:"created_at"`
-	UpdatedAt           time.Time         `json:"updated_at"`
-	Models              []ModelRoute      `json:"models"`
-	Credentials         []CredentialView  `json:"credentials"`
-	Capacity            *ProviderCapacity `json:"capacity,omitempty"`
+	// DefaultKeyBalanceUSD is the credit every new key on this provider starts
+	// with. An operator with dozens of keys behind one account sets the figure once
+	// here instead of typing it into each key. Nil means the provider seeds
+	// nothing, so keys stay untracked and route forever.
+	DefaultKeyBalanceUSD *float64 `json:"default_key_balance_usd,omitempty"`
+	// BalanceSpentUSD collects spend that could not be charged to a single key,
+	// which happens when a request finished without a recorded credential. It is
+	// counted against the provider's pooled credit so the remaining figure on the
+	// dashboard stays honest instead of quietly losing the cost.
+	BalanceSpentUSD float64           `json:"balance_spent_usd"`
+	CreatedAt       time.Time         `json:"created_at"`
+	UpdatedAt       time.Time         `json:"updated_at"`
+	Models          []ModelRoute      `json:"models"`
+	Credentials     []CredentialView  `json:"credentials"`
+	Capacity        *ProviderCapacity `json:"capacity,omitempty"`
 }
 
 type AggregateLimit struct {

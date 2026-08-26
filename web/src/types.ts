@@ -49,6 +49,11 @@ export type CreditRemaining = {
   spent_usd: number;
   remaining_usd: number;
   exhausted: boolean;
+  /** Traffic this key served in the selected range, which is what answers
+   * "which key is burning the credit". */
+  requests?: number;
+  errors?: number;
+  tokens?: number;
 };
 
 /** Credit summed over the keys that track a balance. tracked_keys separates
@@ -59,7 +64,20 @@ export type CreditTotals = {
   spent_usd: number;
   remaining_usd: number;
   exhausted_keys: number;
+  /** Spend charged to the provider because the request ended without a recorded
+   * key. Already counted in spent_usd; reported separately so the console can
+   * explain a gap between the keys' own figures and the provider's. */
+  unattributed_spent_usd?: number;
 };
+
+export const emptyCreditTotals = (): CreditTotals => ({
+  tracked_keys: 0,
+  balance_usd: 0,
+  spent_usd: 0,
+  remaining_usd: 0,
+  exhausted_keys: 0,
+  unattributed_spent_usd: 0
+});
 
 export type Credential = {
   id: string;
@@ -94,6 +112,12 @@ export type Provider = {
   allow_private_network: boolean;
   api_format: "openai" | "anthropic";
   anthropic_version: string;
+  /** The credit every new key on this provider starts with. null or absent means
+   * new keys are created untracked. */
+  default_key_balance_usd?: number | null;
+  /** Spend the gateway could not pin on one key. Already subtracted from the
+   * provider's remaining credit. */
+  balance_spent_usd?: number;
   created_at: string;
   updated_at: string;
   models: ModelRoute[];
@@ -157,6 +181,9 @@ export type Overview = {
     validation_warnings: number;
     capacity: Record<string, OverviewLimit>;
     credit: CreditTotals;
+    /** What each new key on this provider starts with, so an operator can see an
+     * account's per-key figure without opening every key. */
+    default_key_balance_usd?: number | null;
   }>;
   routes: Array<{
     id: string;

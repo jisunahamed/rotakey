@@ -1271,9 +1271,15 @@ func (s *Server) storeRequestLog(ctx context.Context, input logInput) {
 	// Balance is charged from the same place the log is written so every counted
 	// request is also a charged request. Only requests that actually consumed
 	// tokens are billed: a rejection that never reached the model costs nothing.
-	if input.Credential.ID != "" && input.InputTokens+input.OutputTokens > 0 {
-		s.recordCredentialSpend(ctx, input.Credential.ID,
-			requestSpendUSD(input.Route.Model, input.InputTokens, input.OutputTokens))
+	// When the attempt ended before a key was picked, the provider is still known,
+	// so the cost lands on its pooled credit rather than being lost.
+	if input.InputTokens+input.OutputTokens > 0 {
+		spend := requestSpendUSD(input.Route.Model, input.InputTokens, input.OutputTokens)
+		if input.Credential.ID != "" {
+			s.recordCredentialSpend(ctx, input.Credential.ID, spend)
+		} else {
+			s.recordProviderSpend(ctx, input.Route.Provider.ID, spend)
+		}
 	}
 }
 

@@ -1,0 +1,248 @@
+/* Rotakey's design tokens. Loaded before every other stylesheet.
+ *
+ * The console is an instrument for one question: is traffic flowing, and which
+ * API key serves the next request. Everything here is chosen for a surface an
+ * operator leaves open on a second monitor: a cool, low-noise canvas, one
+ * decisive interactive colour, and a separate hue for each operational state so
+ * a glance tells healthy from throttled from broken.
+ */
+
+:root {
+  /* Surfaces. Cool concrete rather than blue-grey: it keeps the iris accent and
+     the state hues readable without either one tinting the whole page. */
+  --surface-canvas: #e9ebef;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f1f3f7;
+  --surface-inset: #e2e5eb;
+
+  /* Text. Two weights of ink only; a third grey is where hierarchy goes to die. */
+  --text-strong: #151a22;
+  --text-muted: #59616f;
+  --text-inverse: #f7f8fa;
+
+  /* Structure. Hairlines carry the layout, so they need a quiet and a loud one. */
+  --edge: #d2d7df;
+  --edge-strong: #b4bcc8;
+
+  /* Iris is the only interactive colour: links, primary actions, focus, the
+     rotor's live tally. Reserving one hue for "you can act here" means every
+     other colour is free to mean a state instead. */
+  --iris: #4b3fe4;
+  --iris-hover: #3c30d0;
+  --iris-wash: #e6e4fd;
+  --iris-edge: #b3adf7;
+
+  /* Operational states. Distinct hues, not shades of one accent, because an
+     operator reads these peripherally. */
+  --live: #0f8a5f;
+  --live-wash: #daf0e6;
+  --hold: #b06a00;
+  --hold-wash: #fbeed5;
+  --fault: #c8362f;
+  --fault-wash: #fbe4e2;
+  --idle: #6c7683;
+  --idle-wash: #e5e8ed;
+
+  /* The navigation rail stays dark in both themes: it is chrome, not content,
+     and a constant anchor makes the theme switch feel like lighting rather than
+     a different application. */
+  --rail: #12161d;
+  --rail-raised: #1b212b;
+  --rail-text: #e7ebf0;
+  --rail-muted: #8d96a5;
+  --rail-edge: #262e3a;
+
+  /* Type. Archivo for anything a person reads as language, JetBrains Mono for
+     data that has to align in a column, Martian Mono for uppercase micro-labels
+     only — its wide engineered forms are what make a readout look measured. */
+  --font-display: "Archivo Variable", "Archivo", system-ui, sans-serif;
+  --font-body: "Archivo Variable", "Archivo", system-ui, sans-serif;
+  --font-data: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+  --font-label: "Martian Mono Variable", "Martian Mono", ui-monospace, monospace;
+
+  --text-micro: 0.6875rem;
+  --text-mini: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.625rem;
+  --text-2xl: 2.125rem;
+  --text-3xl: 2.75rem;
+
+  --leading-tight: 1.15;
+  --leading-snug: 1.35;
+  --leading-normal: 1.55;
+
+  /* Micro-labels are set in caps and need the tracking opened up to stay legible
+     at 11px; running text needs it closed slightly at display sizes. */
+  --track-label: 0.09em;
+  --track-tight: -0.015em;
+  --track-display: -0.03em;
+
+  /* Spacing on a 4px grid. Every layout value in the console resolves to one of
+     these, so vertical rhythm survives edits. */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-7: 20px;
+  --space-8: 24px;
+  --space-9: 32px;
+  --space-10: 40px;
+  --space-11: 48px;
+  --space-12: 64px;
+
+  /* Three radii: fittings, panels, and the sheet. The console previously mixed
+     4px and 7px for the same kind of object, which reads as an accident. */
+  --radius-fitting: 3px;
+  --radius-panel: 7px;
+  --radius-sheet: 12px;
+  --radius-pill: 999px;
+
+  /* Elevation is used sparingly: hairlines separate things inside the page, and
+     shadow is reserved for what genuinely floats above it. */
+  --lift-panel: 0 1px 2px rgb(21 26 34 / 0.04);
+  --lift-float: 0 18px 44px -12px rgb(21 26 34 / 0.24), 0 2px 8px rgb(21 26 34 / 0.06);
+  --lift-rail: 0 24px 60px -20px rgb(0 0 0 / 0.5);
+
+  /* Motion. One duration for state, one for movement, one easing. */
+  --ease: cubic-bezier(0.22, 0.68, 0.24, 1);
+  --dur-state: 120ms;
+  --dur-move: 260ms;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-canvas: #0d1015;
+  --surface-raised: #151a21;
+  --surface-sunken: #11161c;
+  --surface-inset: #1c232c;
+
+  --text-strong: #e7ebf0;
+  --text-muted: #8e99a8;
+  --text-inverse: #10141a;
+
+  --edge: #252e39;
+  --edge-strong: #3a4553;
+
+  --iris: #8b7bff;
+  --iris-hover: #a094ff;
+  --iris-wash: #1e1b3d;
+  --iris-edge: #3d3673;
+
+  --live: #3ecf8e;
+  --live-wash: #102b21;
+  --hold: #e0a34a;
+  --hold-wash: #33260f;
+  --fault: #f0736b;
+  --fault-wash: #391f1e;
+  --idle: #7d8797;
+  --idle-wash: #1c222b;
+
+  --rail: #090c11;
+  --rail-raised: #151b24;
+  --rail-edge: #212934;
+
+  --lift-panel: 0 1px 2px rgb(0 0 0 / 0.4);
+  --lift-float: 0 24px 60px -16px rgb(0 0 0 / 0.66), 0 2px 8px rgb(0 0 0 / 0.4);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] {
+    color-scheme: dark;
+    --surface-canvas: #0d1015;
+    --surface-raised: #151a21;
+    --surface-sunken: #11161c;
+    --surface-inset: #1c232c;
+
+    --text-strong: #e7ebf0;
+    --text-muted: #8e99a8;
+    --text-inverse: #10141a;
+
+    --edge: #252e39;
+    --edge-strong: #3a4553;
+
+    --iris: #8b7bff;
+    --iris-hover: #a094ff;
+    --iris-wash: #1e1b3d;
+    --iris-edge: #3d3673;
+
+    --live: #3ecf8e;
+    --live-wash: #102b21;
+    --hold: #e0a34a;
+    --hold-wash: #33260f;
+    --fault: #f0736b;
+    --fault-wash: #391f1e;
+    --idle: #7d8797;
+    --idle-wash: #1c222b;
+
+    --rail: #090c11;
+    --rail-raised: #151b24;
+    --rail-edge: #212934;
+
+    --lift-panel: 0 1px 2px rgb(0 0 0 / 0.4);
+    --lift-float: 0 24px 60px -16px rgb(0 0 0 / 0.66), 0 2px 8px rgb(0 0 0 / 0.4);
+  }
+}
+
+/* The console's own stylesheets were written against an older set of names.
+ * Aliasing them here means one palette drives everything, old rules included,
+ * instead of two colour systems drifting apart.
+ */
+:root,
+:root[data-theme="dark"] {
+  --canvas: var(--surface-canvas);
+  --surface: var(--surface-raised);
+  --surface-2: var(--surface-sunken);
+  --ink: var(--text-strong);
+  --muted: var(--text-muted);
+  --line: var(--edge);
+  --line-strong: var(--edge-strong);
+  --blue: var(--iris);
+  --blue-soft: var(--iris-wash);
+  --green: var(--live);
+  --green-soft: var(--live-wash);
+  --amber: var(--hold);
+  --amber-soft: var(--hold-wash);
+  --red: var(--fault);
+  --red-soft: var(--fault-wash);
+  --shadow: var(--lift-float);
+  --sidebar: var(--rail);
+  --sidebar-ink: var(--rail-text);
+  --sidebar-muted: var(--rail-muted);
+  --console-canvas: var(--surface-canvas);
+  --console-panel: var(--surface-raised);
+  --console-code: var(--text-strong);
+  --console-line: var(--edge);
+  --console-line-strong: var(--edge-strong);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] {
+    --canvas: var(--surface-canvas);
+    --surface: var(--surface-raised);
+    --surface-2: var(--surface-sunken);
+    --ink: var(--text-strong);
+    --muted: var(--text-muted);
+    --line: var(--edge);
+    --line-strong: var(--edge-strong);
+    --blue: var(--iris);
+    --blue-soft: var(--iris-wash);
+    --green: var(--live);
+    --green-soft: var(--live-wash);
+    --amber: var(--hold);
+    --amber-soft: var(--hold-wash);
+    --red: var(--fault);
+    --red-soft: var(--fault-wash);
+    --shadow: var(--lift-float);
+    --sidebar: var(--rail);
+    --console-canvas: var(--surface-canvas);
+    --console-panel: var(--surface-raised);
+    --console-code: var(--text-strong);
+    --console-line: var(--edge);
+    --console-line-strong: var(--edge-strong);
+  }
+}

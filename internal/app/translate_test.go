@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -16,7 +17,7 @@ func TestTranslateResponsesRequest(t *testing.T) {
 			map[string]any{"type": "function", "name": "weather", "parameters": map[string]any{"type": "object"}},
 		},
 	}
-	chat, err := translateResponsesRequest(source)
+	chat, _, err := translateResponsesRequest(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +47,7 @@ func TestTranslateResponsesRequestAcceptsOutputTextHistory(t *testing.T) {
 			},
 		},
 	}
-	chat, err := translateResponsesRequest(source)
+	chat, _, err := translateResponsesRequest(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,10 +56,15 @@ func TestTranslateResponsesRequestAcceptsOutputTextHistory(t *testing.T) {
 		t.Fatalf("got %d messages, want 2", len(messages))
 	}
 	assistant := messages[0].(map[string]any)
-	content := assistant["content"].([]any)
-	part := content[0].(map[string]any)
-	if assistant["role"] != "assistant" || part["type"] != "text" || part["text"] != "previous answer" {
+	// A turn carrying one text part collapses to a plain content string, which
+	// every Chat implementation accepts, where a one-element array is refused by
+	// some of the stricter OpenAI-compatible upstreams.
+	if assistant["role"] != "assistant" || assistant["content"] != "previous answer" {
 		t.Fatalf("unexpected translated assistant history: %#v", assistant)
+	}
+	user := messages[1].(map[string]any)
+	if user["role"] != "user" || user["content"] != "continue" {
+		t.Fatalf("unexpected translated user turn: %#v", user)
 	}
 }
 func TestTranslateChatStreamCompletesTextAndToolLifecycle(t *testing.T) {
@@ -115,13 +121,44 @@ func TestTranslateChatStreamRejectsInterruptedAndMalformedInput(t *testing.T) {
 	}
 }
 
-func TestTranslateResponsesRejectsHostedTools(t *testing.T) {
+// TestTranslateResponsesDropsHostedToolsWithoutFailing covers the rule that a
+// hosted tool nobody but OpenAI can run is discarded by name while the rest of
+// the request continues, so a Responses caller on a third-party route still gets
+// an answer instead of a rejection.
+func TestTranslateResponsesDropsHostedToolsWithoutFailing(t *testing.T) {
 	source := map[string]any{
 		"input": "hello",
-		"tools": []any{map[string]any{"type": "web_search_preview"}},
+		"tools": []any{
+			map[string]any{"type": "web_search_preview"},
+			map[string]any{"type": "function", "name": "weather", "parameters": map[string]any{"type": "object"}},
+		},
 	}
-	if _, err := translateResponsesRequest(source); err == nil {
-		t.Fatal("expected hosted tool to be rejected")
+	chat, dropped, err := translateResponsesRequest(source)
+	if err != nil {
+		t.Fatalf("hosted tool refused the request: %v", err)
+	}
+	tools, _ := chat["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("surviving tools = %#v", chat["tools"])
+	}
+	if !slices.Contains(dropped, "hosted tool web_search_preview") {
+		t.Fatalf("hosted tool was dropped without being reported: %#v", dropped)
+	}
+}
+
+// TestTranslateResponsesDropsToolChoiceWithoutTools pins the pairing rule: some
+// upstreams reject tool_choice when no tools survived translation.
+func TestTranslateResponsesDropsToolChoiceWithoutTools(t *testing.T) {
+	chat, _, err := translateResponsesRequest(map[string]any{
+		"input":       "hello",
+		"tools":       []any{map[string]any{"type": "web_search_preview"}},
+		"tool_choice": "auto",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, leaked := chat["tool_choice"]; leaked {
+		t.Fatalf("tool_choice survived without tools: %#v", chat)
 	}
 }
 

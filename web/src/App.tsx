@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -38,9 +38,11 @@ import {
   RateFields,
   Sheet,
   StatusDot,
+  statusLabel,
   Toggle
 } from "./components";
 import {
+  emptyCreditTotals,
   emptyPolicy,
   type Credential,
   type CreditTotals,
@@ -75,21 +77,48 @@ const pageFromLocation = (): Page => {
 };
 
 // The routing mode decides whether a new public alias carries the provider slug,
-// so it is fetched once and shared by every form that proposes an alias.
+// so it is fetched once and shared by every form that proposes an alias. The
+// subscriber set is what makes it shared rather than merely cached: when Settings
+// saves a new mode, every mounted form re-labels itself instead of waiting for a
+// remount, and concurrent mounts await one request instead of each firing their own.
 let routingModeCache: RoutingMode | null = null;
+let routingModeRequest: Promise<RoutingMode> | null = null;
+const routingModeSubscribers = new Set<(mode: RoutingMode) => void>();
+
+export function publishRoutingMode(mode: RoutingMode) {
+  routingModeCache = mode;
+  routingModeSubscribers.forEach((notifySubscriber) => notifySubscriber(mode));
+}
 
 function useRoutingMode(): RoutingMode {
   const [mode, setMode] = useState<RoutingMode>(routingModeCache ?? "provider");
   useEffect(() => {
-    if (routingModeCache) return;
-    void api<Settings>("/api/admin/settings")
-      .then((settings) => {
-        routingModeCache = settings.routing_mode === "model" ? "model" : "provider";
-        setMode(routingModeCache);
-      })
-      .catch(() => undefined);
+    routingModeSubscribers.add(setMode);
+    if (routingModeCache) {
+      setMode(routingModeCache);
+    } else {
+      routingModeRequest ??= api<Settings>("/api/admin/settings")
+        .then((settings) => (settings.routing_mode === "model" ? "model" : "provider"))
+        .finally(() => { routingModeRequest = null; });
+      void routingModeRequest.then(publishRoutingMode).catch(() => undefined);
+    }
+    return () => { routingModeSubscribers.delete(setMode); };
   }, []);
   return mode;
+}
+
+/** Reads a media query in JS so behaviour (focus order, inert) can follow the
+ *  same breakpoint the stylesheets use, rather than a second guess at it. */
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const list = window.matchMedia(query);
+    const onChange = () => setMatches(list.matches);
+    onChange();
+    list.addEventListener("change", onChange);
+    return () => list.removeEventListener("change", onChange);
+  }, [query]);
+  return matches;
 }
 
 function App() {
@@ -103,12 +132,42 @@ function App() {
   });
   const [gatewayKey, setGatewayKey] = useState("");
   const [version, setVersion] = useState<VersionInfo | null>(null);
-  const [toast, setToast] = useState<{ tone: "success" | "danger"; message: string } | null>(null);
+  const [toast, setToast] = useState<{ tone: "success" | "danger"; message: string; id: number } | null>(null);
+  const toastTimer = useRef<number | null>(null);
 
+  // Each notification cancels the previous one's timer. Without that, two
+  // messages inside one window share a single countdown, and the second is
+  // cleared by the first one's timeout — which is how the "traffic has stopped"
+  // warnings raised when a provider is turned off used to disappear in a blink.
+  // Long messages also get proportionally longer on screen, and failures stay
+  // until dismissed, because an error the operator missed is an error unfixed.
   const notify = useCallback((message: string, tone: "success" | "danger" = "success") => {
-    setToast({ message, tone });
-    window.setTimeout(() => setToast(null), 4200);
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    const id = Date.now() + Math.random();
+    setToast({ message, tone, id });
+    if (tone === "danger") {
+      toastTimer.current = null;
+      return;
+    }
+    const linger = Math.min(12000, Math.max(4200, message.length * 55));
+    toastTimer.current = window.setTimeout(() => {
+      setToast((current) => (current?.id === id ? null : current));
+      toastTimer.current = null;
+    }, linger);
   }, []);
+
+  const dismissToast = useCallback(() => {
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    toastTimer.current = null;
+    setToast(null);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    },
+    []
+  );
 
   const checkSession = useCallback(async () => {
     try {
@@ -142,6 +201,32 @@ function App() {
     localStorage.setItem("relay-theme", theme);
   }, [theme]);
 
+  // Whether the rail is off-canvas is a CSS decision at 900px; the shell needs to
+  // know it too, so the hidden rail can be taken out of the tab order.
+  const isCompact = useMediaQuery("(max-width: 900px)");
+
+  // Escape closes the mobile rail, and while it is open the page behind it does
+  // not scroll — otherwise the drawer slides over content that moved underneath.
+  // Focus moves into the drawer on open and back to the menu button on close, so
+  // a keyboard operator is never left tabbing through a panel they cannot see.
+  const menuButton = useRef<HTMLButtonElement | null>(null);
+  const rail = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!menuOpen) return;
+    rail.current?.querySelector<HTMLAnchorElement>(".nav-item")?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      menuButton.current?.focus();
+    };
+  }, [menuOpen]);
+
   useEffect(() => {
     const loadVersion = () => void api<VersionInfo>("/api/version").then(setVersion).catch(() => undefined);
     loadVersion();
@@ -160,6 +245,15 @@ function App() {
     setMenuOpen(false);
     const search = query ? `?${new URLSearchParams(query).toString()}` : "";
     history.pushState({}, "", `/admin/${next}${search}`);
+  };
+
+  // Navigation entries are links, not buttons: an operator can middle-click a
+  // section into a new tab, and the status bar shows where each one goes. The
+  // click handler keeps it a single-page transition when it is a plain click.
+  const navigateFromLink = (event: React.MouseEvent<HTMLAnchorElement>, next: Page) => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    event.preventDefault();
+    navigate(next);
   };
 
   const logout = async () => {
@@ -200,15 +294,19 @@ function App() {
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#workspace">Skip to content</a>
       <button
         className={`mobile-scrim ${menuOpen ? "is-visible" : ""}`}
         onClick={() => setMenuOpen(false)}
         aria-label="Close navigation"
+        tabIndex={-1}
       />
-      <aside className={`sidebar ${menuOpen ? "is-open" : ""}`}>
+      {/* Off-canvas at mobile widths, the rail is still in the document, so it is
+          marked inert while closed — otherwise Tab lands on invisible links. */}
+      <aside className={`sidebar ${menuOpen ? "is-open" : ""}`} inert={isCompact && !menuOpen} ref={rail}>
         <div className="wordmark">
           <span className="wordmark__mark" aria-hidden="true">
-            <Cable size={18} />
+            <Cable size={18} aria-hidden="true" />
           </span>
           <span>
             <strong>ROTAKEY</strong>
@@ -217,15 +315,16 @@ function App() {
         </div>
         <nav aria-label="Primary navigation">
           {navItems.map(({ id, label, icon: Icon }) => (
-            <button
+            <a
               key={id}
               className={`nav-item ${page === id ? "is-active" : ""}`}
-              onClick={() => navigate(id)}
+              href={`/admin/${id}`}
+              onClick={(event) => navigateFromLink(event, id)}
               aria-current={page === id ? "page" : undefined}
             >
-              <Icon size={17} />
+              <Icon size={17} aria-hidden="true" />
               <span>{label}</span>
-            </button>
+            </a>
           ))}
         </nav>
         <div className="sidebar__bottom">
@@ -242,7 +341,7 @@ function App() {
             target="_blank"
             rel="noreferrer"
           >
-            <BookOpen size={15} />
+            <BookOpen size={15} aria-hidden="true" />
             <span>Operator guide</span>
           </a>
           <a
@@ -251,7 +350,7 @@ function App() {
             target="_blank"
             rel="noreferrer"
           >
-            <Github size={15} />
+            <Github size={15} aria-hidden="true" />
             <span>Star on GitHub</span>
           </a>
           <div className="sidebar__footer">
@@ -262,8 +361,8 @@ function App() {
                 <small>Owner</small>
               </span>
             </div>
-            <button className="icon-button" onClick={() => void logout()} aria-label="Sign out">
-              <LogOut size={17} />
+            <button className="icon-button" onClick={() => void logout()} aria-label={`Sign out ${username}`}>
+              <LogOut size={17} aria-hidden="true" />
             </button>
           </div>
           <div className="sidebar__version" title={version?.commit ? `Commit ${version.commit}` : undefined}>
@@ -273,19 +372,22 @@ function App() {
         </div>
       </aside>
 
-      <div className="workspace">
+      {/* While the drawer is over the page, the page behind it is inert: without
+          this, Tab walks out of the open drawer into the content it covers. The
+          scrim sits outside this element so dismissing by click still works. */}
+      <div className="workspace" inert={isCompact && menuOpen}>
         <header className="mobile-header">
-          <button className="icon-button" onClick={() => setMenuOpen(true)} aria-label="Open navigation">
-            <Menu size={19} />
+          <button className="icon-button" onClick={() => setMenuOpen(true)} aria-label="Open navigation" aria-expanded={menuOpen} ref={menuButton}>
+            <Menu size={19} aria-hidden="true" />
           </button>
           <strong>Rotakey</strong>
           <ThemeButton theme={theme} setTheme={setTheme} />
         </header>
-        <main className="main-pane">
+        <main className="main-pane" id="workspace" tabIndex={-1}>
           {page === "overview" && <OverviewPage navigate={navigate} notify={notify} />}
           {page === "providers" && <ProvidersPage notify={notify} />}
           {page === "models" && <ModelsPage navigate={navigate} notify={notify} />}
-          {page === "logs" && <LogsPage notify={notify} />}
+          {page === "logs" && <LogsPage />}
           {page === "access" && (
             <AccessPage
               gatewayKey={gatewayKey}
@@ -309,12 +411,29 @@ function App() {
           notify={notify}
         />
       )}
-      {toast && (
-        <div className={`toast toast--${toast.tone}`} role="status">
-          {toast.tone === "success" ? <Check size={16} /> : <X size={16} />}
-          {toast.message}
-        </div>
-      )}
+      {/* The live region is always in the document, and only its contents change.
+          A region inserted at the same moment as its text is unreliably announced
+          — several screen readers only watch regions that existed beforehand, so
+          the first toast of a session went unread. The wrapper needs no styling:
+          the toast itself is position: fixed, so an empty block leaves no trace. */}
+      <div
+        role={toast?.tone === "danger" ? "alert" : "status"}
+        aria-live={toast?.tone === "danger" ? "assertive" : "polite"}
+      >
+        {toast && (
+          <div className={`toast toast--${toast.tone}`} key={toast.id}>
+            {toast.tone === "success" ? (
+              <Check size={16} aria-hidden="true" />
+            ) : (
+              <AlertTriangle size={16} aria-hidden="true" />
+            )}
+            <span className="toast__message">{toast.message}</span>
+            <button className="icon-button toast__close" onClick={dismissToast} aria-label="Dismiss this message">
+              <X size={15} aria-hidden="true" />
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -333,7 +452,7 @@ function LoadingScreen() {
   return (
     <div className="auth-shell">
       <div className="boot-sequence" aria-label="Loading Rotakey">
-        <Cable size={24} />
+        <Cable size={24} aria-hidden="true" />
         <div className="boot-line">
           <span />
         </div>
@@ -466,7 +585,7 @@ function LoginScreen({
     <div className="auth-shell">
       <section className="login-panel">
         <div className="wordmark wordmark--auth">
-          <span className="wordmark__mark"><Cable size={18} /></span>
+          <span className="wordmark__mark"><Cable size={18} aria-hidden="true" /></span>
           <span><strong>ROTAKEY</strong><small>routing control plane</small></span>
         </div>
         <form className="auth-form" onSubmit={submit}>
@@ -500,9 +619,12 @@ function ThemeButton({
 }) {
   const next = theme === "system" ? "dark" : theme === "dark" ? "light" : "system";
   const Icon = theme === "dark" ? Moon : theme === "light" ? Sun : Activity;
+  const nextLabel = next === "system" ? "match the system" : next;
+  // The label names the action, not the current value: "Theme: dark" left the
+  // operator guessing what pressing it would do.
   return (
-    <button className="icon-button" onClick={() => setTheme(next)} aria-label={`Theme: ${theme}`}>
-      <Icon size={17} />
+    <button className="icon-button" onClick={() => setTheme(next)} aria-label={`Switch theme to ${nextLabel}`} title={`Theme: ${theme === "system" ? "matching the system" : theme}`}>
+      <Icon size={17} aria-hidden="true" />
     </button>
   );
 }
@@ -548,6 +670,10 @@ function OverviewPage({
   const [expandedProviders, setExpandedProviders] = useState<Set<string>>(() => new Set());
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // Every request carries the generation the range was on when it left. The `all`
+  // range is much slower than `1h`, so without this a stale reply lands after a
+  // switch and the chart contradicts the highlighted button.
+  const generation = useRef(0);
   const selectTarget = (target: InspectTarget) => {
     if (overview) {
       const providerID = overviewProviderIDForTarget(overview, target);
@@ -559,23 +685,31 @@ function OverviewPage({
     setInspectorOpen(true);
   };
   const load = useCallback(async () => {
+    const mine = ++generation.current;
     setError("");
     setRefreshing(true);
     try {
-      const result = await api<Overview>(`/api/admin/overview?range=${range}`);
+      const result = normalizeOverview(await api<Overview>(`/api/admin/overview?range=${range}`));
+      if (mine !== generation.current) return;
       setOverview(result);
       setSelected((current) => current && overviewTargetExists(result, current) ? current : null);
       setExpandedProviders((current) => new Set([...current].filter((id) => result.providers.some((provider) => provider.id === id))));
     } catch (caught) {
+      if (mine !== generation.current) return;
       setError(caught instanceof Error ? caught.message : "Overview could not be loaded.");
     } finally {
-      setRefreshing(false);
+      if (mine === generation.current) setRefreshing(false);
     }
   }, [range]);
   useEffect(() => {
     void load();
     const timer = window.setInterval(() => void load(), 10_000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      // Bumping on teardown discards whatever is still in flight for the range
+      // being left behind, so it cannot land on the next one.
+      generation.current += 1;
+    };
   }, [load]);
 
   if (!overview && !error) return <PageSkeleton />;
@@ -597,12 +731,17 @@ function OverviewPage({
       {error && <InlineNotice tone="danger">{error}</InlineNotice>}
       {overview && (
         <div className="ops-console">
+          {/* Every other page opens with a PageHeader h1. This one opens straight
+              into the command bar, so the heading that names the page is present
+              but unstyled — without it the document starts at h2 and the page has
+              no title to jump to. */}
+          <h1 className="sr-only">Gateway overview</h1>
           <header className="ops-commandbar">
             <div className="ops-commandbar__identity">
-              <span className={`gateway-pulse ${overview.summary.routes_ready === overview.summary.routes_total ? "" : "is-warning"}`} />
+              <span className={`gateway-pulse ${overview.summary.routes_ready === overview.summary.routes_total ? "" : "is-warning"}`} aria-hidden="true" />
               <span>
                 <small>Unified gateway · {overview.summary.gateway_key_ready ? "authenticated" : "key missing"}</small>
-                <code>{overview.base_url || `${location.origin}/v1`}</code>
+                <code title={overview.base_url || `${location.origin}/v1`}>{overview.base_url || `${location.origin}/v1`}</code>
               </span>
               <button
                 className="console-icon copy-base-url"
@@ -612,15 +751,18 @@ function OverviewPage({
                     .then(() => notify("Base URL copied."))
                     .catch(() => notify("Clipboard access was blocked.", "danger"));
                 }}
-              ><Clipboard size={14} /><span>Copy</span></button>
+              ><Clipboard size={14} aria-hidden="true" /><span>Copy</span></button>
             </div>
             <div className="ops-commandbar__actions">
-              <div className="range-switcher" aria-label="Overview time range">
+              {/* A group of mutually exclusive choices, so it is announced as one
+                  named control rather than four unrelated buttons. */}
+              <div className="range-switcher" role="group" aria-label="Overview time range">
                 {(["1h", "24h", "7d", "all"] as const).map((value) => (
                   <button
                     key={value}
                     className={range === value ? "is-active" : ""}
                     aria-pressed={range === value}
+                    aria-label={value === "all" ? "All time" : value === "1h" ? "Last hour" : value === "24h" ? "Last 24 hours" : "Last 7 days"}
                     onClick={() => {
                       setRange(value);
                       history.replaceState({}, "", `/admin/overview?range=${value}`);
@@ -628,8 +770,8 @@ function OverviewPage({
                   >{value}</button>
                 ))}
               </div>
-              <button className={`console-refresh ${refreshing ? "is-refreshing" : ""}`} onClick={() => void load()}>
-                <RefreshCw size={14} /> {refreshing ? "Syncing" : "Refresh"}
+              <button className={`console-refresh ${refreshing ? "is-refreshing" : ""}`} onClick={() => void load()} aria-label={refreshing ? "Syncing the overview" : "Refresh the overview"}>
+                <RefreshCw size={14} aria-hidden="true" /> {refreshing ? "Syncing" : "Refresh"}
               </button>
             </div>
           </header>
@@ -644,8 +786,8 @@ function OverviewPage({
             <LedgerMetric label="Estimated cost" value={formatUSD(overview.summary.estimated_cost_usd)} />
             {overview.summary.credit.tracked_keys > 0 && (
               <LedgerMetric
-                label="Key balance left"
-                value={`${formatUSD(overview.summary.credit.remaining_usd)} / ${formatUSD(overview.summary.credit.balance_usd)}`}
+                label="Balance left"
+                value={formatUSD(overview.summary.credit.remaining_usd)}
                 tone={creditTone(overview.summary.credit)}
               />
             )}
@@ -672,7 +814,7 @@ function OverviewPage({
                   <EmptyState
                     title="No model routes yet"
                     description="Add a provider, validate an API key, then select at least one upstream model."
-                    action={<Button onClick={() => navigate("providers")}><Plus size={15} /> Add first provider</Button>}
+                    action={<Button onClick={() => navigate("providers")}><Plus size={15} aria-hidden="true" /> Add first provider</Button>}
                   />
                 ) : overview.providers.map((provider) => (
                   <ProviderCapacityGroup
@@ -701,13 +843,14 @@ function OverviewPage({
                     {overview.recent_failures.map((failure) => (
                       <button
                         key={failure.request_id}
+                        aria-label={`HTTP ${failure.status_code} on ${failure.model_alias} via ${failure.provider_name}, ${formatRelativeTime(failure.created_at)}. Open in request logs.`}
                         onClick={() => navigate("logs", { q: failure.request_id, status: String(failure.status_code) })}
                       >
-                        <span className="failure-code">{failure.status_code}</span>
-                        <span><code>{failure.model_alias}</code><small>{failure.error_code || failure.provider_name}</small></span>
-                        <span><strong>{failure.credential_label || "No key"}</strong><small>{failure.latency_ms} ms</small></span>
-                        <time>{formatRelativeTime(failure.created_at)}</time>
-                        <ChevronRight size={14} />
+                        <span className="failure-code" aria-hidden="true">{failure.status_code}</span>
+                        <span aria-hidden="true"><code title={failure.model_alias}>{failure.model_alias}</code><small title={failure.error_code || failure.provider_name}>{failure.error_code || failure.provider_name}</small></span>
+                        <span aria-hidden="true"><strong title={failure.credential_label || "No key"}>{failure.credential_label || "No key"}</strong><small>{failure.latency_ms} ms</small></span>
+                        <time dateTime={failure.created_at} aria-hidden="true">{formatRelativeTime(failure.created_at)}</time>
+                        <ChevronRight size={14} aria-hidden="true" />
                       </button>
                     ))}
                   </div>
@@ -767,11 +910,24 @@ function creditTone(credit: CreditTotals): "default" | "warning" | "danger" {
   return "default";
 }
 
+/** segmentTrafficLabel answers "which key served how many calls, and what is left
+ * on it" in one line. Empty when the key tracks no balance and served no traffic,
+ * so the row falls back to its routing state. */
+function segmentTrafficLabel(segment: Overview["routes"][number]["segments"][number]) {
+  const credit = segment.credit;
+  if (!credit) return "";
+  const parts = [`${formatNumber(credit.requests ?? 0)} calls`, `${formatUSD(credit.remaining_usd)} left`];
+  if ((credit.errors ?? 0) > 0) parts.push(`${formatNumber(credit.errors ?? 0)} failed`);
+  return parts.join(" · ");
+}
+
 function ConsolePanelHeader({ eyebrow, title, detail }: { eyebrow: string; title: string; detail?: string }) {
   return (
     <header className="console-panel__header">
       <div><span>{eyebrow}</span><h2>{title}</h2></div>
-      {detail && <small>{detail}</small>}
+      {/* The detail is the first thing to ellipsis when a panel narrows, so it
+          keeps its full text on a title. */}
+      {detail && <small title={detail}>{detail}</small>}
     </header>
   );
 }
@@ -793,7 +949,9 @@ function SignalTimeline({ overview }: { overview: Overview }) {
     <section className="console-panel signal-panel">
       <ConsolePanelHeader eyebrow="Signal timeline" title={`Traffic · ${overview.range}`} detail={`P50 ${overview.summary.latency_p50_ms} ms`} />
       <div className="signal-chart">
-        <svg viewBox="0 0 720 170" role="img" aria-label={`Requests and P95 latency over ${overview.range}`}>
+        {/* A line chart has no text equivalent, so the label carries the shape of
+            the data: the peaks and the number of buckets that saw errors. */}
+        <svg viewBox="0 0 720 170" role="img" aria-label={`Requests and P95 latency over ${overview.range}. Peak ${formatNumber(requestMax)} requests per bucket, peak P95 ${formatLatency(latencyMax)}. ${errorPoints.filter((point) => point.active).length} of ${overview.series.length} buckets recorded errors.`}>
           <g className="signal-axis-labels">
             <text x="0" y="15">{formatCompact(requestMax)}</text><text x="28" y="127">0</text>
             <text x="672" y="15">{formatLatency(latencyMax)}</text><text x="688" y="127">0</text>
@@ -806,7 +964,7 @@ function SignalTimeline({ overview }: { overview: Overview }) {
           <path className="signal-path signal-path--requests" d={requestPath} />
           {errorPoints.filter((point) => point.active).map((point) => <line className="signal-error-tick" key={point.x} x1={point.x} x2={point.x} y1="121" y2="130" />)}</g>
         </svg>
-        <div className="signal-legend">
+        <div className="signal-legend" aria-hidden="true">
           <span><i className="is-request" /> requests</span>
           <span><i className="is-latency" /> p95 latency</span>
           <span><i className="is-error" /> error bucket</span>
@@ -819,7 +977,12 @@ function SignalTimeline({ overview }: { overview: Overview }) {
 function ModelUsageRanking({ routes, range }: { routes: Overview["routes"]; range: Overview["range"] }) {
   const ranking = [...routes].filter((route) => route.requests > 0).sort((a, b) => b.estimated_cost_usd - a.estimated_cost_usd || b.tokens - a.tokens || b.requests - a.requests).slice(0, 6);
   return <section className="console-panel model-ranking"><ConsolePanelHeader eyebrow="Usage ledger" title="Model ranking" detail={`${range} · ranked by estimated cost`} />
-    {ranking.length === 0 ? <p className="console-empty">No model usage in this range.</p> : <div className="model-ranking__table"><div className="model-ranking__head"><span>Model</span><span>Requests</span><span>Tokens</span><span>Cost</span></div>{ranking.map((route, index) => <div className="model-ranking__row" key={route.id}><strong><i>{index + 1}</i><code>{route.alias}</code></strong><span>{formatNumber(route.requests)}</span><span>{formatCompact(route.tokens)}</span><span>{formatUSD(route.estimated_cost_usd)}</span></div>)}</div>}
+    {/* Four columns of figures with a header row is a table, and it is read as one:
+        without the roles a screen reader announces twenty-four loose numbers with
+        no indication of which column any of them belongs to. Below 650px the table
+        scrolls sideways inside the panel, and a scroll container that only a
+        pointer can move is unreachable — tabIndex makes the arrow keys work. */}
+    {ranking.length === 0 ? <p className="console-empty">No model usage in this range.</p> : <div className="model-ranking__table" role="table" aria-label={`Model usage ranked by estimated cost, ${range}`} tabIndex={0}><div className="model-ranking__head" role="row"><span role="columnheader">Model</span><span role="columnheader">Requests</span><span role="columnheader">Tokens</span><span role="columnheader">Cost</span></div>{ranking.map((route, index) => <div className="model-ranking__row" role="row" key={route.id}><strong role="rowheader"><i aria-hidden="true">{index + 1}</i><code title={route.alias}>{route.alias}</code></strong><span role="cell">{formatNumber(route.requests)}</span><span role="cell">{formatCompact(route.tokens)}</span><span role="cell">{formatUSD(route.estimated_cost_usd)}</span></div>)}</div>}
   </section>;
 }
 
@@ -828,14 +991,18 @@ function AttentionQueue({ alerts, onSelect }: { alerts: Overview["alerts"]; onSe
     <section className="console-panel attention-panel">
       <ConsolePanelHeader eyebrow="Attention queue" title={alerts.length ? `${alerts.length} signals` : "All clear"} />
       {alerts.length === 0 ? (
-        <div className="all-clear"><Check size={16} /><span><strong>No intervention needed</strong><small>Routes and API keys are ready.</small></span></div>
+        <div className="all-clear"><Check size={16} aria-hidden="true" /><span><strong>No intervention needed</strong><small>Routes and API keys are ready.</small></span></div>
       ) : (
         <div className="attention-list">
           {alerts.slice(0, 6).map((alert) => (
-            <button key={alert.id} className={`attention-item attention-item--${alert.severity}`} onClick={() => onSelect(alert)}>
-              <AlertTriangle size={14} />
-              <span><strong>{alert.title}</strong><small>{alert.detail}</small></span>
-              <ChevronRight size={13} />
+            <button key={alert.id} className={`attention-item attention-item--${alert.severity}`} onClick={() => onSelect(alert)} aria-label={`${alert.severity === "critical" ? "Critical" : alert.severity === "warning" ? "Warning" : "Note"}: ${alert.title}. ${alert.detail}`}>
+              <AlertTriangle size={14} aria-hidden="true" />
+              {/* The row is one line by design and the detail is ellipsised, so the
+                  full sentence is on the title as well — clicking opens it in the
+                  inspector, but a sighted operator should not have to click to read
+                  a sentence that is only a few characters too long. */}
+              <span aria-hidden="true"><strong title={alert.title}>{alert.title}</strong><small title={alert.detail}>{alert.detail}</small></span>
+              <ChevronRight size={13} aria-hidden="true" />
             </button>
           ))}
         </div>
@@ -863,14 +1030,14 @@ function ProviderCapacityGroup({
     <section className={`provider-debug-group${expanded ? " is-expanded" : ""}`}>
       <div className={`provider-debug-head ${selected?.type === "provider" && selected.id === provider.id ? "is-selected" : ""}`}>
         <button className="provider-debug-toggle" onClick={onToggle} aria-expanded={expanded} aria-controls={`provider-models-${provider.id}`}>
-          <ChevronDown size={15} />
+          <ChevronDown size={15} aria-hidden="true" />
           <StatusDot state={!provider.enabled ? "disabled" : provider.keys_ready ? "healthy" : "exhausted"} />
-          <span><strong>{provider.name}</strong><small>{provider.models_ready}/{provider.models_total} models ready · {provider.keys_ready}/{provider.keys_total} keys ready{provider.credit.tracked_keys > 0 ? ` · ${formatUSD(provider.credit.remaining_usd)} balance left` : ""}</small></span>
+          <span><strong title={provider.name}>{provider.name}</strong><small title={`${provider.models_ready}/${provider.models_total} models ready · ${provider.keys_ready}/${provider.keys_total} keys ready${provider.credit.tracked_keys > 0 ? ` · ${formatUSD(provider.credit.remaining_usd)} balance left` : ""}`}>{provider.models_ready}/{provider.models_total} models ready · {provider.keys_ready}/{provider.keys_total} keys ready{provider.credit.tracked_keys > 0 ? ` · ${formatUSD(provider.credit.remaining_usd)} balance left` : ""}</small></span>
         </button>
         <div className="limit-preview">
           {capacityDimensions.map((dimension) => <LimitCell key={dimension} dimension={dimension} limit={provider.capacity[dimension]} />)}
         </div>
-        <button className="provider-inspect" onClick={() => onSelect({ type: "provider", id: provider.id })}>Inspect</button>
+        <button className="provider-inspect" onClick={() => onSelect({ type: "provider", id: provider.id })} aria-label={`Inspect ${provider.name}`}>Inspect</button>
       </div>
       {expanded && <div className="route-debug-list" id={`provider-models-${provider.id}`}>
         <div className="route-debug-columns" aria-hidden="true">
@@ -887,8 +1054,18 @@ function ProviderCapacityGroup({
 function LimitCell({ dimension, limit }: { dimension: string; limit?: Overview["providers"][number]["capacity"][string] }) {
   const ratio = limit && !limit.unlimited && limit.limit > 0 ? limit.remaining / limit.limit : 1;
   const tone = limit?.unknown ? "unknown" : ratio <= 0 ? "critical" : ratio <= 0.2 ? "warning" : "healthy";
+  // The cell is four characters wide by design, so the reading it abbreviates goes
+  // on the title in full: "88K/400K" is a rounding of the number an operator is
+  // about to make a capacity decision on.
+  const reading = !limit
+    ? "no limit set"
+    : limit.unlimited
+      ? "unlimited"
+      : limit.unknown
+        ? `remaining unknown of ${formatNumber(limit.limit)}`
+        : `${formatNumber(limit.remaining)} of ${formatNumber(limit.limit)} left`;
   return (
-    <span className={`limit-cell limit-cell--${tone}`} title={`${dimension.toUpperCase()} provider capacity`}>
+    <span className={`limit-cell limit-cell--${tone}`} title={`${dimension.toUpperCase()} provider capacity: ${reading}`}>
       <small>{dimension}</small>
       <strong>{!limit ? "—" : limit.unlimited ? "∞" : limit.unknown ? "?" : `${formatCompact(limit.remaining)}/${formatCompact(limit.limit)}`}</strong>
     </span>
@@ -914,17 +1091,33 @@ function RouteDebugRow({
   const isSelected = selected?.type === "route" && selected.id === route.id
     || selected?.type === "credential" && route.segments.some((segment) => segment.id === selected.id);
   const modelBottleneck = formatModelBottleneck(route);
+  // The column headings above this row are decorative, so the row states its own
+  // figures: without this a screen reader reads five bare numbers in a row.
+  const rowLabel = [
+    route.alias,
+    statusLabel(state),
+    `${formatNumber(route.requests)} requests`,
+    `${(route.error_rate * 100).toFixed(1)}% errors`,
+    `${route.healthy_credentials} of ${route.total_credentials} keys ready`,
+    route.next_credential_id ? `next key ${route.segments.find((segment) => segment.cursor)?.label ?? "unnamed"}` : "no key available",
+    modelBottleneck === NO_MODEL_LIMIT ? "no model limit, the provider limit applies" : `model limit ${modelBottleneck}`
+  ].join(" · ");
   return (
-    <button className={`route-debug-row ${isSelected ? "is-selected" : ""}`} onClick={() => onSelect({ type: "route", id: route.id })}>
-      <span className="route-debug-row__identity">
+    <button
+      className={`route-debug-row ${isSelected ? "is-selected" : ""}`}
+      onClick={() => onSelect({ type: "route", id: route.id })}
+      aria-current={isSelected}
+      aria-label={rowLabel}
+    >
+      <span className="route-debug-row__identity" aria-hidden="true">
         <StatusDot state={state} />
         <span><code>{route.alias}</code><small>{route.upstream_model !== route.alias ? `Upstream · ${route.upstream_model}` : route.supports_responses ? "Chat + Responses" : "Chat Completions"}</small></span>
       </span>
-      <span className="route-traffic"><strong>{formatNumber(route.requests)}</strong><small>{(route.error_rate * 100).toFixed(1)}% err · {formatNumber(route.latency_p95_ms)} ms</small></span>
-      <span className="route-key-count"><strong>{route.healthy_credentials}/{route.total_credentials}</strong><small>ready</small></span>
-      <span className="route-next-key"><strong>{route.segments.find((segment) => segment.cursor)?.label || "—"}</strong><small>{route.next_credential_id ? "next" : "unavailable"}</small></span>
-      <span className="route-bottleneck"><strong>{modelBottleneck}</strong><small>{modelBottleneck === "Shared only" ? "provider limit" : "model limit"}</small></span>
-      <ChevronRight size={14} />
+      <span className="route-traffic" aria-hidden="true"><strong>{formatNumber(route.requests)}</strong><small>{(route.error_rate * 100).toFixed(1)}% err · {formatNumber(route.latency_p95_ms)} ms</small></span>
+      <span className="route-key-count" aria-hidden="true"><strong>{route.healthy_credentials}/{route.total_credentials}</strong><small>ready</small></span>
+      <span className="route-next-key" aria-hidden="true"><strong>{route.segments.find((segment) => segment.cursor)?.label || "—"}</strong><small>{route.next_credential_id ? "next" : "unavailable"}</small></span>
+      <span className="route-bottleneck" aria-hidden="true"><strong>{modelBottleneck}</strong><small>{modelBottleneck === NO_MODEL_LIMIT ? "provider limit applies" : "model limit"}</small></span>
+      <ChevronRight size={14} aria-hidden="true" />
     </button>
   );
 }
@@ -952,22 +1145,22 @@ function OverviewInspector({
 }) {
   const [busy, setBusy] = useState(false);
   if (!provider && !route && !credential) {
-    return <aside className={`overview-inspector is-empty${open ? " is-open" : ""}`}><CircleGauge size={20} /><strong>Select a route signal</strong><p>Inspect the next key, limiting bucket and reset without leaving Overview.</p></aside>;
+    return <aside className={`overview-inspector is-empty${open ? " is-open" : ""}`}><CircleGauge size={20} aria-hidden="true" /><strong>Select a route signal</strong><p>Inspect the next key, limiting bucket and reset without leaving Overview.</p></aside>;
   }
   return (
     <aside className={`overview-inspector${open ? " is-open" : ""}`}>
       <header>
         <div><span>{credential ? "API key" : route ? "Public model" : "Provider"}</span><h2>{credential?.label || route?.alias || provider?.name}</h2></div>
-        <button className="console-icon inspector-close" onClick={onClose} aria-label="Close inspector"><X size={15} /></button>
+        <button className="console-icon inspector-close" onClick={onClose} aria-label="Close inspector"><X size={15} aria-hidden="true" /></button>
       </header>
       {route && (
         <div className="route-trace" aria-label="Selected route debugger trace">
           <TraceNode label="model" value={route.alias} />
-          <ArrowRight size={15} />
+          <ArrowRight size={15} aria-hidden="true" />
           <TraceNode label="provider" value={route.provider} />
-          <ArrowRight size={15} />
+          <ArrowRight size={15} aria-hidden="true" />
           <TraceNode label="next key" value={route.segments.find((segment) => segment.cursor)?.label || "none"} tone={!route.next_credential_id ? "danger" : "default"} />
-          <ArrowRight size={15} />
+          <ArrowRight size={15} aria-hidden="true" />
           <TraceNode label="limit" value={formatRouteBottleneck(route)} />
         </div>
       )}
@@ -976,19 +1169,26 @@ function OverviewInspector({
           {credential.validation_error && <InlineNotice tone="danger">{credential.validation_error}</InlineNotice>}
           {credential.credit?.exhausted && (
             <InlineNotice tone="danger">
-              This key has spent its {formatUSD(credential.credit.balance_usd)} of balance, so the router skips it. Raise the balance on the provider page to bring it back.
+              This key has nothing left, so the router skips it. Raise the balance per key on the provider page to bring it back.
             </InlineNotice>
           )}
           <div className="inspector-definition">
-            <Definition label="Status" value={credential.status} />
+            <Definition label="Status" value={statusLabel(credential.status)} />
             <Definition label="Secret" value={`•••• ${credential.secret_suffix}`} />
             <Definition label="Routing role" value={[credential.primary ? "primary" : "", credential.cursor ? "next" : ""].filter(Boolean).join(" · ") || "fallback"} />
             <Definition label="Validated" value={credential.last_validated_at ? formatRelativeTime(credential.last_validated_at) : "not recorded"} />
             <Definition
               label="Balance left"
-              value={credential.credit ? `${formatUSD(credential.credit.remaining_usd)} / ${formatUSD(credential.credit.balance_usd)}` : "not tracked"}
+              value={credential.credit ? formatUSD(credential.credit.remaining_usd) : "not tracked"}
             />
             <Definition label="Spent" value={credential.credit ? formatUSD(credential.credit.spent_usd) : "—"} />
+            {credential.credit && (
+              <>
+                <Definition label="Calls on this key" value={formatNumber(credential.credit.requests ?? 0)} />
+                <Definition label="Failed calls" value={formatNumber(credential.credit.errors ?? 0)} />
+                <Definition label="Tokens on this key" value={formatCompact(credential.credit.tokens ?? 0)} />
+              </>
+            )}
           </div>
           <HeadroomReadout label="Request limit" headroom={credential.request_headroom} />
           <HeadroomReadout label="Token limit" headroom={credential.token_headroom} />
@@ -1001,13 +1201,30 @@ function OverviewInspector({
             <Definition label="Keys ready" value={`${provider.keys_ready}/${provider.keys_total}`} />
             <Definition label="Key warnings" value={String(provider.keys_warning)} />
             <Definition label="State" value={provider.enabled ? "enabled" : "disabled"} />
+            <Definition
+              label="Balance per key"
+              value={provider.default_key_balance_usd == null ? "not tracked" : formatUSD(provider.default_key_balance_usd)}
+            />
             {provider.credit.tracked_keys > 0 && (
               <>
-                <Definition label="Balance left" value={`${formatUSD(provider.credit.remaining_usd)} / ${formatUSD(provider.credit.balance_usd)}`} />
+                <Definition label="Balance left" value={formatUSD(provider.credit.remaining_usd)} />
+                <Definition label="Spent" value={formatUSD(provider.credit.spent_usd)} />
                 <Definition label="Keys out of balance" value={`${provider.credit.exhausted_keys}/${provider.credit.tracked_keys} tracked`} />
+                {(provider.credit.unattributed_spent_usd ?? 0) > 0 && (
+                  <Definition
+                    label="Charged provider-wide"
+                    value={formatUSD(provider.credit.unattributed_spent_usd ?? 0)}
+                  />
+                )}
               </>
             )}
           </div>
+          {(provider.credit.unattributed_spent_usd ?? 0) > 0 && (
+            <p className="inspector-note">
+              Some requests ended before the gateway recorded which key served them. That spend comes off this
+              provider's remaining balance instead of one key's, so the totals here can run ahead of the per-key figures.
+            </p>
+          )}
           <div className="inspector-limit-grid">
             {capacityDimensions.map((dimension) => <LimitCell key={dimension} dimension={dimension} limit={provider.capacity[dimension]} />)}
           </div>
@@ -1028,8 +1245,8 @@ function OverviewInspector({
           <div className="inspector-key-list">
             <span>Credential path</span>
             {route.segments.map((segment) => (
-              <button key={segment.id} onClick={() => onSelectCredential(segment.id)}>
-                <StatusDot state={segment.status} /><strong>{segment.label}</strong><small>{segment.cursor ? "next" : segment.status}</small><ChevronRight size={13} />
+              <button key={segment.id} onClick={() => onSelectCredential(segment.id)} aria-label={`${segment.label}, ${segment.cursor ? "serves the next request" : statusLabel(segment.status)}${segmentTrafficLabel(segment) ? `, ${segmentTrafficLabel(segment)}` : ""}`}>
+                <StatusDot state={segment.status} /><strong title={segment.label}>{segment.label}</strong><small title={segmentTrafficLabel(segment)}>{segmentTrafficLabel(segment) || (segment.cursor ? "next" : segment.status)}</small><ChevronRight size={13} aria-hidden="true" />
               </button>
             ))}
           </div>
@@ -1040,12 +1257,12 @@ function OverviewInspector({
           <Button variant="quiet" disabled={busy} onClick={() => {
             setBusy(true);
             void onRecheck(credential.id).finally(() => setBusy(false));
-          }}><RefreshCw size={14} /> {busy ? "Checking…" : "Re-check key"}</Button>
+          }}><RefreshCw size={14} aria-hidden="true" /> {busy ? "Checking…" : "Re-check key"}</Button>
         ) : provider ? (
           <Button variant="quiet" disabled={busy} onClick={() => {
             setBusy(true);
             void onTest().finally(() => setBusy(false));
-          }}><Activity size={14} /> {busy ? "Testing…" : "Test provider"}</Button>
+          }}><Activity size={14} aria-hidden="true" /> {busy ? "Testing…" : "Test provider"}</Button>
         ) : null}
         {provider && <Button variant="quiet" onClick={() => navigate("providers", { provider: provider.id })}>Open provider</Button>}
         {route && <Button variant="quiet" onClick={() => navigate("providers", { provider: route.provider_id })}>Manage model limits</Button>}
@@ -1060,12 +1277,15 @@ function TraceNode({ label, value, tone = "default" }: { label: string; value: s
 }
 
 function Definition({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  return <div><span>{label}</span><strong className={mono ? "is-mono" : ""}>{value}</strong></div>;
+  // Two of these sit side by side in a narrow inspector and the value ellipsises
+  // rather than widening the pane, so the full text stays on the title. A provider
+  // name is the usual casualty: it is the one value an operator names themselves.
+  return <div><span>{label}</span><strong className={mono ? "is-mono" : ""} title={value}>{value}</strong></div>;
 }
 
 function HeadroomReadout({ label, headroom }: { label: string; headroom?: Overview["routes"][number]["next_request_headroom"] }) {
   if (!headroom) {
-    return <div className="headroom-readout is-unlimited"><span>{label}</span><strong>Unlimited</strong><small>No configured bucket limits this path.</small></div>;
+    return <div className="headroom-readout is-unlimited"><span>{label}</span><strong>Unlimited</strong><small>No rate limit is set on this path.</small></div>;
   }
   const ratio = headroom.limit ? Math.max(0, Math.min(1, headroom.remaining / headroom.limit)) : 1;
   return (
@@ -1100,22 +1320,44 @@ function timelinePath(values: number[], width: number, height: number) {
   }).join(" ");
 }
 
+/** Narrows away the nulls `filter(Boolean)` leaves behind in the type, so the
+ *  headroom comparisons below read the fields directly instead of asserting. */
+function isHeadroom(
+  headroom: Overview["routes"][number]["next_request_headroom"]
+): headroom is NonNullable<Overview["routes"][number]["next_request_headroom"]> {
+  return Boolean(headroom);
+}
+
+/** Whichever bucket has the least room left as a share of its own limit is the one
+ *  that will stop the next request, so that is the one worth showing. */
+function tightestHeadroom(
+  candidates: Array<NonNullable<Overview["routes"][number]["next_request_headroom"]>>
+) {
+  return candidates.reduce((tightest, candidate) => (
+    candidate.remaining / Math.max(candidate.limit, 1) < tightest.remaining / Math.max(tightest.limit, 1)
+      ? candidate
+      : tightest
+  ));
+}
+
+/** Shown where a route has no model-scoped bucket at all, so the provider's shared
+ *  limit is the only thing governing it. */
+const NO_MODEL_LIMIT = "No model limit";
+
 function formatRouteBottleneck(route: Overview["routes"][number]) {
-  const candidates = [route.next_request_headroom, route.next_token_headroom].filter(Boolean);
+  const candidates = [route.next_request_headroom, route.next_token_headroom].filter(isHeadroom);
   if (!route.next_credential_id) return "no route";
   if (candidates.length === 0) return "unlimited";
-  const tightest = candidates.sort((left, right) => (
-    (left!.remaining / Math.max(left!.limit, 1)) - (right!.remaining / Math.max(right!.limit, 1))
-  ))[0]!;
+  const tightest = tightestHeadroom(candidates);
   return `${formatCompact(tightest.remaining)}/${formatCompact(tightest.limit)} ${tightest.dimension}`;
 }
 
 function formatModelBottleneck(route: Overview["routes"][number]) {
-  const candidates = [route.next_request_headroom, route.next_token_headroom].filter((headroom) => headroom?.scope === "model");
-  if (candidates.length === 0) return "Shared only";
-  const tightest = candidates.sort((left, right) => (
-    (left!.remaining / Math.max(left!.limit, 1)) - (right!.remaining / Math.max(right!.limit, 1))
-  ))[0]!;
+  const candidates = [route.next_request_headroom, route.next_token_headroom]
+    .filter(isHeadroom)
+    .filter((headroom) => headroom.scope === "model");
+  if (candidates.length === 0) return NO_MODEL_LIMIT;
+  const tightest = tightestHeadroom(candidates);
   return `${formatCompact(tightest.remaining)}/${formatCompact(tightest.limit)} ${tightest.dimension}`;
 }
 
@@ -1153,13 +1395,18 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
   const [error, setError] = useState("");
   const [openSection, setOpenSection] = useState<"models" | "credentials" | null>(null);
   const [providerInspectorOpen, setProviderInspectorOpen] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  // The panel holds ids, not the records themselves. A snapshot taken when the
+  // sheet opened went stale the moment the ten-second reload landed, so an edit
+  // could be saved against limits or a label that had already changed upstream.
   const [panel, setPanel] = useState<
     null
     | { type: "wizard" }
-    | { type: "provider"; provider: Provider }
-    | { type: "model"; provider: Provider; model?: ModelRoute }
-    | { type: "import"; provider: Provider }
-    | { type: "credential"; provider: Provider; credential?: Credential }
+    | { type: "provider"; providerID: string }
+    | { type: "model"; providerID: string; modelID?: string }
+    | { type: "import"; providerID: string }
+    | { type: "credential"; providerID: string; credentialID?: string }
   >(null);
 
   const load = useCallback(async () => {
@@ -1182,7 +1429,21 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
   }, [load]);
 
   const selected = providers.find((provider) => provider.id === selectedID);
+  // Sheets read their provider out of the live list, so the ten-second reload
+  // keeps them current instead of leaving them on a snapshot.
+  const panelProvider = panel && panel.type !== "wizard"
+    ? providers.find((provider) => provider.id === panel.providerID)
+    : undefined;
   useEffect(() => setOpenSection(null), [selectedID]);
+  // The selected provider lives in the address bar, so a reload or a shared link
+  // reopens the same upstream instead of dropping the operator on the first one.
+  useEffect(() => {
+    if (!selectedID) return;
+    const url = new URL(location.href);
+    if (url.searchParams.get("provider") === selectedID) return;
+    url.searchParams.set("provider", selectedID);
+    history.replaceState(history.state, "", url);
+  }, [selectedID]);
   const complete = (message: string) => {
     setPanel(null);
     notify(message);
@@ -1195,14 +1456,27 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
         eyebrow="Upstream setup"
         title="Providers"
         description="Setup stays provider-wise. Every application still calls one model-wise gateway."
-        actions={<Button onClick={() => setPanel({ type: "wizard" })}><Plus size={15} /> Add provider</Button>}
+        actions={<Button onClick={() => setPanel({ type: "wizard" })}><Plus size={15} aria-hidden="true" /> Add provider</Button>}
       />
-      {error && <InlineNotice tone="danger">{error}</InlineNotice>}
-      {loading ? <PageSkeleton /> : providers.length === 0 ? (
+      {error && (
+        <InlineNotice tone="danger">
+          {error}{" "}
+          <button type="button" className="link-button" onClick={() => void load()}>Try again</button>
+        </InlineNotice>
+      )}
+      {loading ? <PageSkeleton /> : error && providers.length === 0 ? (
         <EmptyState
+          level={2}
+          title="Providers could not be loaded"
+          description={error}
+          action={<Button onClick={() => void load()}><RefreshCw size={14} aria-hidden="true" /> Try again</Button>}
+        />
+      ) : providers.length === 0 ? (
+        <EmptyState
+          level={2}
           title="Connect the first upstream"
-          description="You will define its base URL, model aliases, credentials and limits before enabling traffic."
-          action={<Button onClick={() => setPanel({ type: "wizard" })}><Plus size={15} /> Start provider setup</Button>}
+          description="You will define its base URL, model aliases, API keys and limits before enabling traffic."
+          action={<Button onClick={() => setPanel({ type: "wizard" })}><Plus size={15} aria-hidden="true" /> Start provider setup</Button>}
         />
       ) : (
         <div className="resource-layout">
@@ -1213,12 +1487,13 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                 <button
                   key={provider.id}
                   className={`resource-item ${selectedID === provider.id ? "is-selected" : ""}`}
+                  aria-current={selectedID === provider.id}
                   onClick={() => { setSelectedID(provider.id); setProviderInspectorOpen(true); }}
                 >
                   <StatusDot state={!provider.enabled ? "disabled" : healthy ? "healthy" : "exhausted"} />
-                  <span><strong>{provider.name} <em className={`protocol-badge is-${provider.api_format}`}>{provider.api_format}</em></strong><small>{provider.base_url}</small></span>
-                  <span className="resource-item__count">{provider.models.length} models</span>
-                  <ChevronRight size={15} />
+                  <span><strong title={provider.name}>{provider.name} <em className={`protocol-badge is-${provider.api_format}`}>{provider.api_format}</em></strong><small title={provider.base_url}>{provider.base_url}</small></span>
+                  <span className="resource-item__count">{provider.models.length} model{provider.models.length === 1 ? "" : "s"}</span>
+                  <ChevronRight size={15} aria-hidden="true" />
                 </button>
               );
             })}
@@ -1232,7 +1507,12 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
               )}
               {selected.credentials.some((credential) => credential.validation_error) && (
                 <InlineNotice tone="danger">
-                  {selected.credentials.filter((credential) => credential.validation_error).length} API key warning detected. Open the marked key to replace or re-check it.
+                  {(() => {
+                    const flagged = selected.credentials.filter((credential) => credential.validation_error).length;
+                    return flagged === 1
+                      ? "1 API key needs attention. Open the marked key to replace or re-check it."
+                      : `${flagged} API keys need attention. Open each marked key to replace or re-check it.`;
+                  })()}
                 </InlineNotice>
               )}
               <div className="inspector-header">
@@ -1242,27 +1522,41 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                   <code>{selected.base_url}</code>
                 </div>
                 <div className="button-row">
-                  <button className="console-icon resource-inspector-close" onClick={() => setProviderInspectorOpen(false)} aria-label="Close provider inspector"><X size={15} /></button>
+                  <button className="console-icon resource-inspector-close" onClick={() => setProviderInspectorOpen(false)} aria-label="Close provider inspector"><X size={15} aria-hidden="true" /></button>
                   <ProviderPowerButton provider={selected} onDone={complete} notify={notify} />
-                  <Button variant="quiet" onClick={() => void testProvider(selected, notify)}><Activity size={15} /> Test</Button>
-                  <Button variant="quiet" onClick={() => setPanel({ type: "provider", provider: selected })}>Edit</Button>
+                  <Button
+                    variant="quiet"
+                    disabled={testing}
+                    onClick={() => {
+                      setTesting(true);
+                      void testProvider(selected, notify).finally(() => setTesting(false));
+                    }}
+                  ><Activity size={15} aria-hidden="true" /> {testing ? "Testing…" : "Test"}</Button>
+                  <Button variant="quiet" onClick={() => setPanel({ type: "provider", providerID: selected.id })}>Edit</Button>
                   <Button
                     variant="danger"
+                    disabled={deleting}
                     aria-label={`Delete provider ${selected.name}`}
                     onClick={() => {
-                      if (confirm(`Delete ${selected.name} and every route/credential under it?`)) {
-                        void api<void>(`/api/admin/providers/${selected.id}`, { method: "DELETE" })
-                          .then(() => complete("Provider deleted."))
-                          .catch((caught) => notify(errorMessage(caught), "danger"));
-                      }
+                      // Naming what goes with it: the routes are the aliases callers
+                      // send, and deleting them breaks those callers immediately.
+                      const routes = `${selected.models.length} model route${selected.models.length === 1 ? "" : "s"}`;
+                      const keys = `${selected.credentials.length} API key${selected.credentials.length === 1 ? "" : "s"}`;
+                      if (!confirm(`Delete ${selected.name}? Its ${routes} and ${keys} are removed with it, requests to those aliases start failing at once, and this cannot be undone.`)) return;
+                      setDeleting(true);
+                      void api<void>(`/api/admin/providers/${selected.id}`, { method: "DELETE" })
+                        .then(() => complete(`${selected.name} deleted.`))
+                        .catch((caught) => notify(errorMessage(caught), "danger"))
+                        .finally(() => setDeleting(false));
                     }}
-                  ><Trash2 size={14} /> Delete</Button>
+                  ><Trash2 size={14} aria-hidden="true" /> {deleting ? "Deleting…" : "Delete"}</Button>
                 </div>
               </div>
               <div className="inspector-stats">
-                <span><strong>{selected.models.length}</strong> public routes</span>
-                <span><strong>{selected.credentials.length}</strong> credentials</span>
+                <span><strong>{selected.models.length}</strong> model route{selected.models.length === 1 ? "" : "s"}</span>
+                <span><strong>{selected.credentials.length}</strong> API key{selected.credentials.length === 1 ? "" : "s"}</span>
                 <span><strong>{selected.timeout_seconds}s</strong> timeout</span>
+                <ProviderCreditStat provider={selected} />
               </div>
               <ProviderCapacityStrip provider={selected} />
               <ResourceDisclosure
@@ -1273,8 +1567,8 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                 onToggle={() => setOpenSection((current) => current === "models" ? null : "models")}
                 action={(
                   <div className="button-row">
-                    <Button variant="quiet" onClick={() => setPanel({ type: "import", provider: selected })}><RefreshCw size={14} /> Load models</Button>
-                    <Button variant="quiet" onClick={() => setPanel({ type: "model", provider: selected })}><Plus size={14} /> Manual</Button>
+                    <Button variant="quiet" onClick={() => setPanel({ type: "import", providerID: selected.id })}><RefreshCw size={14} aria-hidden="true" /> Load models</Button>
+                    <Button variant="quiet" onClick={() => setPanel({ type: "model", providerID: selected.id })}><Plus size={14} aria-hidden="true" /> Manual</Button>
                   </div>
                 )}
               >
@@ -1283,7 +1577,12 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                 ) : (
                   <div className="dense-table">
                     {selected.models.map((model) => (
-                      <button key={model.id} className="dense-row" onClick={() => setPanel({ type: "model", provider: selected, model })}>
+                      <button
+                        key={model.id}
+                        className="dense-row"
+                        aria-label={`Edit route ${model.public_alias}, ${model.enabled ? "on" : "off"}, sent upstream as ${model.upstream_model}`}
+                        onClick={() => setPanel({ type: "model", providerID: selected.id, modelID: model.id })}
+                      >
                         <StatusDot state={model.enabled ? "healthy" : "disabled"} />
                         <span><code>{model.public_alias}</code><small>→ {model.upstream_model}</small></span>
                         <span>
@@ -1291,37 +1590,42 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                           {model.supports_messages ? " · Messages" : ""}
                           {model.strip_parameters.length > 0 ? ` · removes ${model.strip_parameters.join(", ")}` : ""}
                         </span>
-                        <ChevronRight size={14} />
+                        <ChevronRight size={14} aria-hidden="true" />
                       </button>
                     ))}
                   </div>
                 )}
               </ResourceDisclosure>
               <ResourceDisclosure
-                title="Credential pool"
+                title="API keys"
                 description="A primary key is tried first. Without one, healthy keys use balanced round-robin."
                 summary={`${selected.credentials.filter((item) => item.enabled && item.status === "healthy").length}/${selected.credentials.length} keys ready`}
                 open={openSection === "credentials"}
                 onToggle={() => setOpenSection((current) => current === "credentials" ? null : "credentials")}
-                action={<Button variant="quiet" onClick={() => setPanel({ type: "credential", provider: selected })}><Plus size={14} /> API key</Button>}
+                action={<Button variant="quiet" onClick={() => setPanel({ type: "credential", providerID: selected.id })}><Plus size={14} aria-hidden="true" /> Add API key</Button>}
               >
                 {selected.credentials.length === 0 ? (
                   <p className="inline-empty">No key is available for this provider.</p>
                 ) : (
                   <div className="dense-table">
                     {selected.credentials.map((credential) => (
-                      <button key={credential.id} className={`dense-row ${credential.validation_error ? "has-warning" : ""}`} onClick={() => setPanel({ type: "credential", provider: selected, credential })}>
+                      <button
+                        key={credential.id}
+                        className={`dense-row ${credential.validation_error ? "has-warning" : ""}`}
+                        aria-label={`Edit API key ${credential.label}, ${credential.validation_error || statusLabel(credential.status)}`}
+                        onClick={() => setPanel({ type: "credential", providerID: selected.id, credentialID: credential.id })}
+                      >
                         <StatusDot state={credential.status} />
                         <span>
-                          <strong>{credential.label}</strong>
-                          <small>
+                          <strong title={credential.label}>{credential.label}</strong>
+                          <small title={credential.validation_error ? credential.validation_error : `${credential.is_primary ? "PRIMARY · " : ""}•••• ${credential.secret_suffix}${credentialBalanceNote(credential)}`}>
                             {credential.validation_error
                               ? credential.validation_error
                               : `${credential.is_primary ? "PRIMARY · " : ""}•••• ${credential.secret_suffix}${credentialBalanceNote(credential)}`}
                           </small>
                         </span>
                         <LimitSummary policy={credential.limits} />
-                        <ChevronRight size={14} />
+                        <ChevronRight size={14} aria-hidden="true" />
                       </button>
                     ))}
                   </div>
@@ -1331,11 +1635,11 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
           )}
         </div>
       )}
-      {panel?.type === "wizard" && <ProviderWizard onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
-      {panel?.type === "provider" && <ProviderForm provider={panel.provider} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
-      {panel?.type === "model" && <ModelForm provider={panel.provider} model={panel.model} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
-      {panel?.type === "import" && <ModelImportForm provider={panel.provider} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
-      {panel?.type === "credential" && <CredentialForm provider={panel.provider} credential={panel.credential} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
+      {panel?.type === "wizard" && <ProviderWizard onClose={() => setPanel(null)} onComplete={complete} />}
+      {panelProvider && panel?.type === "provider" && <ProviderForm provider={panelProvider} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
+      {panelProvider && panel?.type === "model" && <ModelForm provider={panelProvider} model={panelProvider.models.find((model) => model.id === panel.modelID)} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
+      {panelProvider && panel?.type === "import" && <ModelImportForm provider={panelProvider} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
+      {panelProvider && panel?.type === "credential" && <CredentialForm provider={panelProvider} credential={panelProvider.credentials.find((credential) => credential.id === panel.credentialID)} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
     </div>
   );
 }
@@ -1361,7 +1665,7 @@ function ResourceDisclosure({
     <section className={`resource-disclosure${open ? " is-open" : ""}`}>
       <header>
         <button type="button" className="resource-disclosure__toggle" onClick={onToggle} aria-expanded={open}>
-          <ChevronDown size={15} />
+          <ChevronDown size={15} aria-hidden="true" />
           <span><strong>{title}</strong><small>{description}</small></span>
           <code>{summary}</code>
         </button>
@@ -1387,7 +1691,37 @@ function credentialBalanceNote(credential: Credential) {
   return remaining <= 0 ? " · out of balance" : ` · ${formatUSD(remaining)} left`;
 }
 
+/** ProviderCreditStat reports what is left across the account rather than what was
+ * loaded, and stays silent when no key on the provider tracks a balance. Spend the
+ * gateway could not pin on one key still comes off the figure, because the operator
+ * needs the number they can actually spend. */
+function ProviderCreditStat({ provider }: { provider: Provider }) {
+  const tracked = provider.credentials.filter((credential) => credential.balance_usd !== null && credential.balance_usd !== undefined);
+  if (!tracked.length) return null;
+  const remaining = Math.max(0, tracked.reduce(
+    (total, credential) => total + Math.max(0, (credential.balance_usd ?? 0) - credential.balance_spent_usd), 0
+  ) - safeNumber(provider.balance_spent_usd));
+  const exhausted = tracked.filter((credential) => (credential.balance_usd ?? 0) - credential.balance_spent_usd <= 0).length;
+  return (
+    <span title={exhausted ? `${exhausted} of ${tracked.length} tracked keys have nothing left and are skipped.` : `Across ${tracked.length} tracked key${tracked.length === 1 ? "" : "s"}.`}>
+      <strong>{formatUSD(remaining)}</strong> balance left{exhausted ? ` · ${exhausted} key${exhausted === 1 ? "" : "s"} empty` : ""}
+    </span>
+  );
+}
+
 const capacityDimensions = ["rps", "rpm", "rpd", "tps", "tpm", "tpd", "tpr"] as const;
+
+/** Spoken names for the seven buckets. "RPS" read aloud is three letters, so each
+ *  cell of the capacity grid carries the words instead. */
+const dimensionNames: Record<(typeof capacityDimensions)[number], string> = {
+  rps: "requests per second",
+  rpm: "requests per minute",
+  rpd: "requests per day",
+  tps: "tokens per second",
+  tpm: "tokens per minute",
+  tpd: "tokens per day",
+  tpr: "tokens per request"
+};
 
 function ProviderCapacityStrip({ provider }: { provider: Provider }) {
   const capacity = provider.capacity;
@@ -1400,13 +1734,22 @@ function ProviderCapacityStrip({ provider }: { provider: Provider }) {
         </div>
         <span>{capacity?.ready_keys ?? 0}/{capacity?.total_keys ?? provider.credentials.length} keys ready</span>
       </header>
-      <div className="pool-capacity__limits">
+      {/* Seven label-and-value pairs, read as a list so the count is announced and
+          each cell states its bucket in words rather than as three letters. */}
+      <div className="pool-capacity__limits" role="list">
         {capacityDimensions.map((dimension) => {
           const limit = capacity?.limits?.[dimension];
+          const reading = !limit
+            ? "no limit set"
+            : limit.unlimited
+              ? "unlimited"
+              : limit.unknown
+                ? `remaining unknown of ${formatNumber(limit.limit)}`
+                : `${formatNumber(limit.remaining)} of ${formatNumber(limit.limit)} left`;
           return (
-            <div key={dimension}>
-              <span>{dimension.toUpperCase()}</span>
-              <strong>
+            <div key={dimension} role="listitem" aria-label={`${dimensionNames[dimension]}: ${reading}`}>
+              <span aria-hidden="true">{dimension.toUpperCase()}</span>
+              <strong aria-hidden="true">
                 {!limit
                   ? "—"
                   : limit.unlimited
@@ -1415,7 +1758,7 @@ function ProviderCapacityStrip({ provider }: { provider: Provider }) {
                       ? `? / ${formatCompact(limit.limit)}`
                       : `${formatCompact(limit.remaining)} / ${formatCompact(limit.limit)}`}
               </strong>
-              <small>{dimension === "tpr" ? "max / request" : limit?.unlimited ? "unlimited" : "remaining / total"}</small>
+              <small aria-hidden="true">{dimension === "tpr" ? "max / request" : limit?.unlimited ? "unlimited" : "remaining / total"}</small>
             </div>
           );
         })}
@@ -1478,7 +1821,7 @@ function ProviderPowerButton({
         void apply();
       }}
     >
-      <Power size={14} /> {busy ? "Saving…" : turningOff ? "Turn off" : "Turn on"}
+      <Power size={14} aria-hidden="true" /> {busy ? "Saving…" : turningOff ? "Turn off" : "Turn on"}
     </Button>
   );
 }
@@ -1495,14 +1838,15 @@ async function testProvider(provider: Pick<Provider, "id">, notify: (message: st
   }
 }
 
-function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; onComplete: (message: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
+function ProviderWizard({ onClose, onComplete }: { onClose: () => void; onComplete: (message: string) => void }) {
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [provider, setProvider] = useState<ProviderDraft>({
     name: "", base_url: "", auth_header: "Authorization", auth_scheme: "Bearer",
     api_format: "openai", anthropic_version: "2023-06-01",
-    timeout_seconds: 120, enabled: true, allow_private_network: false, extra_headers: {}
+    timeout_seconds: 120, enabled: true, allow_private_network: false, extra_headers: {},
+    default_key_balance: "", apply_balance_to_existing_keys: false
   });
   const [credentialDrafts, setCredentialDrafts] = useState<CredentialDraft[]>(() => [newCredentialDraft()]);
   const [limits, setLimits] = useState<RatePolicy>(emptyPolicy);
@@ -1514,12 +1858,28 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
   const steps = ["Provider", "API keys", "Models", "Review"];
 
   useEffect(() => {
+    // The prefill only fills a still-untouched timeout, so a reply that lands
+    // after the sheet closes — or after the operator started typing — is dropped.
+    let ignore = false;
     void api<Settings>("/api/admin/settings")
-      .then((settings) => setProvider((current) => (
-        current.name || current.base_url ? current : { ...current, timeout_seconds: settings.default_provider_timeout_seconds }
-      )))
+      .then((settings) => {
+        if (ignore) return;
+        setProvider((current) => (
+          current.name || current.base_url ? current : { ...current, timeout_seconds: settings.default_provider_timeout_seconds }
+        ));
+      })
       .catch(() => undefined);
+    return () => { ignore = true; };
   }, []);
+
+  // Four steps of typing sit behind this panel, so a stray backdrop click or an
+  // Escape keypress asks before throwing it away.
+  const dirty = Boolean(
+    provider.name.trim()
+    || provider.base_url.trim()
+    || credentialDrafts.some((credential) => credential.label.trim() || credential.secret.trim())
+    || Object.keys(selectedModels).length > 0
+  );
 
   const inspectKeys = async () => {
     const incomplete = credentialDrafts.some((credential) => Boolean(credential.label.trim()) !== Boolean(credential.secret.trim()));
@@ -1537,7 +1897,7 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
       const inspections = await Promise.all(credentials.map((credential) => (
         api<CredentialInspection>("/api/admin/providers/inspect", {
           method: "POST",
-          json: { provider, secret: credential.secret }
+          json: { provider: providerPayload(provider), secret: credential.secret }
         })
       )));
       const models = mergeModelCatalogs(inspections.map((inspection) => inspection.models));
@@ -1567,7 +1927,7 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
     let createdID = "";
     try {
       const credentials = credentialInputs(credentialDrafts, limits, unverifiedCredentialLabels);
-      const created = await api<{ id: string }>("/api/admin/providers", { method: "POST", json: provider });
+      const created = await api<{ id: string }>("/api/admin/providers", { method: "POST", json: providerPayload(provider) });
       createdID = created.id;
       await api(`/api/admin/providers/${created.id}/credentials`, { method: "POST", json: { credentials } });
       const catalogIDs = new Set(discoveredModels.map((model) => model.id));
@@ -1591,7 +1951,14 @@ function ProviderWizard({ onClose, onComplete, notify }: { onClose: () => void; 
   };
 
   return (
-    <Sheet title="Add provider" eyebrow={`Step ${step + 1} of ${steps.length}`} onClose={onClose} wide>
+    <Sheet
+      title="Add provider"
+      eyebrow={`Step ${step + 1} of ${steps.length}`}
+      onClose={onClose}
+      wide
+      dirty={dirty}
+      discardMessage="Close this panel? The provider, API keys and model choices entered here are not saved yet."
+    >
       <div className="stepper">
         {steps.map((label, index) => <span key={label} className={index <= step ? "is-active" : ""}>{label}</span>)}
       </div>
@@ -1680,7 +2047,52 @@ type ProviderDraft = {
   name: string; base_url: string; auth_header: string; auth_scheme: string;
   api_format: "openai" | "anthropic"; anthropic_version: string;
   timeout_seconds: number; enabled: boolean; allow_private_network: boolean; extra_headers: Record<string, string>;
+  /** Held as text so a blank field stays distinguishable from a zero balance:
+   * blank means "do not track", 0 means "nothing left". The API takes a number or
+   * null, so this is converted at submit time. */
+  default_key_balance: string;
+  apply_balance_to_existing_keys: boolean;
 };
+
+/** providerPayload converts a draft into the JSON the admin API expects. The
+ * balance field crosses as null when blank, which is what tells the server to
+ * stop seeding a figure onto new keys. */
+function providerPayload(draft: ProviderDraft) {
+  const { default_key_balance, apply_balance_to_existing_keys, ...rest } = draft;
+  const trimmed = default_key_balance.trim();
+  return {
+    ...rest,
+    default_key_balance_usd: trimmed === "" ? null : Number(trimmed),
+    apply_balance_to_existing_keys: apply_balance_to_existing_keys && trimmed !== ""
+  };
+}
+
+/** providerDraftFrom seeds the edit form from a saved provider. An absent balance
+ * becomes a blank field, which is the same thing the operator typed to opt out of
+ * tracking it. */
+function providerDraftFrom(provider: Provider): ProviderDraft {
+  return {
+    name: provider.name, base_url: provider.base_url,
+    auth_header: provider.auth_header, auth_scheme: provider.auth_scheme,
+    api_format: provider.api_format ?? "openai", anthropic_version: provider.anthropic_version ?? "2023-06-01",
+    timeout_seconds: provider.timeout_seconds, enabled: provider.enabled,
+    allow_private_network: provider.allow_private_network, extra_headers: provider.extra_headers,
+    default_key_balance: provider.default_key_balance_usd == null ? "" : String(provider.default_key_balance_usd),
+    apply_balance_to_existing_keys: false
+  };
+}
+
+/** providerBalanceError states what is wrong with a typed balance, or an empty
+ * string when there is nothing to say. */
+function providerBalanceError(value: string) {
+  const trimmed = value.trim();
+  if (trimmed === "") return "";
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return "Enter the per-key balance as a positive USD amount, or leave it blank to stop tracking it.";
+  }
+  return "";
+}
 
 const GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/";
 
@@ -1697,8 +2109,9 @@ function geminiCompatibilitySuggestion(baseURL: string, apiFormat: ProviderDraft
   return "";
 }
 
-function ProviderFields({ value, onChange }: { value: ProviderDraft; onChange: (value: ProviderDraft) => void }) {
+function ProviderFields({ value, onChange, existingKeys }: { value: ProviderDraft; onChange: (value: ProviderDraft) => void; existingKeys?: number }) {
   const geminiSuggestion = geminiCompatibilitySuggestion(value.base_url, value.api_format);
+  const balanceError = providerBalanceError(value.default_key_balance);
   const useOfficialPreset = (kind: "openai" | "anthropic") => onChange({
     ...value,
     name: value.name.trim() || (kind === "openai" ? "OpenAI" : "Anthropic"),
@@ -1745,6 +2158,32 @@ function ProviderFields({ value, onChange }: { value: ProviderDraft; onChange: (
       </div>
       {value.api_format === "anthropic" && <label className="field"><span>Anthropic API version <small>Sent upstream with every request</small></span><input value={value.anthropic_version} onChange={(e) => onChange({ ...value, anthropic_version: e.target.value })} /></label>}
       <label className="field"><span>Timeout seconds</span><input type="number" min={1} max={900} value={value.timeout_seconds} onChange={(e) => onChange({ ...value, timeout_seconds: Number(e.target.value) })} /></label>
+      <fieldset>
+        <legend>Balance per API key</legend>
+        <p className="fieldset-note">
+          Type the credit sitting on one key of this account and every key added here starts with that figure.
+          Rotakey subtracts the estimated cost of each request it serves and shows what is left, so you never
+          type a balance into twenty keys by hand. Leave it blank to not track balances on this provider.
+        </p>
+        <label className="field">
+          <span>Balance per key <small>USD</small></span>
+          <input
+            type="number" min={0} step="0.01" inputMode="decimal" placeholder="Not tracked"
+            value={value.default_key_balance}
+            aria-invalid={balanceError ? true : undefined}
+            onChange={(event) => onChange({ ...value, default_key_balance: event.target.value })}
+          />
+        </label>
+        {balanceError && <InlineNotice tone="danger">{balanceError}</InlineNotice>}
+        {existingKeys !== undefined && existingKeys > 0 && (
+          <Toggle
+            checked={value.apply_balance_to_existing_keys && value.default_key_balance.trim() !== ""}
+            onChange={(apply_balance_to_existing_keys) => onChange({ ...value, apply_balance_to_existing_keys })}
+            label={`Apply to all ${existingKeys} existing key${existingKeys === 1 ? "" : "s"}`}
+            description="Records a top-up across the whole account: every key's balance becomes this figure and its recorded spend is cleared."
+          />
+        )}
+      </fieldset>
       <Toggle checked={value.enabled} onChange={(enabled) => onChange({ ...value, enabled })} label="Enable provider" description="Disabled providers are never considered for routing." />
       <Toggle checked={value.allow_private_network} onChange={(allow_private_network) => onChange({ ...value, allow_private_network })} label="Allow private-network target" description="Also permits HTTP. Enable only for a provider you operate on this VPS or LAN." />
     </div>
@@ -1752,24 +2191,31 @@ function ProviderFields({ value, onChange }: { value: ProviderDraft; onChange: (
 }
 
 function ProviderForm({ provider, onClose, onComplete, notify }: { provider: Provider; onClose: () => void; onComplete: (message: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
-  const [draft, setDraft] = useState<ProviderDraft>({
-    name: provider.name, base_url: provider.base_url,
-    auth_header: provider.auth_header, auth_scheme: provider.auth_scheme,
-    api_format: provider.api_format ?? "openai", anthropic_version: provider.anthropic_version ?? "2023-06-01",
-    timeout_seconds: provider.timeout_seconds, enabled: provider.enabled,
-    allow_private_network: provider.allow_private_network, extra_headers: provider.extra_headers
-  });
+  const saved = providerDraftFrom(provider);
+  const [draft, setDraft] = useState<ProviderDraft>(saved);
   const [busy, setBusy] = useState(false);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
   return (
-    <Sheet title={`Edit ${provider.name}`} eyebrow="Provider settings" onClose={onClose}>
-      <ProviderFields value={draft} onChange={setDraft} />
-      <div className="sheet-actions"><span /><Button disabled={busy} onClick={() => {
-        setBusy(true);
-        void api(`/api/admin/providers/${provider.id}`, { method: "PUT", json: draft })
-          .then(() => onComplete("Provider updated."))
-          .catch((caught) => notify(errorMessage(caught), "danger"))
-          .finally(() => setBusy(false));
-      }}>{busy ? "Saving…" : "Save provider"}</Button></div>
+    <Sheet
+      title={`Edit ${provider.name}`}
+      eyebrow="Provider settings"
+      onClose={onClose}
+      dirty={dirty}
+      discardMessage="Close this panel? The provider changes here are not saved yet."
+    >
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          setBusy(true);
+          void api(`/api/admin/providers/${provider.id}`, { method: "PUT", json: providerPayload(draft) })
+            .then(() => onComplete(`${draft.name} updated.`))
+            .catch((caught) => notify(errorMessage(caught), "danger"))
+            .finally(() => setBusy(false));
+        }}
+      >
+        <ProviderFields value={draft} onChange={setDraft} existingKeys={provider.credentials.length} />
+        <div className="sheet-actions"><span /><Button type="submit" disabled={busy}>{busy ? "Saving…" : "Save provider"}</Button></div>
+      </form>
     </Sheet>
   );
 }
@@ -1825,6 +2271,9 @@ function ModelForm({ provider, model, onClose, onComplete, notify }: { provider:
     capture_bodies: false, strip_parameters: [], enabled: true
   });
   const [busy, setBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const initial = useRef(JSON.stringify(draft));
+  const dirty = JSON.stringify(draft) !== initial.current;
   // The mode arrives after the first render, so the untouched provider-prefixed
   // default is cleared once model-wise routing is confirmed.
   useEffect(() => {
@@ -1836,7 +2285,7 @@ function ModelForm({ provider, model, onClose, onComplete, notify }: { provider:
     try {
       if (model) await api(`/api/admin/models/${model.id}`, { method: "PUT", json: draft });
       else await api(`/api/admin/providers/${provider.id}/models`, { method: "POST", json: draft });
-      onComplete(model ? "Model route updated." : "Model route created.");
+      onComplete(model ? `Route ${draft.public_alias} updated.` : `Route ${draft.public_alias} created.`);
     } catch (caught) {
       notify(errorMessage(caught), "danger");
     } finally {
@@ -1844,14 +2293,28 @@ function ModelForm({ provider, model, onClose, onComplete, notify }: { provider:
     }
   };
   return (
-    <Sheet title={model ? "Edit model route" : "Add model route"} eyebrow={provider.name} onClose={onClose} actions={model ? <Button variant="danger" onClick={() => {
-      if (confirm(`Delete route ${model.public_alias}?`)) void api(`/api/admin/models/${model.id}`, { method: "DELETE" }).then(() => onComplete("Model route deleted.")).catch((caught) => notify(errorMessage(caught), "danger"));
-    }}><Trash2 size={14} /> Delete model</Button> : undefined}>
-      <ModelFields value={draft} onChange={setDraft} />
-      <div className="sheet-actions">
-        <span />
-        <Button disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : model ? "Save route" : "Create route"}</Button>
-      </div>
+    <Sheet
+      title={model ? "Edit model route" : "Add model route"}
+      eyebrow={provider.name}
+      onClose={onClose}
+      dirty={dirty}
+      discardMessage="Close this panel? The route details here are not saved yet."
+      actions={model ? <Button variant="danger" disabled={deleting} onClick={() => {
+        if (!confirm(`Delete route ${model.public_alias}? Requests using this alias stop immediately, and the route cannot be restored — you would add it again from scratch.`)) return;
+        setDeleting(true);
+        void api(`/api/admin/models/${model.id}`, { method: "DELETE" })
+          .then(() => onComplete(`Route ${model.public_alias} deleted.`))
+          .catch((caught) => notify(errorMessage(caught), "danger"))
+          .finally(() => setDeleting(false));
+      }}><Trash2 size={14} aria-hidden="true" /> {deleting ? "Deleting…" : "Delete model"}</Button> : undefined}
+    >
+      <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
+        <ModelFields value={draft} onChange={setDraft} />
+        <div className="sheet-actions">
+          <span />
+          <Button type="submit" disabled={busy}>{busy ? "Saving…" : model ? "Save route" : "Create route"}</Button>
+        </div>
+      </form>
     </Sheet>
   );
 }
@@ -1886,10 +2349,26 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
   const [selectedModel, setSelectedModel] = useState(provider.models[0]?.id ?? "");
   const [modelLimits, setModelLimits] = useState<RatePolicy>(() => credential?.model_limits[provider.models[0]?.id] ?? emptyPolicy());
   const [busy, setBusy] = useState(false);
+  const [labelTouched, setLabelTouched] = useState(false);
+  const [secretTouched, setSecretTouched] = useState(false);
+  const fieldID = useId();
 
   useEffect(() => {
     setModelLimits(credential?.model_limits[selectedModel] ?? emptyPolicy());
-  }, [selectedModel, credential]);
+  }, [selectedModel, credential?.id]);
+
+  const labelInvalid = labelTouched && !label.trim();
+  const secretInvalid = secretTouched && !credential && secret.trim().length < 8;
+  // Anything typed here is lost on a stray backdrop click, so the sheet asks
+  // first. A saved key being re-checked is not itself a change.
+  const dirty = Boolean(
+    secret.trim()
+    || label !== (credential?.label ?? "")
+    || isPrimary !== (credential?.is_primary ?? false)
+    || enabled !== (credential?.enabled ?? true)
+    || resetSpend
+    || Object.keys(selectedModels).length > 0
+  );
 
   const checkKey = async () => {
     setBusy(true);
@@ -1969,17 +2448,66 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
   };
 
   return (
-    <Sheet title={credential ? `Edit ${credential.label}` : "Add API key"} eyebrow={provider.name} onClose={onClose} wide actions={credential ? <Button variant="danger" onClick={() => {
-      if (confirm(`Delete API key ${credential.label}?`)) void api(`/api/admin/credentials/${credential.id}`, { method: "DELETE" }).then(() => onComplete("API key deleted.")).catch((caught) => notify(errorMessage(caught), "danger"));
-    }}><Trash2 size={14} /> Delete key</Button> : undefined}>
+    <Sheet
+      title={credential ? `Edit ${credential.label}` : "Add API key"}
+      eyebrow={provider.name}
+      onClose={onClose}
+      wide
+      dirty={dirty}
+      discardMessage="Close this panel? The API key and limits typed here are not saved yet."
+      actions={credential ? <Button variant="danger" disabled={busy} onClick={() => {
+        if (!confirm(`Delete API key ${credential.label}? Requests routed to it move to the provider's other keys, and this cannot be undone.`)) return;
+        setBusy(true);
+        void api(`/api/admin/credentials/${credential.id}`, { method: "DELETE" })
+          .then(() => onComplete(`API key ${credential.label} deleted.`))
+          .catch((caught) => notify(errorMessage(caught), "danger"))
+          .finally(() => setBusy(false));
+      }}><Trash2 size={14} aria-hidden="true" /> Delete key</Button> : undefined}
+    >
       {credential?.validation_error && <InlineNotice tone="danger">{credential.validation_error}</InlineNotice>}
+      {/* The sheet body is a form, so the browser's own `required` and `type`
+          validation runs and Enter submits from any field. */}
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          setLabelTouched(true);
+          setSecretTouched(true);
+          void save();
+        }}
+      >
       <div className="field-pair">
-        <label className="field"><span>Label</span><input required placeholder="Production key" value={label} onChange={(e) => setLabel(e.target.value)} /></label>
-        <label className="field"><span>{credential ? "Replacement API key" : "API key"} <small>{credential ? "Leave blank to check the saved key" : ""}</small></span><input type="password" required={!credential} autoComplete="off" value={secret} onChange={(e) => {
-          setSecret(e.target.value);
-          setInspection(null);
-          setSelectedModels({});
-        }} /></label>
+        <label className="field">
+          <span>Label</span>
+          <input
+            required
+            placeholder="Production key"
+            value={label}
+            aria-invalid={labelInvalid || undefined}
+            aria-describedby={labelInvalid ? `${fieldID}-label-error` : undefined}
+            onBlur={() => setLabelTouched(true)}
+            onChange={(e) => setLabel(e.target.value)}
+          />
+          {labelInvalid && <small className="field-error" id={`${fieldID}-label-error`}>Give the key a name you will recognise in the logs.</small>}
+        </label>
+        <label className="field">
+          <span>{credential ? "Replacement API key" : "API key"} <small>{credential ? "Leave blank to check the saved key" : ""}</small></span>
+          <input
+            type="password"
+            required={!credential}
+            autoComplete="new-password"
+            spellCheck={false}
+            value={secret}
+            aria-invalid={secretInvalid || undefined}
+            aria-describedby={secretInvalid ? `${fieldID}-secret-error` : undefined}
+            onBlur={() => setSecretTouched(true)}
+            onChange={(e) => {
+              setSecret(e.target.value);
+              setInspection(null);
+              setSelectedModels({});
+            }}
+          />
+          {secretInvalid && <small className="field-error" id={`${fieldID}-secret-error`}>Paste the whole key — this one looks truncated.</small>}
+        </label>
       </div>
       <Toggle checked={isPrimary} onChange={setIsPrimary} label="Use as primary" description="Optional. This key is tried first while it has capacity; other keys remain fallbacks." />
       <Toggle checked={enabled} onChange={setEnabled} label="Enable API key" description="Re-enabling also clears quarantine and circuit-breaker state." />
@@ -1989,7 +2517,7 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
           <small>Rotakey calls the provider’s `/models` endpoint now and checks again when saving.</small>
         </div>
         <Button type="button" variant="quiet" disabled={busy} onClick={() => void checkKey()}>
-          <RefreshCw size={14} /> {busy ? "Checking…" : "Check & load models"}
+          <RefreshCw size={14} aria-hidden="true" /> {busy ? "Checking…" : "Check & load models"}
         </Button>
       </div>
       {inspection && (
@@ -2023,15 +2551,16 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
           <label className="field"><span>Model route</span><select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)}>{provider.models.map((model) => <option key={model.id} value={model.id}>{model.public_alias}</option>)}</select></label>
           <RateFields value={modelLimits} onChange={setModelLimits} compact />
           <div className="button-row">
-            <Button variant="quiet" onClick={() => void api(`/api/admin/credentials/${credential.id}/model-limits/${selectedModel}`, { method: "PUT", json: modelLimits }).then(() => onComplete("Model-specific limits saved.")).catch((caught) => notify(errorMessage(caught), "danger"))}>Save model limit</Button>
-            {credential.model_limits[selectedModel] && <Button variant="quiet" onClick={() => void api(`/api/admin/credentials/${credential.id}/model-limits/${selectedModel}`, { method: "DELETE" }).then(() => onComplete("Model-specific limits removed.")).catch((caught) => notify(errorMessage(caught), "danger"))}>Use shared only</Button>}
+            <Button type="button" variant="quiet" onClick={() => void api(`/api/admin/credentials/${credential.id}/model-limits/${selectedModel}`, { method: "PUT", json: modelLimits }).then(() => onComplete("Model-specific limits saved.")).catch((caught) => notify(errorMessage(caught), "danger"))}>Save model limit</Button>
+            {credential.model_limits[selectedModel] && <Button type="button" variant="quiet" onClick={() => void api(`/api/admin/credentials/${credential.id}/model-limits/${selectedModel}`, { method: "DELETE" }).then(() => onComplete("Model-specific limits removed.")).catch((caught) => notify(errorMessage(caught), "danger"))}>Use shared limit</Button>}
           </div>
         </fieldset>
       )}
       <div className="sheet-actions">
         <span />
-        <Button disabled={busy} onClick={() => void save()}>{busy ? "Working…" : inspection?.valid ? credential ? "Save API key & routes" : "Add API key & routes" : "Check API key first"}</Button>
+        <Button type="submit" disabled={busy}>{busy ? "Working…" : inspection?.valid ? credential ? "Save API key & routes" : "Add API key & routes" : "Check API key first"}</Button>
       </div>
+      </form>
     </Sheet>
   );
 }
@@ -2070,7 +2599,9 @@ function CredentialBalanceFields({ credential, balance, onBalanceChange, resetSp
         {credential && (
           <label className="field">
             <span>Spent so far <small>estimated</small></span>
-            <input value={formatUSD(spent)} readOnly disabled />
+            {/* readOnly, not disabled: a disabled field is skipped by the tab
+                order, so the figure could not be read by keyboard at all. */}
+            <input value={formatUSD(spent)} readOnly tabIndex={0} />
           </label>
         )}
       </div>
@@ -2097,7 +2628,9 @@ function ModelImportForm({ provider, onClose, onComplete, notify }: { provider: 
   const [selected, setSelected] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
 
-  const load = async () => {
+  // Discovery is refetched by the Reload button and once on open, so it is a
+  // memoised callback the effect can honestly depend on.
+  const load = useCallback(async () => {
     setBusy(true);
     setInspection(null);
     setSelected({});
@@ -2113,9 +2646,9 @@ function ModelImportForm({ provider, onClose, onComplete, notify }: { provider: 
     } finally {
       setBusy(false);
     }
-  };
+  }, [provider.id, notify]);
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   const save = async () => {
     const routes = routeInputsFromSelection(selected, new Set((inspection?.models ?? []).map((model) => model.id)));
@@ -2138,10 +2671,17 @@ function ModelImportForm({ provider, onClose, onComplete, notify }: { provider: 
   };
 
   return (
-    <Sheet title="Load provider models" eyebrow={provider.name} onClose={onClose} wide>
+    <Sheet
+      title="Load provider models"
+      eyebrow={provider.name}
+      onClose={onClose}
+      wide
+      dirty={Object.keys(selected).length > 0}
+      discardMessage="Close this panel? The selected model routes have not been enabled yet."
+    >
       <div className="validation-action">
         <div><strong>Provider model catalog</strong><small>Uses the primary API key first, then records whether that key is valid.</small></div>
-        <Button variant="quiet" disabled={busy} onClick={() => void load()}><RefreshCw size={14} /> Reload</Button>
+        <Button variant="quiet" disabled={busy} onClick={() => void load()}><RefreshCw size={14} aria-hidden="true" /> Reload</Button>
       </div>
       {busy && !inspection && <PageSkeleton />}
       {inspection && (
@@ -2212,8 +2752,9 @@ function ModelCatalog({
         </div>
       </header>
       <label className="catalog-search">
-        <Search size={15} />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter model IDs" />
+        <Search size={15} aria-hidden="true" />
+        {/* The label wraps only an icon, so the field needs its own name. */}
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter model IDs" aria-label="Filter model IDs" />
       </label>
       <label className="catalog-select-all">
         <input type="checkbox" checked={allVisibleSelected} disabled={selectable.length === 0} onChange={(event) => toggleVisible(event.target.checked)} />
@@ -2229,7 +2770,7 @@ function ModelCatalog({
           if (!upstream) return;
           onChange({ ...selected, [upstream]: defaultPublicAlias(provider.slug, upstream, routingMode) });
           setManualModel("");
-        }}><Plus size={14} /> Add model ID</Button>
+        }}><Plus size={14} aria-hidden="true" /> Add model ID</Button>
       </div>
       <div className="model-catalog__list">
         {visible.map((model) => {
@@ -2254,7 +2795,14 @@ function ModelCatalog({
               {!alreadyRouted && selected[model.id] !== undefined && (
                 <label className="catalog-alias">
                   <span>Public alias</span>
-                  <input value={selected[model.id]} onChange={(event) => onChange({ ...selected, [model.id]: event.target.value })} />
+                  {/* Every row repeats this label, so the model it belongs to goes
+                      in the accessible name — otherwise a screen reader hears
+                      "Public alias" once per selected model with no distinction. */}
+                  <input
+                    value={selected[model.id]}
+                    onChange={(event) => onChange({ ...selected, [model.id]: event.target.value })}
+                    aria-label={`Public alias for ${model.id}`}
+                  />
                 </label>
               )}
             </div>
@@ -2280,6 +2828,7 @@ function ModelsPage({
 }) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [providerFilter, setProviderFilter] = useState("");
   const [credentialsOpen, setCredentialsOpen] = useState(false);
@@ -2288,26 +2837,43 @@ function ModelsPage({
   const [probeProgress, setProbeProgress] = useState({ completed: 0, total: 0, passed: 0, blocked: 0, failed: 0 });
   const [bulkChecking, setBulkChecking] = useState(false);
   const [deletingFailed, setDeletingFailed] = useState(false);
+  const [rechecking, setRechecking] = useState(false);
+  const [deletingRoute, setDeletingRoute] = useState(false);
   const [selectedID, setSelectedID] = useState(() => new URLSearchParams(location.search).get("model") || "");
   const routingMode = useRoutingMode();
-  const load = useCallback(async () => {
-    setLoading(true);
+  // Only the first load blanks the page. A reload after a probe or a delete keeps
+  // the list and the open inspector in place, because replacing the workbench
+  // with a skeleton throws away the operator's position mid-task.
+  const load = useCallback(async (background = false) => {
+    if (!background) setLoading(true);
     try {
       const result = await api<{ providers: Provider[] }>("/api/admin/providers");
       const normalized = normalizeProviders(result.providers);
       setProviders(normalized);
+      setError("");
       const available = normalized.flatMap((provider) => provider.models);
       setSelectedID((current) => available.some((model) => model.id === current) ? current : available[0]?.id || "");
     } catch (caught) {
-      notify(errorMessage(caught), "danger");
+      setError(errorMessage(caught));
+      if (!background) notify(errorMessage(caught), "danger");
     } finally {
       setLoading(false);
     }
   }, [notify]);
+  const reload = useCallback(() => load(true), [load]);
   useEffect(() => {
     void load();
   }, [load]);
   useEffect(() => setCredentialsOpen(false), [selectedID]);
+  // The open route lives in the address bar for the same reason the provider does:
+  // a reload, or a link pasted to someone else, comes back to the same route.
+  useEffect(() => {
+    if (!selectedID) return;
+    const url = new URL(location.href);
+    if (url.searchParams.get("model") === selectedID) return;
+    url.searchParams.set("model", selectedID);
+    history.replaceState(history.state, "", url);
+  }, [selectedID]);
   const models = providers.flatMap((provider) => provider.models.map((model) => ({ ...model, provider, credentials: provider.credentials })));
   const filtered = models.filter((model) => {
     const needle = query.trim().toLowerCase();
@@ -2359,7 +2925,7 @@ function ModelsPage({
     await worker();
     setBulkChecking(false);
     notify(`${passed} model${passed === 1 ? "" : "s"} live · ${blocked} waiting for keys${failed ? ` · ${failed} unavailable` : ""}.`, failed ? "danger" : "success");
-    await load();
+    await load(true);
   };
 
   const deleteFailedModels = async () => {
@@ -2387,22 +2953,37 @@ function ModelsPage({
     }
     setDeletingFailed(false);
     notify(`${deleted} failed model route${deleted === 1 ? "" : "s"} deleted${deleteErrors ? ` · ${deleteErrors} could not be deleted` : ""}.`, deleteErrors ? "danger" : "success");
-    await load();
+    await load(true);
   };
 
   return (
     <div className="resource-page model-page">
       <PageHeader eyebrow="Public contract" title="Model routes" description={routingMode === "model" ? "Model-wise routing: aliases sharing a name are served as one pool, rotating across providers and API keys. Callers see the name once." : "Inspect aliases, apply one model limit to one or every API key, and open only the credential detail you need."} />
-      {loading ? <PageSkeleton /> : models.length === 0 ? <EmptyState title="No public models" description="Create a route inside a provider to expose it through /v1/models." /> : (
+      {loading ? <PageSkeleton /> : error && models.length === 0 ? (
+        <EmptyState
+          level={2}
+          title="Model routes could not be loaded"
+          description={error}
+          action={<Button onClick={() => void load()}><RefreshCw size={14} aria-hidden="true" /> Try again</Button>}
+        />
+      ) : models.length === 0 ? (
+        <EmptyState
+          level={2}
+          title="No model routes yet"
+          description="A model route is the alias your callers ask for. Add one inside a provider and it appears in /v1/models."
+          action={<Button onClick={() => navigate("providers")}><ArrowRight size={14} aria-hidden="true" /> Go to providers</Button>}
+        />
+      ) : (
         <div className="ide-resource-workbench">
+          {error && <InlineNotice tone="danger">{error} Showing the last data that loaded.</InlineNotice>}
           <section className="ide-resource-list">
             <div className="ide-filter model-filter">
-              <Search size={14} />
+              <Search size={14} aria-hidden="true" />
               <label><span className="sr-only">Filter model routes</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter aliases or upstream IDs" /></label>
               <label><span className="sr-only">Provider</span><select value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)}><option value="">All providers</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
             </div>
-            <section className={`model-sweep${bulkChecking ? " is-running" : ""}`} aria-live="polite">
-              <div className="model-sweep__readout">
+            <section className={`model-sweep${bulkChecking ? " is-running" : ""}`}>
+              <div className="model-sweep__readout" aria-live="polite">
                 <span>Live model sweep</span>
                 <strong>{bulkChecking ? `${probeProgress.completed}/${probeProgress.total} checked` : probeProgress.total ? `${probeProgress.passed} live · ${probeProgress.blocked} waiting${probeProgress.failed ? ` · ${probeProgress.failed} unavailable` : ""}` : `${models.filter((model) => healthyKeyCount(model) > 0).length} routes ready · ${models.filter((model) => healthyKeyCount(model) === 0).length} waiting for keys`}</strong>
               </div>
@@ -2410,22 +2991,32 @@ function ModelsPage({
                 <span style={{ width: `${probeProgress.total ? (probeProgress.completed / probeProgress.total) * 100 : 0}%` }} />
               </div>
               <div className="button-row">
-                {failedProbeIDs.length > 0 && <Button variant="danger" disabled={bulkChecking || deletingFailed} onClick={() => void deleteFailedModels()}><Trash2 size={13} /> {deletingFailed ? "Deleting…" : `Delete ${failedProbeIDs.length} failed`}</Button>}
-                <Button variant="quiet" disabled={bulkChecking || deletingFailed} onClick={() => void checkAllModels()}><Activity size={13} /> {bulkChecking ? "Checking all…" : "Check all models"}</Button>
+                {failedProbeIDs.length > 0 && <Button variant="danger" disabled={bulkChecking || deletingFailed} onClick={() => void deleteFailedModels()}><Trash2 size={13} aria-hidden="true" /> {deletingFailed ? "Deleting…" : `Delete ${failedProbeIDs.length} failed route${failedProbeIDs.length === 1 ? "" : "s"}`}</Button>}
+                <Button variant="quiet" disabled={bulkChecking || deletingFailed} onClick={() => void checkAllModels()}><Activity size={13} aria-hidden="true" /> {bulkChecking ? "Checking all…" : "Check all models"}</Button>
               </div>
             </section>
-            <header><span>Public alias</span><span>Provider</span><span>Keys</span></header>
+            {/* Column labels for the eye only: each row below is a button, not a
+                table row, so the labels cannot be associated as headers. Every
+                row states its own values in its accessible name instead. */}
+            <header aria-hidden="true"><span>Public alias</span><span>Provider</span><span>Keys</span></header>
             <div>
               {filtered.map((model) => {
                 const ready = model.credentials.filter((item) => item.enabled && item.status === "healthy").length;
                 const probe = probeResults[model.id];
                 const capabilityLabel = ready === 0 ? "waiting for a healthy API key" : probe?.state === "checking" ? "checking now" : probe?.state === "passed" ? "live" : probe?.state === "blocked" ? `waiting · ${probe.error || "healthy API key required"}` : probe?.state === "failed" ? `unavailable · ${probe.error || "probe failed"}` : model.capability_status === "probe_verified" ? "probe verified" : model.capability_status === "catalog_verified" ? "catalog verified" : model.capability_status === "failed" ? `unavailable · ${model.capability_error || "probe failed"}` : "unverified";
+                const pooled = routingMode === "model" && poolSizes[model.public_alias] > 1;
                 return (
-                  <button key={model.id} className={selectedID === model.id ? "is-selected" : ""} onClick={() => { setSelectedID(model.id); setModelInspectorOpen(true); }}>
-                    <span><StatusDot state={probe?.state === "passed" ? "healthy" : !model.enabled || ready === 0 || probe?.state === "blocked" ? "disabled" : probe?.state === "failed" || model.capability_status === "failed" ? "exhausted" : "healthy"} /><code>{model.public_alias}</code><small title={probe?.state === "passed" ? undefined : probe?.error || model.capability_error}>{model.upstream_model === model.public_alias ? (model.supports_responses ? "Chat + Responses" : "Chat Completions") : model.upstream_model} · {capabilityLabel}</small></span>
-                    <span>{routingMode === "model" && poolSizes[model.public_alias] > 1 ? `${model.provider.name} · pool of ${poolSizes[model.public_alias]}` : model.provider.name}</span>
-                    <span>{ready}/{model.credentials.length}</span>
-                    <ChevronRight size={13} />
+                  <button
+                    key={model.id}
+                    className={selectedID === model.id ? "is-selected" : ""}
+                    onClick={() => { setSelectedID(model.id); setModelInspectorOpen(true); }}
+                    aria-current={selectedID === model.id}
+                    aria-label={`${model.public_alias}, ${capabilityLabel}, on ${model.provider.name}${pooled ? ` in a pool of ${poolSizes[model.public_alias]} providers` : ""}, ${ready} of ${model.credentials.length} key${model.credentials.length === 1 ? "" : "s"} ready`}
+                  >
+                    <span aria-hidden="true"><StatusDot state={probe?.state === "passed" ? "healthy" : !model.enabled || ready === 0 || probe?.state === "blocked" ? "disabled" : probe?.state === "failed" || model.capability_status === "failed" ? "exhausted" : "healthy"} /><code title={model.public_alias}>{model.public_alias}</code><small title={`${model.upstream_model === model.public_alias ? (model.supports_responses ? "Chat + Responses" : "Chat Completions") : model.upstream_model} · ${capabilityLabel}`}>{model.upstream_model === model.public_alias ? (model.supports_responses ? "Chat + Responses" : "Chat Completions") : model.upstream_model} · {capabilityLabel}</small></span>
+                    <span aria-hidden="true" title={pooled ? `${model.provider.name} · pool of ${poolSizes[model.public_alias]}` : model.provider.name}>{pooled ? `${model.provider.name} · pool of ${poolSizes[model.public_alias]}` : model.provider.name}</span>
+                    <span aria-hidden="true">{ready}/{model.credentials.length}</span>
+                    <ChevronRight size={13} aria-hidden="true" />
                   </button>
                 );
               })}
@@ -2434,18 +3025,22 @@ function ModelsPage({
           {selected && (
             <aside className={`ide-resource-inspector${modelInspectorOpen ? " is-open" : ""}`}>
               <header className="ide-inspector-titlebar">
-                <div><span>Model route</span><h2>{selected.public_alias}</h2><code>{selected.upstream_model}</code></div>
-                <div className="button-row"><button className="console-icon resource-inspector-close" onClick={() => setModelInspectorOpen(false)} aria-label="Close model inspector"><X size={15} /></button><Button variant="quiet" onClick={() => {
+                <div><span>Model route</span><h2 title={selected.public_alias}>{selected.public_alias}</h2><code title={selected.upstream_model}>{selected.upstream_model}</code></div>
+                <div className="button-row"><button className="console-icon resource-inspector-close" onClick={() => setModelInspectorOpen(false)} aria-label="Close model inspector"><X size={15} aria-hidden="true" /></button><Button variant="quiet" disabled={rechecking || deletingRoute} onClick={() => {
+                  setRechecking(true);
                   void api(`/api/admin/models/${selected.id}/probe`, { method: "POST" })
-                    .then(() => { notify("Model capability probe passed."); void load(); })
-                    .catch((caught) => { notify(errorMessage(caught), "danger"); void load(); });
-                }}><Activity size={13} /> Recheck model</Button><Button variant="danger" onClick={() => {
-                  if (confirm(`Delete route ${selected.public_alias}? Requests using this alias will stop immediately.`)) {
+                    .then(() => { notify("Model capability probe passed."); return reload(); })
+                    .catch((caught) => { notify(errorMessage(caught), "danger"); return reload(); })
+                    .finally(() => setRechecking(false));
+                }}><Activity size={13} aria-hidden="true" /> {rechecking ? "Checking…" : "Recheck model"}</Button><Button variant="danger" disabled={rechecking || deletingRoute} onClick={() => {
+                  if (confirm(`Delete route ${selected.public_alias}? Requests using this alias stop immediately, and the route cannot be restored — you would add it again from scratch.`)) {
+                    setDeletingRoute(true);
                     void api(`/api/admin/models/${selected.id}`, { method: "DELETE" })
-                      .then(() => { notify("Model route deleted."); void load(); })
-                      .catch((caught) => notify(errorMessage(caught), "danger"));
+                      .then(() => { notify("Model route deleted."); return reload(); })
+                      .catch((caught) => notify(errorMessage(caught), "danger"))
+                      .finally(() => setDeletingRoute(false));
                   }
-                }}><Trash2 size={13} /> Delete</Button></div>
+                }}><Trash2 size={13} aria-hidden="true" /> {deletingRoute ? "Deleting…" : "Delete route"}</Button></div>
               </header>
               <div className="inspector-definition">
                 <Definition label="Provider" value={selected.provider.name} />
@@ -2462,15 +3057,15 @@ function ModelsPage({
                 <Definition label="Tokenizer" value={selected.tokenizer} mono />
               </div>
               {selected.strip_parameters.length > 0 && <InlineNotice>Removes unsupported fields: <code>{selected.strip_parameters.join(", ")}</code></InlineNotice>}
-              <ModelLimitEditor model={selected} credentials={selected.credentials} notify={notify} onSaved={load} />
+              <ModelLimitEditor model={selected} credentials={selected.credentials} notify={notify} onSaved={reload} />
               <section className={`ide-inspector-section inspector-disclosure${credentialsOpen ? " is-open" : ""}`}>
                 <button type="button" onClick={() => setCredentialsOpen((current) => !current)} aria-expanded={credentialsOpen}>
-                  <ChevronDown size={14} /><span><strong>Credential path</strong><small>{selected.credentials.length} API key{selected.credentials.length === 1 ? "" : "s"}</small></span>
+                  <ChevronDown size={14} aria-hidden="true" /><span><strong>Credential path</strong><small>{selected.credentials.length} API key{selected.credentials.length === 1 ? "" : "s"}</small></span>
                 </button>
                 {credentialsOpen && <div className="inspector-disclosure__body">{selected.credentials.map((credential) => (
                   <div key={credential.id} className={credential.validation_error ? "has-warning" : ""}>
                     <StatusDot state={credential.status} />
-                    <strong>{credential.label}</strong>
+                    <strong title={credential.label}>{credential.label}</strong>
                     <small>{credential.is_primary ? "primary" : credential.status}</small>
                     <span>
                       <small>{credential.model_limits[selected.id] ? "model override" : "shared provider limit"}</small>
@@ -2507,17 +3102,33 @@ function ModelLimitEditor({
   const [busy, setBusy] = useState(false);
   const targetCredential = credentials.find((credential) => credential.id === target);
   const hasDraftLimit = Object.values(draft).some((value) => value !== null);
+  // The Models page reloads in the background, which hands this editor a fresh
+  // credentials array every time. Reading it through a ref keeps the draft from
+  // being reset mid-edit by a reload the operator did not ask for.
+  const credentialsRef = useRef(credentials);
+  credentialsRef.current = credentials;
   useEffect(() => {
     setTarget("all");
     setDraft(emptyPolicy());
   }, [model.id]);
   useEffect(() => {
-    if (target === "all") setDraft(emptyPolicy());
-    else setDraft(targetCredential?.model_limits[model.id] ?? emptyPolicy());
-  }, [target, targetCredential, model.id]);
+    if (target === "all") {
+      setDraft(emptyPolicy());
+      return;
+    }
+    const chosen = credentialsRef.current.find((credential) => credential.id === target);
+    setDraft(chosen?.model_limits[model.id] ?? emptyPolicy());
+  }, [target, model.id]);
   const targets = target === "all" ? credentials : targetCredential ? [targetCredential] : [];
+  const scope = target === "all"
+    ? `all ${credentials.length} API key${credentials.length === 1 ? "" : "s"}`
+    : targetCredential?.label ?? "this API key";
+  // "All API keys" is the default, so both buttons rewrite the whole pool on one
+  // click unless the operator confirms the blast radius first.
+  const confirmFanOut = (question: string) => target !== "all" || confirm(question);
   const save = async () => {
     if (targets.length === 0) return;
+    if (!confirmFanOut(`Replace this model's limit on ${scope}? Any per-key override for ${model.public_alias} is overwritten.`)) return;
     setBusy(true);
     try {
       await Promise.all(targets.map((credential) => api(`/api/admin/credentials/${credential.id}/model-limits/${model.id}`, { method: "PUT", json: draft })));
@@ -2531,6 +3142,7 @@ function ModelLimitEditor({
   };
   const clear = async () => {
     if (targets.length === 0) return;
+    if (!confirmFanOut(`Remove this model's override from ${scope}? They fall back to the shared provider limit.`)) return;
     setBusy(true);
     try {
       await Promise.all(targets.map((credential) => api(`/api/admin/credentials/${credential.id}/model-limits/${model.id}`, { method: "DELETE" })));
@@ -2549,44 +3161,75 @@ function ModelLimitEditor({
       <label className="field"><span>Apply to</span><select value={target} onChange={(event) => setTarget(event.target.value)}><option value="all">All API keys</option>{credentials.map((credential) => <option key={credential.id} value={credential.id}>{credential.label}</option>)}</select></label>
       {target === "all" && <p>Saving replaces this model's override on every API key. Shared provider limits still apply.</p>}
       <RateFields value={draft} onChange={setDraft} compact />
-      <div className="button-row"><Button disabled={busy || targets.length === 0 || !hasDraftLimit} onClick={() => void save()}>{busy ? "Saving…" : "Save model limit"}</Button><Button variant="quiet" disabled={busy || targets.length === 0} onClick={() => void clear()}>Use shared only</Button></div>
+      <div className="button-row"><Button disabled={busy || targets.length === 0 || !hasDraftLimit} onClick={() => void save()}>{busy ? "Saving…" : "Save model limit"}</Button><Button variant="quiet" disabled={busy || targets.length === 0} onClick={() => void clear()}>Use shared limit</Button></div>
     </section>
   );
 }
 
-function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "danger") => void }) {
+function LogsPage() {
   const [logs, setLogs] = useState<RequestLog[]>([]);
   const initialParams = useMemo(() => new URLSearchParams(location.search), []);
   const [query, setQuery] = useState(() => initialParams.get("q") || "");
   const [status, setStatus] = useState(() => initialParams.get("status") || "");
   const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<RequestLog | null>(null);
+  const [error, setError] = useState("");
+  // Only the id is state. Holding the whole record meant the two-second poll
+  // handed back a new object every tick, which re-rendered the inspector and
+  // re-fired the body decrypt thirty times a minute.
+  const [selectedID, setSelectedID] = useState<string | null>(null);
   const [bodies, setBodies] = useState<{ request: string | null; response: string | null } | null>(null);
+  const [bodiesError, setBodiesError] = useState("");
+  const [bodyAttempt, setBodyAttempt] = useState(0);
   const [attemptsOpen, setAttemptsOpen] = useState(false);
   const [bodiesOpen, setBodiesOpen] = useState(false);
   const [logInspectorOpen, setLogInspectorOpen] = useState(false);
+  const generation = useRef(0);
+  // Typing filters the list server-side, so the request is held back until the
+  // operator pauses. Without the delay every keystroke was its own round trip
+  // and a slow reply for "gpt" could land on top of the reply for "gpt-4".
+  const [debouncedQuery, setDebouncedQuery] = useState(query);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(query), 250);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+  // The list polls every two seconds, so a backend outage must not raise a toast
+  // per tick. The banner states it once and the poll keeps trying quietly.
   const load = useCallback(async (silent = false) => {
+    const mine = ++generation.current;
     if (!silent) setLoading(true);
     try {
-      const result = await api<{ logs: RequestLog[] }>(`/api/admin/logs?limit=100&q=${encodeURIComponent(query)}&status=${encodeURIComponent(status)}`);
-      const normalized = result.logs.map((log) => ({
+      const result = await api<{ logs: RequestLog[] }>(`/api/admin/logs?limit=100&q=${encodeURIComponent(debouncedQuery)}&status=${encodeURIComponent(status)}`);
+      if (mine !== generation.current) return;
+      const normalized = (result.logs ?? []).map((log) => ({
         ...log,
         attempts: log.attempts ?? [],
         routing_decisions: log.routing_decisions ?? [],
       }));
       setLogs(normalized);
-      setSelected((current) => normalized.find((log) => log.id === current?.id) || normalized.find((log) => log.request_id === current?.request_id) || null);
+      setError("");
+      setSelectedID((current) => (current && normalized.some((log) => log.id === current) ? current : null));
     } catch (caught) {
-      notify(errorMessage(caught), "danger");
+      if (mine !== generation.current) return;
+      setError(errorMessage(caught));
     } finally {
-      if (!silent) setLoading(false);
+      if (!silent && mine === generation.current) setLoading(false);
     }
-  }, [query, status, notify]);
+  }, [debouncedQuery, status]);
+  // The poll reads the newest `load` from a ref, so the two-second cadence is not
+  // torn down and restarted on every keystroke.
+  const loadRef = useRef(load);
+  loadRef.current = load;
   useEffect(() => {
     void load();
-    const timer = window.setInterval(() => void load(true), 2000);
-    return () => window.clearInterval(timer);
   }, [load]);
+  useEffect(() => {
+    const timer = window.setInterval(() => void loadRef.current(true), 2000);
+    return () => {
+      window.clearInterval(timer);
+      generation.current += 1;
+    };
+  }, []);
+  const selected = useMemo(() => logs.find((log) => log.id === selectedID) ?? null, [logs, selectedID]);
   useEffect(() => {
     const params = new URLSearchParams();
     if (query) params.set("q", query);
@@ -2595,22 +3238,38 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
   }, [query, status]);
   useEffect(() => {
     setBodies(null);
+    setBodiesError("");
     setAttemptsOpen(Boolean(selected && selected.status_code >= 400 && selected.attempts.length));
     setBodiesOpen(false);
-  }, [selected?.id]);
+  }, [selectedID]);
   useEffect(() => {
-    if (selected?.body_captured && bodiesOpen) {
-      void api<{ request: string | null; response: string | null }>(`/api/admin/logs/${selected.id}/bodies`).then(setBodies).catch((caught) => notify(errorMessage(caught), "danger"));
-    }
-  }, [selected, bodiesOpen, notify]);
+    if (!selectedID || !bodiesOpen) return;
+    let ignore = false;
+    void api<{ request: string | null; response: string | null }>(`/api/admin/logs/${selectedID}/bodies`)
+      .then((result) => {
+        if (ignore) return;
+        setBodies(result);
+        setBodiesError("");
+      })
+      .catch((caught) => {
+        if (!ignore) setBodiesError(errorMessage(caught));
+      });
+    return () => { ignore = true; };
+  }, [selectedID, bodiesOpen, bodyAttempt]);
 
   return (
     <div className="resource-page log-page">
-      <PageHeader eyebrow="Live request evidence" title="Logs" description="Running requests update every two seconds. Completed metadata is retained; bodies appear only where encrypted capture is enabled." actions={<Button variant="quiet" onClick={() => void load()}><RefreshCw size={15} /> Refresh</Button>} />
+      <PageHeader eyebrow="Live request evidence" title="Request logs" description="Running requests update every two seconds. Completed metadata is retained; bodies appear only where encrypted capture is enabled." actions={<Button variant="quiet" onClick={() => void load()}><RefreshCw size={15} aria-hidden="true" /> Refresh</Button>} />
+      {error && (
+        <InlineNotice tone="danger">
+          {error} The list keeps retrying every two seconds.{" "}
+          <button className="link-button" onClick={() => void load()}>Retry now</button>
+        </InlineNotice>
+      )}
       <div className="ide-resource-workbench log-workbench">
         <section className="ide-resource-list" aria-label="Request logs">
           <div className="ide-filter log-filter">
-            <Search size={14} />
+            <Search size={14} aria-hidden="true" />
             <label>
               <span className="sr-only">Search logs</span>
               <input aria-label="Search logs" placeholder="Request ID or model alias" value={query} onChange={(e) => setQuery(e.target.value)} />
@@ -2622,23 +3281,40 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
               </select>
             </label>
           </div>
-          <header><span>Request</span><span>Model / route</span><span>Status</span><span>Latency</span><span /></header>
+          {/* Column labels for the eye only. Each row below is a button, not a
+              table row, so the labels cannot be associated as real headers —
+              instead every row states its own values in its accessible name. */}
+          <header aria-hidden="true"><span>Request</span><span>Model / route</span><span>Status</span><span>Latency</span><span /></header>
           <div className="log-resource-rows">
             {loading ? (
               <PageSkeleton />
             ) : logs.length === 0 ? (
-              <EmptyState title="No matching requests" description="Send a request through /v1 or clear the current filters." />
+              query || status ? (
+                <EmptyState
+                  title="No requests match these filters"
+                  description="Nothing in the retained window matches the search or status you picked."
+                  action={<Button variant="quiet" onClick={() => { setQuery(""); setStatus(""); }}>Clear filters</Button>}
+                />
+              ) : (
+                <EmptyState title="No requests yet" description="Send a request through /v1 and it appears here within two seconds." />
+              )
             ) : logs.map((log) => (
-              <button key={log.id} className={`${selected?.request_id === log.request_id ? "is-selected" : ""}${log.running ? " is-running" : ""}`} onClick={() => { setSelected(log); setLogInspectorOpen(true); }}>
-                <span>
+              <button
+                key={log.id}
+                className={`${selectedID === log.id ? "is-selected" : ""}${log.running ? " is-running" : ""}`}
+                aria-current={selectedID === log.id}
+                aria-label={`${log.model_alias} via ${log.provider_name}, ${log.running ? "still running" : `HTTP ${log.status_code}`}, ${log.latency_ms} ms, at ${new Date(log.created_at).toLocaleTimeString()}`}
+                onClick={() => { setSelectedID(log.id); setLogInspectorOpen(true); }}
+              >
+                <span aria-hidden="true">
                   <StatusDot state={log.running ? "unknown" : log.status_code >= 500 ? "exhausted" : log.status_code >= 400 ? "partial" : "healthy"} />
                   <strong>{new Date(log.created_at).toLocaleTimeString()}</strong>
                   <small>{log.request_id}</small>
                 </span>
-                <span><code>{log.model_alias}</code><small>{log.provider_name} · {routingStageLabel(log)}{log.error_code ? ` · ${log.error_code}` : ""}</small></span>
-                <strong className={`status-code status-code--${log.running ? "running" : log.status_code >= 500 ? "fault" : log.status_code >= 400 ? "warning" : "healthy"}`}>{log.running ? "RUN" : log.status_code}</strong>
-                <small>{log.latency_ms} ms</small>
-                <ChevronRight size={13} />
+                <span aria-hidden="true"><code title={log.model_alias}>{log.model_alias}</code><small title={`${log.provider_name} · ${routingStageLabel(log)}${log.error_code ? ` · ${log.error_code}` : ""}`}>{log.provider_name} · {routingStageLabel(log)}{log.error_code ? ` · ${log.error_code}` : ""}</small></span>
+                <strong aria-hidden="true" className={`status-code status-code--${log.running ? "running" : log.status_code >= 500 ? "fault" : log.status_code >= 400 ? "warning" : "healthy"}`}>{log.running ? "RUN" : log.status_code}</strong>
+                <small aria-hidden="true">{log.latency_ms} ms</small>
+                <ChevronRight size={13} aria-hidden="true" />
               </button>
             ))}
           </div>
@@ -2646,30 +3322,37 @@ function LogsPage({ notify }: { notify: (message: string, tone?: "success" | "da
         {selected ? (
           <aside className={`ide-resource-inspector log-resource-inspector${logInspectorOpen ? " is-open" : ""}`}>
             <header className="ide-inspector-titlebar">
-              <div><span>{selected.endpoint} · {selected.running ? "RUNNING" : `HTTP ${selected.status_code}`}</span><h2>{selected.request_id}</h2><code>{selected.model_alias}</code></div>
-              <div className="button-row"><strong className={`status-code status-code--${selected.running ? "running" : selected.status_code >= 500 ? "fault" : selected.status_code >= 400 ? "warning" : "healthy"}`}>{selected.running ? "RUNNING" : selected.status_code}</strong><button className="console-icon resource-inspector-close" onClick={() => setLogInspectorOpen(false)} aria-label="Close log inspector"><X size={15} /></button></div>
+              <div><span>{selected.endpoint} · {selected.running ? "RUNNING" : `HTTP ${selected.status_code}`}</span><h2 title={selected.request_id}>{selected.request_id}</h2><code title={selected.model_alias}>{selected.model_alias}</code></div>
+              <div className="button-row"><strong className={`status-code status-code--${selected.running ? "running" : selected.status_code >= 500 ? "fault" : selected.status_code >= 400 ? "warning" : "healthy"}`}>{selected.running ? "RUNNING" : selected.status_code}</strong><button className="console-icon resource-inspector-close" onClick={() => setLogInspectorOpen(false)} aria-label="Close log inspector"><X size={15} aria-hidden="true" /></button></div>
             </header>
-            <div className="log-detail-grid">
-              <div><span>Provider</span><strong>{selected.provider_name}</strong></div>
-              <div><span>API key</span><strong>{routingStageLabel(selected)}</strong></div>
-              <div><span>Latency</span><strong>{selected.latency_ms} ms</strong></div>
-              <div><span>Tokens</span><strong title={`${selected.input_tokens} input · ${selected.output_tokens} output`}>{formatCompact(selected.input_tokens)} in · {formatCompact(selected.output_tokens)} out</strong></div>
+            {/* Label-then-value pairs read in order, so the pairing is already clear;
+                the list role is what gives the group a count and lets a screen
+                reader step between the four rather than through loose text. */}
+            <div className="log-detail-grid" role="list">
+              <div role="listitem"><span>Provider</span><strong>{selected.provider_name}</strong></div>
+              <div role="listitem"><span>API key</span><strong>{routingStageLabel(selected)}</strong></div>
+              <div role="listitem"><span>Latency</span><strong>{selected.latency_ms} ms</strong></div>
+              <div role="listitem"><span>Tokens</span><strong title={`${selected.input_tokens} input · ${selected.output_tokens} output`}>{formatCompact(selected.input_tokens)} in · {formatCompact(selected.output_tokens)} out</strong></div>
             </div>
             {selected.running ? <InlineNotice>Request is running. This inspector will switch to the final status automatically.</InlineNotice> : selected.status_code >= 400 && <LogDiagnosis log={selected} />}
             <section className={`inspector-disclosure log-disclosure${attemptsOpen ? " is-open" : ""}`}>
-              <button type="button" onClick={() => setAttemptsOpen((current) => !current)} aria-expanded={attemptsOpen}><ChevronDown size={14} /><span><strong>Routing attempts</strong><small>{selected.attempts.length} recorded</small></span></button>
+              <button type="button" onClick={() => setAttemptsOpen((current) => !current)} aria-expanded={attemptsOpen}><ChevronDown size={14} aria-hidden="true" /><span><strong>Routing attempts</strong><small>{selected.attempts.length} recorded</small></span></button>
               {attemptsOpen && <div className="attempt-list">{selected.attempts.length ? selected.attempts.map((attempt, index) => <div key={`${attempt.credential_id}-${index}`}><span>{index + 1}</span><strong>{attempt.credential_label}</strong><code>{attempt.status_code || attempt.error}{attempt.error ? ` · ${attempt.error}` : ""}{attempt.removed_parameters?.length ? ` · removed ${attempt.removed_parameters.join(", ")}` : ""}{attempt.replaced_parameters ? ` · replaced ${Object.entries(attempt.replaced_parameters).map(([from, to]) => `${from} → ${to}`).join(", ")}` : ""}</code><small>{attempt.duration_ms} ms</small>{attempt.error_message && <p>{attempt.error_message}</p>}</div>) : <p className="console-empty">No upstream attempt was needed.</p>}</div>}
             </section>
             {!selected.running && selected.body_captured ? (
               <section className={`inspector-disclosure log-disclosure${bodiesOpen ? " is-open" : ""}`}>
-                <button type="button" onClick={() => setBodiesOpen((current) => !current)} aria-expanded={bodiesOpen}><ChevronDown size={14} /><span><strong>Encrypted bodies</strong><small>{selected.body_truncated ? "captured · truncated" : "captured"}</small></span></button>
-                {bodiesOpen && <div className="body-grid"><section><h3>Request {selected.body_truncated && <small>truncated</small>}</h3><pre>{bodies?.request ?? "Loading encrypted body…"}</pre></section><section><h3>Response {selected.body_truncated && <small>truncated</small>}</h3><pre>{bodies?.response ?? "No captured response body."}</pre></section></div>}
+                <button type="button" onClick={() => setBodiesOpen((current) => !current)} aria-expanded={bodiesOpen}><ChevronDown size={14} aria-hidden="true" /><span><strong>Encrypted bodies</strong><small>{selected.body_truncated ? "captured · truncated" : "captured"}</small></span></button>
+                {bodiesOpen && (bodiesError ? (
+                  <InlineNotice tone="danger">{bodiesError}{" "}<button className="link-button" onClick={() => { setBodiesError(""); setBodyAttempt((n) => n + 1); }}>Try again</button></InlineNotice>
+                ) : (
+                  <div className="body-grid"><section><h3>Request {selected.body_truncated && <small>truncated</small>}</h3><pre>{bodies ? bodies.request ?? "No captured request body." : "Decrypting…"}</pre></section><section><h3>Response {selected.body_truncated && <small>truncated</small>}</h3><pre>{bodies ? bodies.response ?? "No captured response body." : "Decrypting…"}</pre></section></div>
+                ))}
               </section>
             ) : !selected.running && <InlineNotice>Body capture was off for this model route. Only metadata is available.</InlineNotice>}
           </aside>
         ) : (
           <aside className="ide-resource-inspector ide-resource-inspector--empty">
-            <FileClock size={20} /><strong>Select a request</strong><p>Inspect routing attempts, token usage, latency and optional encrypted bodies.</p>
+            <FileClock size={20} aria-hidden="true" /><strong>Select a request</strong><p>Inspect routing attempts, token usage, latency and optional encrypted bodies.</p>
           </aside>
         )}
       </div>
@@ -2683,7 +3366,7 @@ function LogDiagnosis({ log }: { log: RequestLog }) {
   return (
     <section className="log-diagnosis" aria-label="Automatic failure diagnosis">
       <header>
-        <AlertTriangle size={15} />
+        <AlertTriangle size={15} aria-hidden="true" />
         <span><small>Automatic diagnosis</small><strong>{logErrorTitle(log)}</strong></span>
         <code>{log.error_code || `http_${log.status_code}`}</code>
       </header>
@@ -2762,6 +3445,7 @@ function humanizeErrorCode(code: string) {
     stream_interrupted: "The response stream ended unexpectedly after it started.",
     unsupported_parameter: "The upstream model rejected a request parameter.",
     unrecognized_request_argument: "The upstream model did not recognize a request parameter.",
+    responses_endpoint_missing: "This provider has no Responses endpoint, so the request was retried as Chat Completions. Turn off \"Responses natively\" on this route to skip the extra attempt.",
   };
   return messages[code] || code.replaceAll("_", " ");
 }
@@ -2774,26 +3458,56 @@ function formatDuration(milliseconds: number) {
 
 function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNewKey: (key: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
   const [settings, setSettings] = useState<Settings | null>(null);
-  const [codexReady, setCodexReady] = useState(0);
-  useEffect(() => { void api<Settings>("/api/admin/settings").then(setSettings).catch((caught) => notify(errorMessage(caught), "danger")); }, [notify, gatewayKey]);
-  useEffect(() => { void api<Overview>("/api/admin/overview?range=1h").then((value) => setCodexReady(value.summary.routes_ready)).catch(() => undefined); }, []);
+  const [error, setError] = useState("");
+  const [codexReady, setCodexReady] = useState<number | null>(null);
+  const [rotating, setRotating] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  // Both loads are one-shot and both write state. Navigating away mid-flight, or
+  // pressing Try again twice, otherwise resolves into an unmounted component or
+  // lets the older reply win.
+  useEffect(() => {
+    let ignore = false;
+    void api<Settings>("/api/admin/settings")
+      .then((value) => { if (ignore) return; setSettings(value); setError(""); })
+      .catch((caught) => { if (!ignore) setError(errorMessage(caught)); });
+    return () => { ignore = true; };
+  }, [gatewayKey, attempt]);
+  useEffect(() => {
+    let ignore = false;
+    void api<Overview>("/api/admin/overview?range=1h")
+      .then((value) => { if (!ignore) setCodexReady(safeNumber(value.summary?.routes_ready)); })
+      .catch(() => { if (!ignore) setCodexReady(null); });
+    return () => { ignore = true; };
+  }, []);
   const rotateKey = () => {
-    if (!confirm("Rotate the gateway key now? The current key will stop working immediately.")) return;
+    if (rotating) return;
+    if (!confirm("Rotate the gateway key now? The current key stops working immediately, and the new key is shown only once — if you close that panel without saving it, it cannot be recovered.")) return;
+    setRotating(true);
     void api<{ gateway_key: string }>("/api/admin/access/rotate", { method: "POST" })
-      .then((result) => { onNewKey(result.gateway_key); notify("Gateway key rotated."); })
-      .catch((caught) => notify(errorMessage(caught), "danger"));
+      .then((result) => { onNewKey(result.gateway_key); notify("Gateway key rotated. Save the new key before closing the panel."); })
+      .catch((caught) => notify(errorMessage(caught), "danger"))
+      .finally(() => setRotating(false));
   };
   const rootURL = (settings?.base_url || location.origin).replace(/\/$/, "");
   const openAIURL = `${rootURL}/v1`;
   return (
     <>
       <PageHeader eyebrow="Unified authentication" title="Access key" description="One active key works with OpenAI SDKs, Anthropic SDKs and Claude Code. Upstream provider secrets never leave Rotakey." />
+      {error && (
+        <InlineNotice tone="danger">
+          {error} The examples below use this page's own address until the settings load.{" "}
+          <button className="link-button" onClick={() => setAttempt((n) => n + 1)}>Try again</button>
+        </InlineNotice>
+      )}
       <section className="access-key-panel">
-        <div className="key-prefix"><ShieldCheck size={20} /><span><small>Active key prefix</small><code>{settings?.gateway_key_prefix ? `${settings.gateway_key_prefix}••••••••••••` : "Loading…"}</code></span></div>
-        <div><strong>Immediate rotation</strong><p>Rotating revokes the current key in the same database transaction. Update every application immediately.</p></div>
+        <div className="key-prefix"><ShieldCheck size={20} aria-hidden="true" /><span><small>Active key prefix</small><code>{settings?.gateway_key_prefix ? `${settings.gateway_key_prefix}••••••••••••` : error ? "unavailable" : "Loading…"}</code></span></div>
+        <div>
+          <strong>Rotating the key</strong>
+          <p>Rotation revokes the current key in the same database transaction and shows the replacement once. Update every application before you close that panel. Use the button at the bottom of this page.</p>
+        </div>
       </section>
       <section className="section-block code-example">
-        <div className="section-heading"><div><p className="eyebrow">OpenAI lane</p><h2>Chat Completions and Responses</h2></div><Button variant="quiet" onClick={() => void copyText(openAIURL).then(() => notify("OpenAI base URL copied."))}><Clipboard size={14} /> Copy base URL</Button></div>
+        <div className="section-heading"><div><p className="eyebrow">OpenAI lane</p><h2>Chat Completions and Responses</h2></div><Button variant="quiet" onClick={() => void copyText(openAIURL).then(() => notify("OpenAI base URL copied."))}><Clipboard size={14} aria-hidden="true" /> Copy base URL</Button></div>
         <pre>{`curl "${openAIURL}/chat/completions" \\
   -H "Authorization: Bearer $ROTAKEY_KEY" \\
   -H "Content-Type: application/json" \\
@@ -2801,10 +3515,10 @@ function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNe
       </section>
       <section className="section-block code-example">
         <div className="section-heading">
-          <div><p className="eyebrow">Codex CLI &amp; Desktop</p><h2>{codexReady} model route{codexReady === 1 ? "" : "s"} ready</h2></div>
+          <div><p className="eyebrow">Codex CLI &amp; Desktop</p><h2>{codexReady === null ? "Set up Codex" : `${codexReady} model route${codexReady === 1 ? "" : "s"} ready`}</h2></div>
           <div className="button-row">
-            <a className="button button--quiet" href="https://github.com/jisunahamed/rotakey/blob/main/docs/CODEX.md" target="_blank" rel="noreferrer"><BookOpen size={14} /> Full guide</a>
-            <Button variant="quiet" onClick={() => void copyText(`rotakey-codex install --url ${rootURL}`).then(() => notify("Codex setup command copied."))}><Clipboard size={14} /> Copy setup</Button>
+            <a className="button button--quiet" href="https://github.com/jisunahamed/rotakey/blob/main/docs/CODEX.md" target="_blank" rel="noreferrer"><BookOpen size={14} aria-hidden="true" /> Full guide</a>
+            <Button variant="quiet" onClick={() => void copyText(`rotakey-codex install --url ${rootURL}`).then(() => notify("Codex setup command copied."))}><Clipboard size={14} aria-hidden="true" /> Copy setup</Button>
           </div>
         </div>
         <pre>{`rotakey-codex install --url ${rootURL}
@@ -2813,7 +3527,7 @@ codex --profile rotakey`}</pre>
         <p>The installer prompts for the gateway key, protects it in the OS credential store, and writes only a managed Rotakey profile. Run <code>rotakey-codex sync</code> after changing model routes.</p>
       </section>
       <section className="section-block code-example">
-        <div className="section-heading"><div><p className="eyebrow">Anthropic lane</p><h2>Messages SDK and Claude Code</h2></div><div className="button-row"><a className="button button--quiet" href="https://github.com/jisunahamed/rotakey/blob/main/docs/CLAUDE-CODE.md" target="_blank" rel="noreferrer"><BookOpen size={14} /> Full guide</a><Button variant="quiet" onClick={() => void copyText(rootURL).then(() => notify("Anthropic base URL copied."))}><Clipboard size={14} /> Copy base URL</Button></div></div>
+        <div className="section-heading"><div><p className="eyebrow">Anthropic lane</p><h2>Messages SDK and Claude Code</h2></div><div className="button-row"><a className="button button--quiet" href="https://github.com/jisunahamed/rotakey/blob/main/docs/CLAUDE-CODE.md" target="_blank" rel="noreferrer"><BookOpen size={14} aria-hidden="true" /> Full guide</a><Button variant="quiet" onClick={() => void copyText(rootURL).then(() => notify("Anthropic base URL copied."))}><Clipboard size={14} aria-hidden="true" /> Copy base URL</Button></div></div>
         <pre>{`export ANTHROPIC_BASE_URL="${rootURL}"
 export ANTHROPIC_API_KEY="$ROTAKEY_KEY"
 
@@ -2824,8 +3538,8 @@ curl "${rootURL}/v1/messages" \\
   -d '{"model":"provider/model-alias","max_tokens":1024,"messages":[{"role":"user","content":"Hello"}]}'`}</pre>
       </section>
       <div className="page-actions console-actionbar">
-        <span>Rotation immediately revokes the current client credential.</span>
-        <Button variant="danger" onClick={rotateKey}><RefreshCw size={15} /> Rotate key</Button>
+        <span>Rotating revokes the current gateway key immediately and cannot be undone.</span>
+        <Button variant="danger" disabled={rotating} onClick={rotateKey}><RefreshCw size={15} aria-hidden="true" /> {rotating ? "Rotating…" : "Rotate gateway key"}</Button>
       </div>
     </>
   );
@@ -2833,17 +3547,69 @@ curl "${rootURL}/v1/messages" \\
 
 function SettingsPage({ notify }: { notify: (message: string, tone?: "success" | "danger") => void }) {
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [loadedMode, setLoadedMode] = useState<RoutingMode | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
+    // Try again refires this while the previous pair may still be open; the guard
+    // keeps the abandoned reply from landing on top of the newer one.
+    let ignore = false;
     void Promise.all([api<Settings>("/api/admin/settings"), api<{ providers: Provider[] }>("/api/admin/providers")])
       .then(([nextSettings, result]) => {
-        setSettings(nextSettings);
+        if (ignore) return;
+        // Providers only feed the two dropdown lists, so they always refresh. The
+        // settings themselves are the form: once a value is on screen the operator
+        // may be part-way through changing it, and a late reply must not type over
+        // them. Try again only appears while the form is still empty, so it is
+        // unaffected.
+        setSettings((current) => current ?? nextSettings);
+        setLoadedMode((current) => current ?? nextSettings.routing_mode);
         setProviders(normalizeProviders(result.providers));
+        setError("");
       })
-      .catch((caught) => notify(errorMessage(caught), "danger"));
-  }, [notify]);
-  if (!settings) return <PageSkeleton />;
+      .catch((caught) => { if (!ignore) setError(errorMessage(caught)); });
+    return () => { ignore = true; };
+  }, [attempt]);
+  // A failed load used to leave an animating skeleton with no explanation, so the
+  // page looked permanently busy rather than broken.
+  if (!settings) {
+    return error ? (
+      <>
+        <PageHeader eyebrow="Control plane policy" title="System" description="Bound waiting and retention so the gateway stays predictable on a small VPS." />
+        <EmptyState
+          level={2}
+          title="System settings could not be loaded"
+          description={error}
+          action={<Button onClick={() => setAttempt((n) => n + 1)}><RefreshCw size={14} aria-hidden="true" /> Try again</Button>}
+        />
+      </>
+    ) : (
+      <PageSkeleton />
+    );
+  }
+  const modeChanged = loadedMode !== null && settings.routing_mode !== loadedMode;
+  const aliasesAtRisk = providers.reduce((total, provider) => total + provider.models.length, 0);
+  const saveSettings = () => {
+    // Switching mode rewrites every public alias in the same transaction, which
+    // changes the name live callers ask for. That deserves a question first.
+    if (modeChanged && !confirm(`Switch to ${settings.routing_mode}-wise routing? Up to ${aliasesAtRisk} model alias${aliasesAtRisk === 1 ? "" : "es"} will be renamed, and clients calling the old names stop working until they are updated.`)) return;
+    setBusy(true);
+    void api<SettingsUpdateResult>("/api/admin/settings", { method: "PUT", json: settings })
+      .then((result) => {
+        publishRoutingMode(result.routing_mode);
+        setLoadedMode(result.routing_mode);
+        // A mode switch renames aliases in the same transaction, so the
+        // save confirmation reports what changed and what could not.
+        const parts = ["System settings saved."];
+        if (result.aliases_rewritten > 0) parts.push(`${result.aliases_rewritten} model alias${result.aliases_rewritten === 1 ? "" : "es"} renamed for ${result.routing_mode === "model" ? "model" : "provider"}-wise routing.`);
+        if (result.alias_conflicts.length > 0) parts.push(`Kept unchanged to avoid a collision: ${result.alias_conflicts.join(", ")}.`);
+        notify(parts.join(" "), result.alias_conflicts.length > 0 ? "danger" : "success");
+      })
+      .catch((caught) => notify(errorMessage(caught), "danger"))
+      .finally(() => setBusy(false));
+  };
   return (
     <>
       <PageHeader eyebrow="Control plane policy" title="System" description="Bound waiting and retention so the gateway stays predictable on a small VPS." />
@@ -2856,27 +3622,13 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
         <label className="settings-row"><span><strong>Captured body retention</strong><small>Only applies to model routes where encrypted body capture is enabled.</small></span><div><input type="number" min={1} max={365} value={settings.body_retention_days} onChange={(e) => setSettings({ ...settings, body_retention_days: Number(e.target.value) })} /><code>days</code></div></label>
       </section>
       <div className="page-actions console-actionbar">
-        <span>Changes apply to new requests without restarting the gateway.</span>
-        <Button disabled={busy} onClick={() => {
-          setBusy(true);
-          void api<SettingsUpdateResult>("/api/admin/settings", { method: "PUT", json: settings })
-            .then((result) => {
-              routingModeCache = result.routing_mode;
-              // A mode switch renames aliases in the same transaction, so the
-              // save confirmation reports what changed and what could not.
-              const parts = ["System settings saved."];
-              if (result.aliases_rewritten > 0) parts.push(`${result.aliases_rewritten} model alias${result.aliases_rewritten === 1 ? "" : "es"} renamed for ${result.routing_mode}-wise routing.`);
-              if (result.alias_conflicts.length > 0) parts.push(`Kept unchanged to avoid a collision: ${result.alias_conflicts.join(", ")}.`);
-              notify(parts.join(" "), result.alias_conflicts.length > 0 ? "danger" : "success");
-            })
-            .catch((caught) => notify(errorMessage(caught), "danger"))
-            .finally(() => setBusy(false));
-        }}>{busy ? "Saving…" : "Save settings"}</Button>
+        <span>{modeChanged ? "Saving a new routing mode renames existing model aliases." : "Changes apply to new requests without restarting the gateway."}</span>
+        <Button disabled={busy} onClick={saveSettings}>{busy ? "Saving…" : "Save settings"}</Button>
       </div>
       <ConfigTransfer notify={notify} />
       <section className="security-baseline">
-        <ShieldCheck size={19} />
-        <div><strong>Security baseline active</strong><p>Encrypted provider secrets · HttpOnly sessions · CSRF checks · private-network SSRF blocking · strict browser policy</p></div>
+        <ShieldCheck size={19} aria-hidden="true" />
+        <div><strong>Protections that are always on</strong><p>Provider API keys are stored encrypted, admin sessions use HttpOnly cookies with CSRF checks, and the gateway refuses to call private network addresses.</p></div>
       </section>
     </>
   );
@@ -2929,6 +3681,32 @@ function ConfigTransfer({ notify }: { notify: (message: string, tone?: "success"
     }
   };
 
+  // The file picker used to start the import the moment a file was chosen, so a
+  // misclick could overwrite a working setup with no way back. The bundle is read
+  // first, and the operator confirms against what it actually contains.
+  const reviewThenImport = async (file: File) => {
+    let summary = "";
+    try {
+      const bundle = JSON.parse(await file.text()) as {
+        providers?: unknown[];
+        models?: unknown[];
+        credentials?: unknown[];
+        routing_mode?: string;
+      };
+      const counts = [
+        `${bundle.providers?.length ?? 0} provider(s)`,
+        `${bundle.models?.length ?? 0} model route(s)`,
+        `${bundle.credentials?.length ?? 0} API key(s)`
+      ];
+      summary = `${file.name} contains ${counts.join(", ")}${bundle.routing_mode ? ` and sets ${bundle.routing_mode}-wise routing` : ""}.`;
+    } catch {
+      notify("That file is not valid JSON.", "danger");
+      return;
+    }
+    if (!confirm(`${summary}\n\nImporting replays it in one transaction: matching providers, model routes and API keys are overwritten with the values in the file. Existing items not in the file are left alone. Continue?`)) return;
+    await importConfig(file);
+  };
+
   return (
     <section className="settings-list config-transfer">
       {/* These rows hold buttons rather than a single control, so they are plain
@@ -2937,21 +3715,21 @@ function ConfigTransfer({ notify }: { notify: (message: string, tone?: "success"
         <span><strong>Export configuration</strong><small>Writes every provider, model route, API key and rate limit to one JSON file, sorted A-to-Z. Import it on another install to reproduce this setup.</small></span>
         <div>
           <label className="config-transfer__secrets"><input type="checkbox" checked={includeSecrets} onChange={(event) => setIncludeSecrets(event.target.checked)} /><span>Include API keys</span></label>
-          <Button variant="quiet" disabled={busy !== null} onClick={() => void exportConfig()}><Download size={14} /> {busy === "export" ? "Exporting…" : "Export"}</Button>
+          <Button variant="quiet" disabled={busy !== null} onClick={() => void exportConfig()}><Download size={14} aria-hidden="true" /> {busy === "export" ? "Exporting…" : "Export"}</Button>
         </div>
       </div>
       <div className="settings-row">
-        <span><strong>Import configuration</strong><small>Replays a bundle in one transaction. Providers match on identifier and models on alias, so re-importing updates instead of duplicating.</small></span>
+        <span><strong>Import configuration</strong><small>Replays a bundle in one transaction. Providers match on identifier and models on alias, so re-importing updates instead of duplicating. You see what the file contains before anything is written.</small></span>
         <div>
-          <input id="config-import-file" type="file" accept="application/json,.json" style={{ display: "none" }} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void importConfig(file); }} />
-          <Button variant="quiet" disabled={busy !== null} onClick={() => document.getElementById("config-import-file")?.click()}><Upload size={14} /> {busy === "import" ? "Importing…" : "Import"}</Button>
+          <input id="config-import-file" type="file" accept="application/json,.json" style={{ display: "none" }} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void reviewThenImport(file); }} />
+          <Button variant="quiet" disabled={busy !== null} onClick={() => document.getElementById("config-import-file")?.click()}><Upload size={14} aria-hidden="true" /> {busy === "import" ? "Importing…" : "Import"}</Button>
         </div>
       </div>
       {result && (
         <div className="config-transfer__result">
           <strong>Import summary</strong>
           <ul>
-            <li>Routing mode set to {result.routing_mode}-wise</li>
+            <li>Routing mode set to {result.routing_mode === "model" ? "model-wise (pooled)" : "provider-wise"}</li>
             <li>Providers: {result.providers_created} created · {result.providers_updated} updated</li>
             <li>Model routes: {result.models_created} created · {result.models_updated} updated</li>
             <li>API keys: {result.credentials_created} created · {result.credentials_updated} updated{result.credentials_skipped > 0 ? ` · ${result.credentials_skipped} skipped` : ""}</li>
@@ -2967,9 +3745,15 @@ function ConfigTransfer({ notify }: { notify: (message: string, tone?: "success"
 function SecretReveal({ title, keyValue, message, onClose, notify }: { title: string; keyValue: string; message: string; onClose: () => void; notify: (message: string, tone?: "success" | "danger") => void }) {
   const [confirmed, setConfirmed] = useState(false);
   return (
-    <Sheet title={title} eyebrow="One-time secret" onClose={() => { if (confirmed || confirm("Close without confirming that the key is saved?")) onClose(); }}>
+    <Sheet
+      title={title}
+      eyebrow="One-time secret"
+      onClose={onClose}
+      dirty={!confirmed}
+      discardMessage="Close without confirming that the key is saved? This key cannot be shown again."
+    >
       <InlineNotice tone="danger">{message}</InlineNotice>
-      <div className="secret-value"><code>{keyValue}</code><Button variant="quiet" onClick={() => void copyText(keyValue).then(() => notify("Gateway key copied.")).catch(() => notify("Clipboard access was blocked.", "danger"))}><Clipboard size={14} /> Copy</Button></div>
+      <div className="secret-value"><code>{keyValue}</code><Button variant="quiet" onClick={() => void copyText(keyValue).then(() => notify("Gateway key copied.")).catch(() => notify("Clipboard access was blocked. Select the key and copy it manually.", "danger"))}><Clipboard size={14} aria-hidden="true" /> Copy</Button></div>
       <label className="confirmation-check"><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /><span>I stored this key securely.</span></label>
       <div className="sheet-actions"><span /><Button disabled={!confirmed} onClick={onClose}>Finish</Button></div>
     </Sheet>
@@ -2977,7 +3761,15 @@ function SecretReveal({ title, keyValue, message, onClose, notify }: { title: st
 }
 
 function PageSkeleton() {
-  return <div className="page-skeleton" aria-label="Loading"><span /><span /><span /><span /></div>;
+  return (
+    <div className="page-skeleton" role="status" aria-live="polite">
+      <span className="sr-only">Loading…</span>
+      <span aria-hidden="true" />
+      <span aria-hidden="true" />
+      <span aria-hidden="true" />
+      <span aria-hidden="true" />
+    </div>
+  );
 }
 
 type CredentialDraft = {
@@ -3012,20 +3804,26 @@ function CredentialEntries({ value, onChange }: { value: CredentialDraft[]; onCh
     <div className="credential-entry-list">
       <div className="credential-entry-list__intro">
         <div><strong>API keys</strong><small>Add each key separately. Choosing a primary is optional.</small></div>
-        <Button type="button" variant="quiet" onClick={() => onChange([...value, newCredentialDraft()])}><Plus size={14} /> Add another API key</Button>
+        <Button type="button" variant="quiet" onClick={() => onChange([...value, newCredentialDraft()])}><Plus size={14} aria-hidden="true" /> Add another API key</Button>
       </div>
       {value.map((credential, index) => (
-        <section className="credential-entry" key={credential.id}>
+        // Every entry repeats the same three field labels, so the group is named
+        // and each field carries its number: "Label" three times over tells a
+        // screen reader operator nothing about which key they are filling in.
+        <section className="credential-entry" key={credential.id} aria-label={`API key ${index + 1}${credential.label.trim() ? `, ${credential.label.trim()}` : ""}`}>
           <header>
             <strong>API key {index + 1}</strong>
-            {value.length > 1 && <Button type="button" variant="quiet" onClick={() => onChange(value.filter((item) => item.id !== credential.id))}><Trash2 size={13} /> Remove</Button>}
+            {value.length > 1 && <Button type="button" variant="quiet" onClick={() => onChange(value.filter((item) => item.id !== credential.id))} aria-label={`Remove API key ${index + 1}${credential.label.trim() ? `, ${credential.label.trim()}` : ""}`}><Trash2 size={13} aria-hidden="true" /> Remove</Button>}
           </header>
           <div className="field-pair">
-            <label className="field"><span>Label</span><input placeholder="Production key" value={credential.label} onChange={(event) => update(credential.id, { label: event.target.value })} /></label>
-            <label className="field"><span>API key</span><input type="password" autoComplete="off" placeholder="Paste provider API key" value={credential.secret} onChange={(event) => update(credential.id, { secret: event.target.value })} /></label>
+            <label className="field"><span>Label</span><input placeholder="Production key" value={credential.label} onChange={(event) => update(credential.id, { label: event.target.value })} aria-label={`Label for API key ${index + 1}`} /></label>
+            {/* autoComplete="off" is widely ignored for password fields; the
+                new-password token is what actually stops a manager offering the
+                operator's own saved credentials for a provider's API key. */}
+            <label className="field"><span>API key</span><input type="password" autoComplete="new-password" spellCheck={false} placeholder="Paste provider API key" value={credential.secret} onChange={(event) => update(credential.id, { secret: event.target.value })} aria-label={`Secret for API key ${index + 1}`} /></label>
           </div>
           <label className="primary-choice">
-            <input type="checkbox" checked={credential.is_primary} onChange={(event) => update(credential.id, { is_primary: event.target.checked })} />
+            <input type="checkbox" checked={credential.is_primary} onChange={(event) => update(credential.id, { is_primary: event.target.checked })} aria-label={`Try API key ${index + 1} first while it has capacity`} />
             <span><strong>Primary</strong><small>Try this key first while it has capacity.</small></span>
           </label>
         </section>
@@ -3110,28 +3908,93 @@ function normalizeProviders(providers: Provider[] | null | undefined): Provider[
     api_format: provider.api_format ?? "openai",
     anthropic_version: provider.anthropic_version ?? "2023-06-01",
     extra_headers: provider.extra_headers ?? {},
+    // An absent balance is "not tracked", which is deliberately not the same as
+    // zero: zero is what stops a key receiving traffic. Only the spend figures are
+    // defaulted to a number.
+    default_key_balance_usd: provider.default_key_balance_usd ?? null,
+    balance_spent_usd: safeNumber(provider.balance_spent_usd),
     models: (provider.models ?? []).map((model) => ({ ...model, supports_messages: model.supports_messages ?? true, strip_parameters: model.strip_parameters ?? [], capability_status: model.capability_status ?? "unverified", capability_profile: model.capability_profile ?? {}, input_cost_per_million_usd: model.input_cost_per_million_usd ?? 0, output_cost_per_million_usd: model.output_cost_per_million_usd ?? 0, request_cost_usd: model.request_cost_usd })),
     credentials: (provider.credentials ?? []).map((credential) => ({
       ...credential,
       validation_error: credential.validation_error ?? "",
+      balance_usd: credential.balance_usd ?? null,
+      balance_spent_usd: safeNumber(credential.balance_spent_usd),
+      // Go serialises an empty map as null, so both of these arrive as null from
+      // a key that has never had a limit set. Every render path indexes them
+      // directly, and without an error boundary a null map takes the console
+      // to a blank page rather than to a missing number.
+      limits: credential.limits ?? emptyPolicy(),
+      model_limits: credential.model_limits ?? {},
     })),
   }));
 }
 
+/** Absent numbers arrive from a partially-populated payload; `Intl` turns them
+ *  into the literal string "NaN", which is worse than a zero in a readout. */
+function safeNumber(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+/** The overview is the one payload every widget on the landing page indexes into
+ *  without checking, so a missing array or a missing credit block used to take
+ *  the whole console down. Defaulted here once instead of at forty call sites. */
+function normalizeOverview(overview: Overview): Overview {
+  const summary = overview.summary ?? ({} as Overview["summary"]);
+  return {
+    ...overview,
+    summary: {
+      ...summary,
+      providers_total: safeNumber(summary.providers_total),
+      providers_ready: safeNumber(summary.providers_ready),
+      routes_total: safeNumber(summary.routes_total),
+      routes_ready: safeNumber(summary.routes_ready),
+      keys_total: safeNumber(summary.keys_total),
+      keys_ready: safeNumber(summary.keys_ready),
+      keys_warning: safeNumber(summary.keys_warning),
+      requests: safeNumber(summary.requests),
+      tokens: safeNumber(summary.tokens),
+      estimated_cost_usd: safeNumber(summary.estimated_cost_usd),
+      errors: safeNumber(summary.errors),
+      error_rate: safeNumber(summary.error_rate),
+      latency_p50_ms: safeNumber(summary.latency_p50_ms),
+      latency_p95_ms: safeNumber(summary.latency_p95_ms),
+      max_wait_ms: safeNumber(summary.max_wait_ms),
+      gateway_key_ready: summary.gateway_key_ready ?? false,
+      credit: summary.credit ?? emptyCreditTotals()
+    },
+    series: overview.series ?? [],
+    providers: (overview.providers ?? []).map((provider) => ({
+      ...provider,
+      capacity: provider.capacity ?? {},
+      credit: provider.credit ?? emptyCreditTotals()
+    })),
+    routes: (overview.routes ?? []).map((route) => ({
+      ...route,
+      strip_parameters: route.strip_parameters ?? [],
+      segments: route.segments ?? []
+    })),
+    alerts: overview.alerts ?? [],
+    recent_failures: overview.recent_failures ?? []
+  };
+}
+
 function formatNumber(value: number) {
-  return new Intl.NumberFormat("en", { notation: value > 9999 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value);
+  const safe = safeNumber(value);
+  return new Intl.NumberFormat("en", { notation: safe > 9999 ? "compact" : "standard", maximumFractionDigits: 1 }).format(safe);
 }
 
 function formatCompact(value: number) {
-  return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value);
+  return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(safeNumber(value));
 }
 
 function formatUSD(value: number) {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: value < 1 ? 4 : 2 }).format(value || 0);
+  const safe = safeNumber(value);
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: safe < 1 ? 4 : 2 }).format(safe);
 }
 
 function formatLatency(value: number) {
-  return value >= 1000 ? `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}s` : `${Math.round(value)}ms`;
+  const safe = safeNumber(value);
+  return safe >= 1000 ? `${(safe / 1000).toFixed(safe >= 10_000 ? 0 : 1)}s` : `${Math.round(safe)}ms`;
 }
 
 function formatChartDate(value?: string) {

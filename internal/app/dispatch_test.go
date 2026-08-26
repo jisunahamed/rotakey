@@ -83,31 +83,42 @@ func TestTranslateUpstreamResponseCoversEveryPoolCombination(t *testing.T) {
 	}
 }
 
-func TestRouteSupportsRequestFiltersUnusableProviders(t *testing.T) {
-	chatOnly := routeRuntime{
-		Model:    ModelRoute{SupportsChat: true},
-		Provider: Provider{APIFormat: "openai"},
+// TestRouteSupportsRequestAdmitsEveryTranslatableRoute pins the contract that a
+// caller's choice of protocol is never a reason to refuse a route. Every public
+// protocol can be translated into every upstream shape, so the only route that
+// cannot serve is one whose upstream publishes no usable endpoint at all.
+func TestRouteSupportsRequestAdmitsEveryTranslatableRoute(t *testing.T) {
+	allModes := []string{messageModeChat, messageModeResponses, messageModeAnthropic}
+	usable := map[string]routeRuntime{
+		"openai chat only": {
+			Model:    ModelRoute{SupportsChat: true},
+			Provider: Provider{APIFormat: "openai"},
+		},
+		"openai responses only": {
+			Model:    ModelRoute{SupportsResponses: true},
+			Provider: Provider{APIFormat: "openai"},
+		},
+		"anthropic messages only": {
+			Model:    ModelRoute{SupportsMessages: true},
+			Provider: Provider{APIFormat: "anthropic"},
+		},
 	}
-	if routeSupportsRequest(chatOnly, dispatchRequest{PublicMode: messageModeAnthropic}) {
-		t.Fatal("a route without Messages was offered to an Anthropic caller")
+	for name, route := range usable {
+		for _, mode := range allModes {
+			if !routeSupportsRequest(route, dispatchRequest{PublicMode: mode}) {
+				t.Fatalf("%s was refused for a %s caller", name, mode)
+			}
+		}
 	}
-	if !routeSupportsRequest(chatOnly, dispatchRequest{PublicMode: messageModeChat}) {
-		t.Fatal("a chat route was rejected for a chat caller")
-	}
-	// Responses is served either natively or by translating to chat, so a
-	// chat-only route still qualifies.
-	if !routeSupportsRequest(chatOnly, dispatchRequest{PublicMode: messageModeResponses}) {
-		t.Fatal("a chat route was rejected for a Responses caller")
-	}
-	messagesOnly := routeRuntime{
-		Model:    ModelRoute{SupportsMessages: true},
-		Provider: Provider{APIFormat: "anthropic"},
-	}
-	if routeSupportsRequest(messagesOnly, dispatchRequest{PublicMode: messageModeChat}) {
-		t.Fatal("a route without Chat was offered to a chat caller")
-	}
-	if !routeSupportsRequest(messagesOnly, dispatchRequest{PublicMode: messageModeAnthropic}) {
-		t.Fatal("a Messages route was rejected for an Anthropic caller")
+	for name, route := range map[string]routeRuntime{
+		"openai with no endpoint":    {Provider: Provider{APIFormat: "openai"}},
+		"anthropic with no endpoint": {Provider: Provider{APIFormat: "anthropic"}},
+	} {
+		for _, mode := range allModes {
+			if routeSupportsRequest(route, dispatchRequest{PublicMode: mode}) {
+				t.Fatalf("%s was offered to a %s caller", name, mode)
+			}
+		}
 	}
 }
 

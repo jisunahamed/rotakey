@@ -42,6 +42,25 @@ func (s *Server) recordCredentialSpend(ctx context.Context, credentialID string,
 	}
 }
 
+// recordProviderSpend charges a request whose credential is not known to the
+// provider instead. The gateway always knows which provider served a request even
+// when the attempt ended before a key was chosen, so the cost is still subtracted
+// from that account's pooled credit rather than disappearing.
+func (s *Server) recordProviderSpend(ctx context.Context, providerID string, amount float64) {
+	if providerID == "" || amount <= 0 {
+		return
+	}
+	writeContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	if _, err := s.db.Exec(writeContext, `
+		UPDATE providers
+		SET balance_spent_usd = balance_spent_usd + $2, updated_at = NOW()
+		WHERE id = $1
+	`, providerID, amount); err != nil {
+		s.logger.Warn("provider balance write failed", "provider_id", providerID, "error", err)
+	}
+}
+
 // balanceRoutingDecision explains why a key was passed over, or nil when the key
 // still has credit. It exists so the pooled and single-route selectors report the
 // skip identically in the request log.
@@ -55,12 +74,22 @@ func balanceRoutingDecision(credential credentialRuntime) *RoutingDecision {
 	}
 }
 
-// creditRemaining is the console-facing balance of one key.
+// creditRemaining is the console-facing balance of one key. The console leads
+// with RemainingUSD because that is the number an operator acts on; BalanceUSD is
+// carried alongside only so the low-balance ratio can be computed.
 type creditRemaining struct {
 	BalanceUSD   float64 `json:"balance_usd"`
 	SpentUSD     float64 `json:"spent_usd"`
 	RemainingUSD float64 `json:"remaining_usd"`
 	Exhausted    bool    `json:"exhausted"`
+	// Requests is how many logged requests this key served in the selected range.
+	// It answers "which key is burning the credit", which the balance alone cannot.
+	Requests int64 `json:"requests"`
+	// Errors is that key's failures in the same range, so a key that is spending
+	// without succeeding is visible next to its cost.
+	Errors int64 `json:"errors"`
+	// Tokens is the input plus output tokens the key moved in the range.
+	Tokens int64 `json:"tokens"`
 }
 
 // creditTotals sums the tracked keys in a provider or across the gateway.
@@ -72,6 +101,11 @@ type creditTotals struct {
 	SpentUSD     float64 `json:"spent_usd"`
 	RemainingUSD float64 `json:"remaining_usd"`
 	ExhaustedKey int     `json:"exhausted_keys"`
+	// UnattributedSpentUSD is spend that was charged to the provider because the
+	// request finished without a recorded key. It is already included in SpentUSD
+	// and subtracted from RemainingUSD; it is reported separately so the console
+	// can explain a gap between the keys' own figures and the provider's.
+	UnattributedSpentUSD float64 `json:"unattributed_spent_usd"`
 }
 
 func credentialCredit(credential CredentialView) *creditRemaining {
@@ -83,6 +117,16 @@ func credentialCredit(credential CredentialView) *creditRemaining {
 		BalanceUSD: *credential.BalanceUSD, SpentUSD: credential.BalanceSpentUSD,
 		RemainingUSD: *remaining, Exhausted: *remaining <= 0,
 	}
+}
+
+// applyCredentialUsage attaches the key's traffic for the selected range to its
+// balance figures, so "how much is left" and "who is spending it" arrive in the
+// console as one object. Untracked keys carry no credit and so carry no usage.
+func applyCredentialUsage(credit *creditRemaining, usage credentialUsage) {
+	if credit == nil {
+		return
+	}
+	credit.Requests, credit.Errors, credit.Tokens = usage.Requests, usage.Errors, usage.Tokens
 }
 
 // addCredit folds one key into a running total. Untracked keys are ignored so
@@ -107,6 +151,22 @@ func (t *creditTotals) merge(other creditTotals) {
 	t.SpentUSD += other.SpentUSD
 	t.RemainingUSD += other.RemainingUSD
 	t.ExhaustedKey += other.ExhaustedKey
+	t.UnattributedSpentUSD += other.UnattributedSpentUSD
+}
+
+// chargeUnattributed folds a provider's pooled spend into its totals. It is the
+// cost of requests that no single key could be charged for, so it comes off the
+// remaining credit exactly as a key's own spend does, and never drives the
+// remaining figure below zero.
+func (t *creditTotals) chargeUnattributed(amount float64) {
+	if amount <= 0 || t.TrackedKeys == 0 {
+		return
+	}
+	t.UnattributedSpentUSD += amount
+	t.SpentUSD += amount
+	if t.RemainingUSD -= amount; t.RemainingUSD < 0 {
+		t.RemainingUSD = 0
+	}
 }
 
 // lowBalanceRatio is the share of the loaded credit left that still counts as

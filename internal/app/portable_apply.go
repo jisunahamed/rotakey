@@ -79,11 +79,13 @@ func upsertImportedProvider(ctx context.Context, tx pgx.Tx, provider ExportProvi
 		if _, err := tx.Exec(ctx, `
 			UPDATE providers SET name=$2, base_url=$3, auth_header=$4, auth_scheme=$5,
 			    extra_headers=$6, timeout_seconds=$7, enabled=$8, allow_private_network=$9,
-			    api_format=$10, anthropic_version=$11, updated_at=NOW()
+			    api_format=$10, anthropic_version=$11,
+			    default_key_balance_usd=$12, balance_spent_usd=$13, updated_at=NOW()
 			WHERE id=$1
 		`, existingID, provider.Name, provider.BaseURL, provider.AuthHeader, provider.AuthScheme,
 			headers, provider.TimeoutSeconds, provider.Enabled, provider.AllowPrivateNetwork,
-			provider.APIFormat, provider.AnthropicVersion); err != nil {
+			provider.APIFormat, provider.AnthropicVersion,
+			provider.DefaultKeyBalanceUSD, provider.BalanceSpentUSD); err != nil {
 			return "", false, fmt.Errorf("provider %q could not be updated", provider.Slug)
 		}
 		return existingID, false, nil
@@ -95,11 +97,13 @@ func upsertImportedProvider(ctx context.Context, tx pgx.Tx, provider ExportProvi
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO providers
 		    (id, name, slug, base_url, auth_header, auth_scheme, extra_headers,
-		     timeout_seconds, enabled, allow_private_network, api_format, anthropic_version)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		     timeout_seconds, enabled, allow_private_network, api_format, anthropic_version,
+		     default_key_balance_usd, balance_spent_usd)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 	`, id, provider.Name, provider.Slug, provider.BaseURL, provider.AuthHeader,
 		provider.AuthScheme, headers, provider.TimeoutSeconds, provider.Enabled,
-		provider.AllowPrivateNetwork, provider.APIFormat, provider.AnthropicVersion); err != nil {
+		provider.AllowPrivateNetwork, provider.APIFormat, provider.AnthropicVersion,
+		provider.DefaultKeyBalanceUSD, provider.BalanceSpentUSD); err != nil {
 		return "", false, fmt.Errorf("provider %q could not be created", provider.Slug)
 	}
 	return id, true, nil

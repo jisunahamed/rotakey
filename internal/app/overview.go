@@ -83,6 +83,10 @@ type overviewProvider struct {
 	Capacity      map[string]overviewLimit `json:"capacity"`
 	ValidationBad int                      `json:"validation_warnings"`
 	Credit        creditTotals             `json:"credit"`
+	// DefaultKeyBalanceUSD is the figure new keys on this provider start with. The
+	// console shows it so an operator can see what an account was loaded with per
+	// key without opening every key.
+	DefaultKeyBalanceUSD *float64 `json:"default_key_balance_usd,omitempty"`
 }
 
 type overviewLimit struct {
@@ -235,6 +239,10 @@ func (s *Server) buildAdminOverview(ctx context.Context, rawRange string) (admin
 	if err != nil {
 		return adminOverview{}, err
 	}
+	credentialStats, err := s.overviewCredentialStats(ctx, selectedRange)
+	if err != nil {
+		return adminOverview{}, err
+	}
 	redisState := s.overviewRedisState(ctx, providers)
 
 	result := adminOverview{
@@ -253,12 +261,14 @@ func (s *Server) buildAdminOverview(ctx context.Context, rawRange string) (admin
 		providerView := overviewProvider{
 			ID: provider.ID, Name: provider.Name, Enabled: provider.Enabled,
 			ModelsTotal: len(provider.Models), KeysTotal: len(provider.Credentials),
-			Capacity: aggregateProviderCapacity(provider.Credentials, redisState, now),
+			Capacity:             aggregateProviderCapacity(provider.Credentials, redisState, now),
+			DefaultKeyBalanceUSD: provider.DefaultKeyBalanceUSD,
 		}
 		summary.ProvidersTotal++
 		for _, credential := range provider.Credentials {
 			summary.KeysTotal++
 			credit := credentialCredit(credential)
+			applyCredentialUsage(credit, credentialStats[credential.ID])
 			providerView.Credit.addCredit(credit)
 			if credential.Enabled && credential.Status == "healthy" && !credential.BalanceExhausted() &&
 				!redisState.CooldownUnknown[credential.ID] &&
@@ -281,6 +291,11 @@ func (s *Server) buildAdminOverview(ctx context.Context, rawRange string) (admin
 				})
 			}
 		}
+		// Spend the gateway could not pin on one key still came out of this account,
+		// so it comes off the provider's remaining credit before the totals are
+		// merged upward. Without this the dashboard would report credit that has
+		// already been used.
+		providerView.Credit.chargeUnattributed(provider.BalanceSpentUSD)
 		summary.Credit.merge(providerView.Credit)
 		if provider.Enabled && providerView.KeysReady > 0 {
 			summary.ProvidersReady++
@@ -318,6 +333,7 @@ func (s *Server) buildAdminOverview(ctx context.Context, rawRange string) (admin
 			fallbackIndexes := []int{}
 			for index, credential := range provider.Credentials {
 				segment := cachedCredentialCapacity(credential, model.ID, redisState, now)
+				applyCredentialUsage(segment.Credit, credentialStats[credential.ID])
 				route.Segments = append(route.Segments, segment)
 				if segment.Status == "healthy" {
 					route.Healthy++
@@ -498,6 +514,42 @@ func (s *Server) overviewRouteStats(ctx context.Context, selected overviewRange)
 		}
 		stats.LatencyP95MS = int64(latency)
 		result[id] = stats
+	}
+	return result, rows.Err()
+}
+
+// credentialUsage is one key's traffic in the selected range. It answers which
+// key is spending the credit, which the balance figures alone cannot.
+type credentialUsage struct {
+	Requests int64
+	Errors   int64
+	Tokens   int64
+}
+
+// overviewCredentialStats counts each key's logged requests in the range. Logs
+// are pruned on a retention schedule, so this is deliberately a traffic figure
+// for the selected window and not the source of the balance, which accumulates on
+// the credentials row instead.
+func (s *Server) overviewCredentialStats(ctx context.Context, selected overviewRange) (map[string]credentialUsage, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT credential_id, COUNT(*), COUNT(*) FILTER (WHERE status_code >= 400),
+		       COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0)
+		FROM request_logs
+		WHERE created_at >= NOW() - $1::interval AND credential_id IS NOT NULL
+		GROUP BY credential_id
+	`, selected.SQLSpan)
+	if err != nil {
+		return nil, fmt.Errorf("load credential overview stats: %w", err)
+	}
+	defer rows.Close()
+	result := map[string]credentialUsage{}
+	for rows.Next() {
+		var id string
+		var usage credentialUsage
+		if err := rows.Scan(&id, &usage.Requests, &usage.Errors, &usage.Tokens); err != nil {
+			return nil, err
+		}
+		result[id] = usage
 	}
 	return result, rows.Err()
 }

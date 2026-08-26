@@ -19,10 +19,22 @@ func (e unsupportedFeatureError) Error() string {
 	return fmt.Sprintf("%s is not supported when translating Responses API requests", e.Feature)
 }
 
-func translateResponsesRequest(source map[string]any) (map[string]any, error) {
+// translateResponsesRequest converts a Responses request into a Chat request.
+// Fields Chat cannot express are dropped and named in the returned slice rather
+// than refused, because a caller who asked for one Responses-only convenience
+// still wants an answer from the model.
+func translateResponsesRequest(source map[string]any) (map[string]any, []string, error) {
+	dropped := unsupportedFields(source,
+		"model", "input", "instructions", "temperature", "top_p", "stream", "stream_options",
+		"parallel_tool_calls", "seed", "max_output_tokens", "tools", "tool_choice", "text",
+		"store", "metadata", "user", "truncation", "include", "reasoning",
+	)
+	// A stateful conversation cannot be replayed against a stateless Chat
+	// endpoint, so the reference is dropped and named. The turns the caller sent
+	// inline still reach the model.
 	for _, field := range []string{"background", "conversation", "previous_response_id"} {
 		if value, ok := source[field]; ok && value != nil && value != false && value != "" {
-			return nil, unsupportedFeatureError{Feature: field}
+			dropped = appendUniqueStrings(dropped, field)
 		}
 	}
 	chat := map[string]any{}
@@ -30,6 +42,9 @@ func translateResponsesRequest(source map[string]any) (map[string]any, error) {
 		if value, ok := source[field]; ok {
 			chat[field] = value
 		}
+	}
+	if options, ok := source["stream_options"]; ok {
+		chat["stream_options"] = options
 	}
 	if maxOutput, ok := source["max_output_tokens"]; ok {
 		chat["max_tokens"] = maxOutput
@@ -46,7 +61,14 @@ func translateResponsesRequest(source map[string]any) (map[string]any, error) {
 		for _, rawItem := range input {
 			item, ok := rawItem.(map[string]any)
 			if !ok {
-				return nil, unsupportedFeatureError{Feature: "non-object input item"}
+				// A bare string in the input array is a user turn in every client
+				// library that produces one, so it is read that way.
+				if text, ok := rawItem.(string); ok {
+					messages = append(messages, map[string]any{"role": "user", "content": text})
+					continue
+				}
+				dropped = appendUniqueStrings(dropped, "input item")
+				continue
 			}
 			itemType, _ := item["type"].(string)
 			if itemType == "function_call" {
@@ -70,18 +92,28 @@ func translateResponsesRequest(source map[string]any) (map[string]any, error) {
 				})
 				continue
 			}
+			if itemType == "reasoning" {
+				// Reasoning items are an OpenAI-side artifact of a previous turn and
+				// have no Chat equivalent. The visible turns carry the conversation.
+				continue
+			}
 			role, _ := item["role"].(string)
 			if role == "" {
 				role = "user"
 			}
-			content, err := translateResponseContent(item["content"])
-			if err != nil {
-				return nil, err
-			}
+			content, lost := translateResponseContent(item["content"])
+			dropped = appendUniqueStrings(dropped, lost...)
 			messages = append(messages, map[string]any{"role": role, "content": content})
 		}
+	case nil:
+		// A request with no input at all has nothing left to send once it is
+		// dropped, so this is the one shape that cannot be repaired.
+		return nil, dropped, unsupportedFeatureError{Feature: "input"}
 	default:
-		return nil, unsupportedFeatureError{Feature: "input"}
+		messages = append(messages, map[string]any{"role": "user", "content": fmt.Sprint(input)})
+	}
+	if len(messages) == 0 {
+		return nil, dropped, unsupportedFeatureError{Feature: "input"}
 	}
 	chat["messages"] = messages
 
@@ -89,8 +121,16 @@ func translateResponsesRequest(source map[string]any) (map[string]any, error) {
 		translated := make([]any, 0, len(tools))
 		for _, rawTool := range tools {
 			tool, ok := rawTool.(map[string]any)
-			if !ok || tool["type"] != "function" {
-				return nil, unsupportedFeatureError{Feature: "hosted or non-function tools"}
+			if !ok {
+				dropped = appendUniqueStrings(dropped, "tool")
+				continue
+			}
+			// A hosted tool such as web_search runs inside OpenAI's own
+			// infrastructure and cannot be offered to another upstream. The caller's
+			// own function tools still reach the model.
+			if tool["type"] != "function" {
+				dropped = appendUniqueStrings(dropped, "hosted tool "+fmt.Sprint(tool["type"]))
+				continue
 			}
 			function := map[string]any{
 				"name": tool["name"], "description": tool["description"], "parameters": tool["parameters"],
@@ -100,10 +140,15 @@ func translateResponsesRequest(source map[string]any) (map[string]any, error) {
 			}
 			translated = append(translated, map[string]any{"type": "function", "function": function})
 		}
-		chat["tools"] = translated
+		if len(translated) > 0 {
+			chat["tools"] = translated
+		}
 	}
 	if choice, ok := source["tool_choice"]; ok {
 		chat["tool_choice"] = choice
+	}
+	if _, hasTools := chat["tools"]; !hasTools {
+		delete(chat, "tool_choice")
 	}
 	if text, ok := source["text"].(map[string]any); ok {
 		if format, ok := text["format"].(map[string]any); ok {
@@ -119,41 +164,63 @@ func translateResponsesRequest(source map[string]any) (map[string]any, error) {
 				}
 			case "text", nil:
 			default:
-				return nil, unsupportedFeatureError{Feature: "text.format"}
+				dropped = appendUniqueStrings(dropped, "text.format")
 			}
 		}
 	}
-	return chat, nil
+	return chat, dropped, nil
 }
 
-func translateResponseContent(raw any) (any, error) {
+// translateResponseContent converts one Responses item's content parts and names
+// the part types that could not cross, which the caller folds into the request's
+// dropped-field list.
+func translateResponseContent(raw any) (any, []string) {
+	dropped := make([]string, 0)
 	if raw == nil {
-		return "", nil
+		return "", dropped
 	}
 	if text, ok := raw.(string); ok {
-		return text, nil
+		return text, dropped
 	}
 	parts, ok := raw.([]any)
 	if !ok {
-		return nil, unsupportedFeatureError{Feature: "input content"}
+		return fmt.Sprint(raw), dropped
 	}
 	translated := make([]any, 0, len(parts))
 	for _, rawPart := range parts {
 		part, ok := rawPart.(map[string]any)
 		if !ok {
-			return nil, unsupportedFeatureError{Feature: "input content part"}
+			if text, ok := rawPart.(string); ok {
+				translated = append(translated, map[string]any{"type": "text", "text": text})
+				continue
+			}
+			dropped = appendUniqueStrings(dropped, "input content part")
+			continue
 		}
 		switch part["type"] {
-		case "input_text", "output_text":
+		case "input_text", "output_text", "text":
 			translated = append(translated, map[string]any{"type": "text", "text": part["text"]})
 		case "input_image":
 			imageURL := part["image_url"]
 			translated = append(translated, map[string]any{"type": "image_url", "image_url": map[string]any{"url": imageURL}})
 		default:
-			return nil, unsupportedFeatureError{Feature: fmt.Sprint(part["type"])}
+			// A file or audio part cannot cross to Chat, but whatever text rides
+			// along with it can, so the turn keeps as much meaning as possible.
+			if text, ok := part["text"].(string); ok && text != "" {
+				translated = append(translated, map[string]any{"type": "text", "text": text})
+			}
+			dropped = appendUniqueStrings(dropped, fmt.Sprint(part["type"]))
 		}
 	}
-	return translated, nil
+	if len(translated) == 0 {
+		return "", dropped
+	}
+	if len(translated) == 1 {
+		if part, ok := translated[0].(map[string]any); ok && part["type"] == "text" {
+			return part["text"], dropped
+		}
+	}
+	return translated, dropped
 }
 
 func translateChatResponse(body []byte, publicAlias string) ([]byte, int64, int64, error) {

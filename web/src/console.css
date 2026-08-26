@@ -1,39 +1,18 @@
-/* Rotakey's routing-specific developer console. Loaded after the base system. */
-
-:root {
-  --console-canvas: #f3f5f7;
-  --console-panel: #fff;
-  --console-code: #0f181f;
-  --console-line: #d7dde2;
-  --console-line-strong: #b9c3ca;
-}
-
-:root[data-theme="dark"] {
-  --console-canvas: #0e1419;
-  --console-panel: #151d24;
-  --console-code: #e9f0f3;
-  --console-line: #29343d;
-  --console-line-strong: #40505b;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root[data-theme="system"] {
-    --console-canvas: #0e1419;
-    --console-panel: #151d24;
-    --console-code: #e9f0f3;
-    --console-line: #29343d;
-    --console-line-strong: #40505b;
-  }
-}
+/* Rotakey's routing-specific developer console. Loaded after the base system.
+ *
+ * Every colour, length, and size here resolves to a token from tokens.css. The
+ * console used to carry a private palette of its own, so a theme change had to
+ * be made in two places and the two copies drifted apart; now there is one.
+ */
 
 .sidebar {
   width: 214px;
-  padding: 18px 10px 11px;
-  border-right-color: #26323b;
+  padding: var(--space-6) var(--space-4) var(--space-5);
+  border-right-color: var(--rail-edge);
 }
 
 .wordmark {
-  padding: 2px 8px 22px;
+  padding: var(--space-1) var(--space-4) var(--space-7);
 }
 
 .wordmark__mark,
@@ -45,75 +24,75 @@
 .auth-panel,
 .sheet,
 .toast {
-  border-radius: 4px;
+  border-radius: var(--radius-fitting);
 }
 
 .nav-item {
-  min-height: 38px;
-  gap: 10px;
-  padding: 0 10px;
-  font-size: 0.78rem;
+  min-height: 40px;
+  gap: var(--space-5);
+  padding: 0 var(--space-4);
+  font-size: var(--text-sm);
 }
 
+/* The rail keeps its own dark surfaces in both themes, and the active item is
+   marked with the one interactive hue rather than a second accent. */
 .nav-item.is-active {
-  background: #17242c;
-  border-color: #344752;
-  box-shadow: inset 2px 0 #54aabb;
+  background: var(--rail-raised);
+  border-color: var(--rail-edge);
+  box-shadow: inset 2px 0 var(--iris);
 }
 
 .workspace {
   margin-left: 214px;
-  background: var(--console-canvas);
+  background: var(--surface-canvas);
 }
 
 .main-pane {
   width: min(100%, 1600px);
-  padding: 34px clamp(22px, 3vw, 48px) 72px;
+  padding: var(--space-9) clamp(var(--space-8), 3vw, var(--space-11)) var(--space-12);
 }
 
 .page-header {
-  margin-bottom: 26px;
+  margin-bottom: var(--space-8);
 }
 
 .page-header h1,
 .console-panel h2,
 .overview-inspector h2 {
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-family: var(--font-display);
   font-weight: 500;
 }
 
 .page-header h1 {
-  font-size: clamp(1.65rem, 2.3vw, 2.25rem);
-  letter-spacing: -0.045em;
+  font-size: clamp(var(--text-xl), 2.3vw, var(--text-2xl));
+  letter-spacing: var(--track-display);
 }
 
+/* These containers are all "one bordered slab of rows", so they share the panel
+   hairline, the panel radius, and the lightest elevation in the system. */
 .resource-layout,
-.model-table,
-.log-table,
 .access-key-panel,
 .settings-list,
 .security-baseline {
-  border-color: var(--console-line);
-  border-radius: 4px;
-  box-shadow: 0 1px 0 rgb(10 18 24 / 0.03);
+  border-color: var(--edge);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--lift-panel);
 }
 
 .resource-item.is-selected {
-  background: color-mix(in srgb, var(--blue) 11%, var(--surface));
-  box-shadow: inset 2px 0 var(--blue);
+  background: color-mix(in srgb, var(--iris) 11%, var(--surface-raised));
+  box-shadow: inset 2px 0 var(--iris);
 }
 
 .dense-row,
-.table-row,
 .settings-row,
 .resource-item {
-  border-color: var(--console-line);
+  border-color: var(--edge);
 }
 
 .ops-console {
   min-width: 0;
-  overflow-x: clip;
-  color: var(--ink);
+  color: var(--text-strong);
 }
 
 .ops-commandbar {
@@ -121,11 +100,11 @@
   min-height: 58px;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  color: var(--console-code);
-  background: var(--console-panel);
-  border: 1px solid var(--console-line);
-  border-radius: 4px 4px 0 0;
+  gap: var(--space-6);
+  color: var(--text-strong);
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-panel) var(--radius-panel) 0 0;
 }
 
 .ops-commandbar__identity,
@@ -137,8 +116,8 @@
 
 .ops-commandbar__identity {
   flex: 1;
-  gap: 11px;
-  padding: 9px 14px;
+  gap: var(--space-5);
+  padding: var(--space-4) var(--space-5);
 }
 
 .ops-commandbar__identity > span:nth-child(2) {
@@ -151,16 +130,18 @@
 }
 
 .ops-commandbar__identity small {
-  margin-bottom: 3px;
-  color: var(--muted);
-  font-size: 0.61rem;
-  letter-spacing: 0.04em;
+  margin-bottom: var(--space-1);
+  color: var(--text-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
 }
 
 .ops-commandbar__identity code {
   overflow: hidden;
-  font-size: 0.75rem;
+  font-family: var(--font-data);
+  font-size: var(--text-mini);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -169,14 +150,14 @@
   width: 8px;
   height: 8px;
   flex: 0 0 auto;
-  background: var(--green);
-  border-radius: 50%;
-  box-shadow: 0 0 0 3px var(--green-soft);
+  background: var(--live);
+  border-radius: var(--radius-pill);
+  box-shadow: 0 0 0 3px var(--live-wash);
 }
 
 .gateway-pulse.is-warning {
-  background: var(--amber);
-  box-shadow: 0 0 0 3px var(--amber-soft);
+  background: var(--hold);
+  box-shadow: 0 0 0 3px var(--hold-wash);
 }
 
 .console-icon {
@@ -185,66 +166,70 @@
   height: 30px;
   flex: 0 0 auto;
   place-items: center;
-  color: var(--muted);
+  color: var(--text-muted);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 3px;
+  border-radius: var(--radius-fitting);
   cursor: pointer;
+  transition: color var(--dur-state) var(--ease), background var(--dur-state) var(--ease),
+    border-color var(--dur-state) var(--ease);
 }
 
 .console-icon:hover {
-  color: var(--ink);
-  background: var(--surface-2);
-  border-color: var(--console-line);
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+  border-color: var(--edge);
 }
 
 .copy-base-url {
   display: inline-flex;
   width: auto;
-  gap: 6px;
-  padding: 0 8px;
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.56rem;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
 }
 
 .ops-commandbar__actions {
   align-self: stretch;
-  border-left: 1px solid var(--console-line);
+  border-left: 1px solid var(--edge);
 }
 
 .range-switcher {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 0 9px;
+  gap: var(--space-1);
+  padding: 0 var(--space-4);
 }
 
 .range-switcher button,
 .console-refresh {
   min-height: 30px;
-  color: var(--muted);
+  color: var(--text-muted);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 3px;
+  border-radius: var(--radius-fitting);
   cursor: pointer;
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.65rem;
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
+  transition: color var(--dur-state) var(--ease), background var(--dur-state) var(--ease),
+    border-color var(--dur-state) var(--ease);
 }
 
 .range-switcher button {
   min-width: 36px;
-  padding: 4px 7px;
+  padding: var(--space-2) var(--space-3);
 }
 
 .range-switcher button:hover,
 .range-switcher button.is-active {
-  color: var(--ink);
-  background: var(--surface-2);
-  border-color: var(--console-line);
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+  border-color: var(--edge);
 }
 
 .range-switcher button.is-active {
-  color: var(--blue);
+  color: var(--iris);
 }
 
 .console-refresh {
@@ -252,15 +237,15 @@
   height: 100%;
   min-height: 56px;
   align-items: center;
-  gap: 7px;
-  padding: 0 14px;
-  border-left-color: var(--console-line);
+  gap: var(--space-3);
+  padding: 0 var(--space-5);
+  border-left-color: var(--edge);
   border-radius: 0;
 }
 
 .console-refresh:hover {
-  color: var(--ink);
-  background: var(--surface-2);
+  color: var(--text-strong);
+  background: var(--surface-sunken);
 }
 
 .console-refresh.is-refreshing svg {
@@ -274,85 +259,98 @@
 .status-ledger {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  background: var(--console-panel);
-  border-right: 1px solid var(--console-line);
-  border-bottom: 1px solid var(--console-line);
-  border-left: 1px solid var(--console-line);
+  background: var(--surface-raised);
+  border-right: 1px solid var(--edge);
+  border-bottom: 1px solid var(--edge);
+  border-left: 1px solid var(--edge);
 }
 
 /* The balance cell only exists when some API key tracks credit, so the column
    count follows the cells that are actually rendered. */
+/* Eight metrics rather than seven when some key tracks a balance, and the balance
+   cell is the widest of them — "$12.40 / $50.00" — so the row needs the explicit
+   zero minimum or the last column pushes the ledger past the page edge. */
 .status-ledger--credit {
   grid-template-columns: repeat(8, minmax(0, 1fr));
 }
 
 .ledger-metric {
   min-width: 0;
-  padding: 11px 13px 12px;
-  border-right: 1px solid var(--console-line);
+  padding: var(--space-5) var(--space-5);
+  border-right: 1px solid var(--edge);
 }
 
 .ledger-metric:last-child {
   border-right: 0;
 }
 
+/* Nothing in this cell may be clipped: the row carries no title attribute, so an
+   ellipsis here would be the only place a figure exists and the operator would
+   have no way to read the rest of it. Both the label and the value wrap instead,
+   and the grid equalises the row height around whichever cell needs two lines. */
 .ledger-metric span,
 .ledger-metric strong {
   display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .ledger-metric span {
-  margin-bottom: 5px;
-  color: var(--muted);
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.56rem;
-  letter-spacing: 0.06em;
+  margin-bottom: var(--space-2);
+  color: var(--text-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
 }
 
 .ledger-metric strong {
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.82rem;
+  font-family: var(--font-data);
+  font-size: var(--text-base);
   font-weight: 500;
 }
 
-.ledger-metric--healthy { box-shadow: inset 0 -2px var(--green); }
-.ledger-metric--warning { box-shadow: inset 0 -2px var(--amber); }
-.ledger-metric--danger { box-shadow: inset 0 -2px var(--red); }
+/* The state hue sits in a bottom accent bar rather than tinting the cell, so
+   seven metrics side by side stay readable. */
+.ledger-metric--healthy { box-shadow: inset 0 -2px var(--live); }
+.ledger-metric--warning { box-shadow: inset 0 -2px var(--hold); }
+.ledger-metric--danger { box-shadow: inset 0 -2px var(--fault); }
 
 .ops-console__workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-items: start;
-  gap: 14px;
-  margin-top: 14px;
+  gap: var(--space-6);
+  margin-top: var(--space-6);
 }
 
 .ops-console__workspace.has-inspector {
   grid-template-columns: minmax(0, 1fr) 340px;
 }
 
+/* The horizontal clip that contains the wide capacity and route grids belongs on
+   the content column rather than on .ops-console. Every grid that can overrun is
+   inside here, whereas .overview-inspector is a sibling of this element — and that
+   inspector is sticky above 1050px and fixed below it, so a clip on their shared
+   ancestor risked cutting the drawer out of the page. */
 .ops-console__main {
   display: grid;
   min-width: 0;
-  gap: 14px;
+  gap: var(--space-6);
+  overflow-x: clip;
 }
 
 .signal-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.75fr) minmax(260px, 0.8fr);
-  gap: 14px;
+  gap: var(--space-6);
 }
 
 .console-panel,
 .overview-inspector {
   min-width: 0;
-  background: var(--console-panel);
-  border: 1px solid var(--console-line);
-  border-radius: 4px;
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-panel);
 }
 
 .console-panel__header,
@@ -361,19 +359,19 @@
   min-height: 54px;
   align-items: center;
   justify-content: space-between;
-  gap: 15px;
-  padding: 9px 13px;
-  border-bottom: 1px solid var(--console-line);
+  gap: var(--space-6);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--edge);
 }
 
 .console-panel__header span,
 .overview-inspector > header span {
   display: block;
-  margin-bottom: 2px;
-  color: var(--blue);
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.54rem;
-  letter-spacing: 0.08em;
+  margin-bottom: var(--space-1);
+  color: var(--iris);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
 }
 
@@ -381,7 +379,7 @@
 .overview-inspector > header h2 {
   margin: 0;
   overflow: hidden;
-  font-size: 0.82rem;
+  font-size: var(--text-base);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -389,15 +387,15 @@
 .console-panel__header > small {
   min-width: 0;
   overflow: hidden;
-  color: var(--muted);
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.58rem;
+  color: var(--text-muted);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .signal-chart {
-  padding: 8px 12px 10px;
+  padding: var(--space-4) var(--space-5) var(--space-5);
 }
 
 .signal-chart svg {
@@ -408,39 +406,39 @@
 }
 
 .signal-gridlines line {
-  stroke: var(--console-line);
+  stroke: var(--edge);
   stroke-width: 1;
   stroke-dasharray: 2 6;
 }
 
 .signal-axis-labels text {
-  fill: var(--muted);
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 9px;
+  fill: var(--text-muted);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
 }
 
-.model-ranking__table { padding: 0 13px; }
+.model-ranking__table { padding: 0 var(--space-5); }
 .model-ranking__head, .model-ranking__row {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) 92px 92px 104px;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-5);
 }
 .model-ranking__head {
   min-height: 31px;
-  color: var(--muted);
-  border-bottom: 1px solid var(--console-line);
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: .54rem;
-  letter-spacing: .06em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--edge);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
 }
-.model-ranking__row { min-height: 39px; border-bottom: 1px solid color-mix(in srgb, var(--console-line) 72%, transparent); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: .69rem; }
+.model-ranking__row { min-height: 39px; border-bottom: 1px solid color-mix(in srgb, var(--edge) 72%, transparent); font-family: var(--font-data); font-size: var(--text-mini); }
 .model-ranking__row:last-child { border-bottom: 0; }
 .model-ranking__row > span, .model-ranking__head > span:not(:first-child) { text-align: right; }
-.model-ranking__row strong { display: flex; min-width: 0; align-items: center; gap: 9px; font-weight: 500; }
+.model-ranking__row strong { display: flex; min-width: 0; align-items: center; gap: var(--space-4); font-weight: 500; }
 .model-ranking__row code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-ranking__row i { display: grid; width: 18px; height: 18px; flex: 0 0 auto; place-items: center; border: 1px solid var(--console-line); color: var(--blue); font-size: .58rem; font-style: normal; }
+.model-ranking__row i { display: grid; width: 18px; height: 18px; flex: 0 0 auto; place-items: center; border: 1px solid var(--edge); color: var(--iris); font-size: var(--text-micro); font-style: normal; }
 
 .signal-path {
   fill: none;
@@ -449,48 +447,50 @@
   vector-effect: non-scaling-stroke;
 }
 
+/* Request volume is the thing an operator acts on, so it gets the interactive
+   hue and the heaviest stroke; latency and errors read as state behind it. */
 .signal-path--requests {
-  stroke: var(--blue);
+  stroke: var(--iris);
   stroke-width: 2;
 }
 
 .signal-path--latency {
-  stroke: var(--amber);
+  stroke: var(--hold);
   stroke-width: 1.4;
   stroke-dasharray: 4 4;
   opacity: 0.85;
 }
 
 .signal-error-tick {
-  stroke: var(--red);
+  stroke: var(--fault);
   stroke-width: 2;
   vector-effect: non-scaling-stroke;
 }
 
 .signal-legend {
   display: flex;
-  gap: 17px;
-  padding: 2px 3px 0;
-  color: var(--muted);
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.56rem;
+  gap: var(--space-7);
+  padding: var(--space-1) var(--space-1) 0;
+  color: var(--text-muted);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
 }
 
 .signal-legend span {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
 }
 
 .signal-legend i {
   display: inline-block;
   width: 14px;
   height: 2px;
-  background: var(--blue);
+  background: var(--iris);
 }
 
-.signal-legend .is-latency { background: var(--amber); }
-.signal-legend .is-error { background: var(--red); }
+.signal-legend .is-latency { background: var(--hold); }
+.signal-legend .is-error { background: var(--fault); }
 
 .attention-list {
   display: grid;
@@ -504,20 +504,21 @@
   min-height: 54px;
   grid-template-columns: 15px minmax(0, 1fr) 14px;
   align-items: center;
-  gap: 9px;
-  padding: 8px 11px;
-  color: var(--ink);
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  color: var(--text-strong);
   background: transparent;
   border: 0;
-  border-bottom: 1px solid var(--console-line);
+  border-bottom: 1px solid var(--edge);
   cursor: pointer;
   text-align: left;
+  transition: background var(--dur-state) var(--ease);
 }
 
 .attention-item:last-child { border-bottom: 0; }
-.attention-item:hover { background: var(--surface-2); }
-.attention-item > svg:first-child { color: var(--amber); }
-.attention-item--critical > svg:first-child { color: var(--red); }
+.attention-item:hover { background: var(--surface-sunken); }
+.attention-item > svg:first-child { color: var(--hold); }
+.attention-item--critical > svg:first-child { color: var(--fault); }
 
 .attention-item strong,
 .attention-item small {
@@ -528,14 +529,14 @@
 }
 
 .attention-item strong {
-  font-size: 0.68rem;
+  font-size: var(--text-sm);
   font-weight: 600;
 }
 
 .attention-item small {
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: 0.58rem;
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
 }
 
 .all-clear {
@@ -543,21 +544,21 @@
   min-height: 160px;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  color: var(--green);
+  gap: var(--space-5);
+  color: var(--live);
 }
 
 .all-clear strong,
 .all-clear small { display: block; }
-.all-clear strong { font-size: 0.74rem; }
+.all-clear strong { font-size: var(--text-base); }
 .all-clear small {
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: 0.61rem;
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
 }
 
 .provider-debug-group {
-  border-bottom: 1px solid var(--console-line-strong);
+  border-bottom: 1px solid var(--edge-strong);
 }
 
 .provider-debug-group:last-child { border-bottom: 0; }
@@ -565,18 +566,19 @@
 .provider-debug-head {
   display: grid;
   width: 100%;
+  min-width: 0;
   min-height: 64px;
-  grid-template-columns: minmax(230px, 0.85fr) minmax(460px, 1.65fr) auto;
+  grid-template-columns: minmax(230px, 0.85fr) minmax(0, 1.65fr) auto;
   align-items: center;
-  gap: 12px;
-  padding: 8px 10px 8px 0;
-  color: var(--ink);
-  background: color-mix(in srgb, var(--surface-2) 78%, var(--surface));
-  border-bottom: 1px solid var(--console-line);
+  gap: var(--space-5);
+  padding: var(--space-4) var(--space-5) var(--space-4) 0;
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--surface-sunken) 78%, var(--surface-raised));
+  border-bottom: 1px solid var(--edge);
 }
 
 .provider-debug-head.is-selected {
-  background: color-mix(in srgb, var(--blue) 10%, var(--surface));
+  background: color-mix(in srgb, var(--iris) 10%, var(--surface-raised));
 }
 
 .provider-debug-toggle {
@@ -585,21 +587,22 @@
   min-height: 46px;
   grid-template-columns: 18px 9px minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
-  padding: 5px 11px;
-  color: var(--ink);
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-5);
+  color: var(--text-strong);
   background: transparent;
   border: 0;
   cursor: pointer;
   text-align: left;
+  transition: color var(--dur-state) var(--ease);
 }
 
-.provider-debug-toggle:hover { color: var(--blue); }
+.provider-debug-toggle:hover { color: var(--iris); }
 
 .provider-debug-toggle > svg {
-  color: var(--muted);
+  color: var(--text-muted);
   transform: rotate(-90deg);
-  transition: transform 140ms ease;
+  transition: transform var(--dur-state) var(--ease);
 }
 
 .provider-debug-group.is-expanded .provider-debug-toggle > svg { transform: rotate(0); }
@@ -615,115 +618,122 @@
 }
 
 .provider-debug-toggle strong {
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.75rem;
+  font-family: var(--font-data);
+  font-size: var(--text-mini);
   font-weight: 500;
 }
 
 .provider-debug-toggle small {
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: 0.57rem;
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
 }
 
 .provider-inspect {
   min-height: 30px;
-  padding: 0 9px;
-  color: var(--muted);
+  padding: 0 var(--space-4);
+  color: var(--text-muted);
   background: transparent;
-  border: 1px solid var(--console-line);
-  border-radius: 2px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-fitting);
   cursor: pointer;
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.54rem;
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
+  transition: color var(--dur-state) var(--ease), border-color var(--dur-state) var(--ease);
 }
 
 .provider-inspect:hover {
-  color: var(--blue);
-  border-color: var(--blue);
+  color: var(--iris);
+  border-color: var(--iris);
 }
 
 .protocol-badge {
   display: inline-flex;
-  margin-left: 7px;
-  padding: 1px 5px;
-  border: 1px solid var(--console-line-strong);
-  border-radius: 2px;
-  color: var(--muted);
-  font: 500 9px/1.35 "IBM Plex Mono", monospace;
-  letter-spacing: .07em;
+  margin-left: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--radius-fitting);
+  color: var(--text-muted);
+  font: 500 var(--text-micro) / var(--leading-snug) var(--font-label);
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
   vertical-align: 1px;
 }
 
+/* Anthropic-protocol providers translate rather than pass through, so they are
+   marked with the warning hue: it is a caveat, not a fault. */
 .protocol-badge.is-anthropic {
-  border-color: color-mix(in srgb, var(--amber) 55%, var(--console-line));
-  color: var(--amber);
+  border-color: color-mix(in srgb, var(--hold) 55%, var(--edge));
+  color: var(--hold);
 }
 
 .manual-model-entry {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
+  gap: var(--space-5);
   align-items: end;
-  padding: 12px;
-  border-bottom: 1px solid var(--console-line);
-  background: color-mix(in srgb, var(--console-panel) 72%, var(--console-canvas));
+  padding: var(--space-5);
+  border-bottom: 1px solid var(--edge);
+  background: color-mix(in srgb, var(--surface-raised) 72%, var(--surface-canvas));
 }
 
 .manual-model-entry .field { margin: 0; }
-
-@media (max-width: 560px) {
-  .manual-model-entry { grid-template-columns: 1fr; }
-  .manual-model-entry .button { width: 100%; }
-}
 
 .limit-preview,
 .inspector-limit-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(55px, 1fr));
   min-width: 0;
-  border: 1px solid var(--console-line);
+  border: 1px solid var(--edge);
 }
 
 .limit-cell {
   min-width: 0;
-  padding: 6px 7px;
-  border-right: 1px solid var(--console-line);
-  box-shadow: inset 0 -2px var(--green);
+  padding: var(--space-3) var(--space-3);
+  border-right: 1px solid var(--edge);
+  box-shadow: inset 0 -2px var(--live);
 }
 
 .limit-cell:last-child { border-right: 0; }
-.limit-cell--warning { box-shadow: inset 0 -2px var(--amber); }
-.limit-cell--critical { box-shadow: inset 0 -2px var(--red); }
-.limit-cell--unknown { box-shadow: inset 0 -2px var(--muted); }
+.limit-cell--warning { box-shadow: inset 0 -2px var(--hold); }
+.limit-cell--critical { box-shadow: inset 0 -2px var(--fault); }
+/* An unmeasured limit is inactive rather than healthy, so it takes the idle hue
+   instead of borrowing the muted text colour. */
+.limit-cell--unknown { box-shadow: inset 0 -2px var(--idle); }
 
 .limit-cell small,
 .limit-cell strong {
   display: block;
   overflow: hidden;
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-family: var(--font-data);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .limit-cell small {
-  color: var(--muted);
-  font-size: 0.48rem;
+  color: var(--text-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
 }
 
 .limit-cell strong {
-  margin-top: 2px;
-  font-size: 0.59rem;
+  margin-top: var(--space-1);
+  font-size: var(--text-micro);
   font-weight: 500;
 }
 
+/* This is the one element in the console that is allowed to scroll sideways: six
+   route columns do not fit a narrow pane, and the alternative is dropping the
+   traffic and bottleneck figures. The inline containment stops that scroll from
+   chaining out to the page once the row hits its end. */
 .route-debug-list {
   max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
   overscroll-behavior-inline: contain;
-  background: var(--console-panel);
+  background: var(--surface-raised);
 }
 
 .route-debug-columns,
@@ -732,40 +742,41 @@
   min-width: 720px;
   grid-template-columns: minmax(260px, 1.6fr) minmax(100px, 0.55fr) 72px 80px minmax(112px, 0.6fr) 14px;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-5);
 }
 
 .route-debug-columns {
   min-height: 30px;
-  padding: 0 12px;
-  color: var(--muted);
-  background: color-mix(in srgb, var(--console-panel) 82%, var(--surface-2));
-  border-bottom: 1px solid var(--console-line);
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.48rem;
-  letter-spacing: 0.05em;
+  padding: 0 var(--space-5);
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--surface-raised) 82%, var(--surface-sunken));
+  border-bottom: 1px solid var(--edge);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
 }
 
 .route-debug-row {
   width: 100%;
   min-height: 52px;
-  padding: 7px 12px;
-  color: var(--ink);
+  padding: var(--space-3) var(--space-5);
+  color: var(--text-strong);
   background: transparent;
   border: 0;
-  border-bottom: 1px solid var(--console-line);
+  border-bottom: 1px solid var(--edge);
   cursor: pointer;
   text-align: left;
+  transition: background var(--dur-state) var(--ease);
 }
 
 .route-debug-row:last-child { border-bottom: 0; }
 
-.route-debug-row:hover { background: var(--surface-2); }
+.route-debug-row:hover { background: var(--surface-sunken); }
 
 .route-debug-row.is-selected {
-  background: color-mix(in srgb, var(--blue) 7%, var(--surface));
-  box-shadow: inset 2px 0 var(--blue);
+  background: color-mix(in srgb, var(--iris) 7%, var(--surface-raised));
+  box-shadow: inset 2px 0 var(--iris);
 }
 
 .route-debug-row__identity {
@@ -773,7 +784,7 @@
   min-width: 0;
   grid-template-columns: 9px minmax(0, 1fr);
   align-items: center;
-  gap: 9px;
+  gap: var(--space-4);
 }
 
 .route-debug-row__identity span,
@@ -787,14 +798,15 @@
 }
 
 .route-debug-row__identity code {
-  font-size: 0.63rem;
+  font-family: var(--font-data);
+  font-size: var(--text-mini);
   font-weight: 500;
 }
 
 .route-debug-row__identity small {
-  margin-top: 2px;
-  color: var(--muted);
-  font-size: 0.51rem;
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
 }
 
 .route-traffic,
@@ -822,8 +834,8 @@
 .route-key-count strong,
 .route-next-key strong,
 .route-bottleneck strong {
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.59rem;
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
   font-weight: 500;
 }
 
@@ -831,21 +843,21 @@
 .route-key-count small,
 .route-next-key small,
 .route-bottleneck small {
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: 0.49rem;
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
 }
 
 .provider-model-empty {
   margin: 0;
-  padding: 18px 14px;
-  color: var(--muted);
-  font-size: 0.65rem;
+  padding: var(--space-7) var(--space-5);
+  color: var(--text-muted);
+  font-size: var(--text-mini);
 }
 
 .overview-inspector {
   position: sticky;
-  top: 14px;
+  top: var(--space-6);
   overflow: hidden;
 }
 
@@ -854,22 +866,22 @@
   min-height: 310px;
   place-items: center;
   align-content: center;
-  padding: 34px;
-  color: var(--muted);
+  padding: var(--space-9);
+  color: var(--text-muted);
   text-align: center;
 }
 
 .overview-inspector.is-empty strong {
-  margin-top: 14px;
-  color: var(--ink);
-  font-size: 0.8rem;
+  margin-top: var(--space-6);
+  color: var(--text-strong);
+  font-size: var(--text-base);
 }
 
 .overview-inspector.is-empty p {
   max-width: 240px;
-  margin: 7px 0 0;
-  font-size: 0.67rem;
-  line-height: 1.5;
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-mini);
+  line-height: var(--leading-normal);
 }
 
 .inspector-close { display: none; }
@@ -878,60 +890,62 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  gap: 5px;
-  padding: 12px;
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--console-line);
+  gap: var(--space-2);
+  padding: var(--space-5);
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--edge);
 }
 
 .route-trace > svg {
   justify-self: center;
-  color: var(--muted);
+  color: var(--text-muted);
   transform: rotate(90deg);
 }
 
 .trace-node {
   min-width: 0;
-  padding: 7px 8px;
-  background: var(--surface);
-  border: 1px solid var(--console-line);
-  border-top: 2px solid var(--blue);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+  border-top: 2px solid var(--iris);
 }
 
-.trace-node--danger { border-top-color: var(--red); }
+.trace-node--danger { border-top-color: var(--fault); }
 
 .trace-node small,
 .trace-node strong {
   display: block;
   overflow: hidden;
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-family: var(--font-data);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .trace-node small {
-  color: var(--muted);
-  font-size: 0.46rem;
+  color: var(--text-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
 }
 
 .trace-node strong {
-  margin-top: 3px;
-  font-size: 0.53rem;
+  margin-top: var(--space-1);
+  font-size: var(--text-micro);
   font-weight: 500;
 }
 
 .inspector-definition {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  border-bottom: 1px solid var(--console-line);
+  border-bottom: 1px solid var(--edge);
 }
 
 .inspector-definition > div {
   min-width: 0;
-  padding: 10px 11px;
-  border-right: 1px solid var(--console-line);
-  border-bottom: 1px solid var(--console-line);
+  padding: var(--space-5) var(--space-5);
+  border-right: 1px solid var(--edge);
+  border-bottom: 1px solid var(--edge);
 }
 
 .inspector-definition > div:nth-child(even) { border-right: 0; }
@@ -945,86 +959,102 @@
 }
 
 .inspector-definition span {
-  color: var(--muted);
-  font-size: 0.53rem;
+  color: var(--text-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
 }
 
 .inspector-definition strong {
-  margin-top: 4px;
-  font-size: 0.66rem;
+  margin-top: var(--space-2);
+  font-size: var(--text-mini);
   font-weight: 500;
 }
 
 .inspector-definition strong.is-mono {
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.57rem;
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
 }
 
 .inspector-limit-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin: 12px;
+  margin: var(--space-5);
 }
 
 .headroom-readout {
-  margin: 11px 12px;
-  padding: 10px;
-  background: var(--surface-2);
-  border: 1px solid var(--console-line);
-  border-left: 2px solid var(--green);
+  margin: var(--space-5) var(--space-5);
+  padding: var(--space-5);
+  background: var(--surface-sunken);
+  border: 1px solid var(--edge);
+  border-left: 2px solid var(--live);
 }
 
-.headroom-readout.is-warning { border-left-color: var(--amber); }
-.headroom-readout.is-critical { border-left-color: var(--red); }
-.headroom-readout.is-unlimited { border-left-color: var(--blue); }
+.headroom-readout.is-warning { border-left-color: var(--hold); }
+.headroom-readout.is-critical { border-left-color: var(--fault); }
+/* No ceiling to report against is not a state, so the unlimited case falls back
+   to the interactive hue rather than claiming health. */
+.headroom-readout.is-unlimited { border-left-color: var(--iris); }
 
 .headroom-readout > span,
 .headroom-readout > strong,
 .headroom-readout > small { display: block; }
 
 .headroom-readout > span {
-  color: var(--muted);
-  font-size: 0.52rem;
+  color: var(--text-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
 }
 
 .headroom-readout > strong {
-  margin-top: 4px;
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.64rem;
+  margin-top: var(--space-2);
+  font-family: var(--font-data);
+  font-size: var(--text-mini);
   font-weight: 500;
 }
 
 .headroom-readout > div {
   height: 3px;
-  margin-top: 8px;
+  margin-top: var(--space-4);
   overflow: hidden;
-  background: var(--console-line);
+  background: var(--edge);
 }
 
 .headroom-readout > div i {
   display: block;
   height: 100%;
-  background: var(--green);
+  background: var(--live);
 }
 
-.headroom-readout.is-warning > div i { background: var(--amber); }
-.headroom-readout.is-critical > div i { background: var(--red); }
+.headroom-readout.is-warning > div i { background: var(--hold); }
+.headroom-readout.is-critical > div i { background: var(--fault); }
 
 .headroom-readout > small {
-  margin-top: 6px;
-  color: var(--muted);
-  font-size: 0.54rem;
+  margin-top: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
 }
 
-.inspector-key-list { border-top: 1px solid var(--console-line); }
+.inspector-note {
+  margin: 0;
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--edge);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  line-height: 1.55;
+}
+
+.inspector-key-list { border-top: 1px solid var(--edge); }
 
 .inspector-key-list > span {
   display: block;
-  padding: 9px 11px;
-  color: var(--muted);
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.5rem;
+  padding: var(--space-4) var(--space-5);
+  color: var(--text-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
 }
 
@@ -1034,31 +1064,32 @@
   min-height: 40px;
   grid-template-columns: 8px minmax(0, 1fr) auto 13px;
   align-items: center;
-  gap: 8px;
-  padding: 7px 11px;
-  color: var(--ink);
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-5);
+  color: var(--text-strong);
   background: transparent;
   border: 0;
-  border-top: 1px solid var(--console-line);
+  border-top: 1px solid var(--edge);
   cursor: pointer;
   text-align: left;
+  transition: background var(--dur-state) var(--ease);
 }
 
-.inspector-key-list button:hover { background: var(--surface-2); }
-.inspector-key-list strong { font-size: 0.65rem; }
-.inspector-key-list small { color: var(--muted); font-size: 0.53rem; }
+.inspector-key-list button:hover { background: var(--surface-sunken); }
+.inspector-key-list strong { font-size: var(--text-mini); }
+.inspector-key-list small { color: var(--text-muted); font-size: var(--text-micro); }
 
 .inspector-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
-  padding: 12px;
-  border-top: 1px solid var(--console-line);
+  gap: var(--space-3);
+  padding: var(--space-5);
+  border-top: 1px solid var(--edge);
 }
 
 .inspector-actions .button {
-  min-height: 32px;
-  font-size: 0.67rem;
+  min-height: 40px;
+  font-size: var(--text-mini);
 }
 
 .failure-list { display: grid; }
@@ -1069,28 +1100,29 @@
   min-height: 50px;
   grid-template-columns: 43px minmax(160px, 1.25fr) minmax(110px, 0.75fr) 72px 14px;
   align-items: center;
-  gap: 11px;
-  padding: 7px 11px;
-  color: var(--ink);
+  gap: var(--space-5);
+  padding: var(--space-3) var(--space-5);
+  color: var(--text-strong);
   background: transparent;
   border: 0;
-  border-bottom: 1px solid var(--console-line);
+  border-bottom: 1px solid var(--edge);
   cursor: pointer;
   text-align: left;
+  transition: background var(--dur-state) var(--ease);
 }
 
 .failure-list button:last-child { border-bottom: 0; }
-.failure-list button:hover { background: var(--surface-2); }
+.failure-list button:hover { background: var(--surface-sunken); }
 
 .failure-code {
   display: inline-grid;
   min-height: 24px;
   place-items: center;
-  color: var(--red);
-  background: var(--red-soft);
-  border: 1px solid color-mix(in srgb, var(--red) 28%, var(--console-line));
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.58rem;
+  color: var(--fault);
+  background: var(--fault-wash);
+  border: 1px solid color-mix(in srgb, var(--fault) 28%, var(--edge));
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
 }
 
 .failure-list code,
@@ -1103,97 +1135,105 @@
 }
 
 .failure-list code,
-.failure-list strong { font-size: 0.62rem; }
+.failure-list strong { font-size: var(--text-mini); }
 
 .failure-list small,
 .failure-list time {
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: 0.53rem;
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
 }
 
 .console-empty {
   min-height: 82px;
   margin: 0;
-  padding: 28px 13px;
-  color: var(--muted);
-  font-size: 0.68rem;
+  padding: var(--space-8) var(--space-5);
+  color: var(--text-muted);
+  font-size: var(--text-mini);
 }
 
+/* The list pane's 500px floor plus the inspector's 300px is more than a 900px
+   viewport can give them, and neither this frame nor .ops-console scrolls
+   horizontally, so the floors are what would drag the page sideways. Both columns
+   get a zero minimum and the cells inside truncate. */
 .ide-resource-workbench {
   display: grid;
   min-height: 650px;
-  grid-template-columns: minmax(500px, 1.5fr) minmax(300px, 0.72fr);
-  background: var(--console-panel);
-  border: 1px solid var(--console-line);
-  border-radius: 4px;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 0.72fr);
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-panel);
 }
 
 .ide-resource-list {
   min-width: 0;
-  border-right: 1px solid var(--console-line);
+  border-right: 1px solid var(--edge);
 }
 
 .ide-filter {
   display: flex;
   min-height: 48px;
   align-items: center;
-  gap: 9px;
-  padding: 7px 11px;
-  color: var(--muted);
-  border-bottom: 1px solid var(--console-line);
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-5);
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--edge);
 }
 
 .ide-filter input {
   width: 100%;
-  min-height: 31px;
-  color: var(--ink);
-  background: var(--surface-2);
-  border: 1px solid var(--console-line);
-  border-radius: 3px;
-  padding: 5px 9px;
-  font-size: 0.68rem;
+  min-height: 40px;
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-fitting);
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-mini);
 }
 
+/* The row grid's own columns also take zero minimums. .resource-page clips its
+   overflow so the panes can scroll independently, which means a row wider than its
+   column is not scrolled to — it is cut off. Each cell truncates instead. */
 .ide-resource-list > header,
 .ide-resource-list > div > button {
   display: grid;
-  grid-template-columns: minmax(240px, 1.5fr) minmax(100px, 0.65fr) 54px 13px;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 0.65fr) 54px 13px;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-5);
 }
 
 .ide-resource-list > header {
   min-height: 30px;
-  padding: 5px 11px;
-  color: var(--muted);
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--console-line);
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.5rem;
-  letter-spacing: 0.05em;
+  padding: var(--space-2) var(--space-5);
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--edge);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
 }
 
 .ide-resource-list > div > button {
   width: 100%;
   min-height: 58px;
-  padding: 7px 11px;
-  color: var(--ink);
+  padding: var(--space-3) var(--space-5);
+  color: var(--text-strong);
   background: transparent;
   border: 0;
-  border-bottom: 1px solid var(--console-line);
+  border-bottom: 1px solid var(--edge);
   cursor: pointer;
   text-align: left;
+  transition: background var(--dur-state) var(--ease);
 }
 
 .ide-resource-list > div > button:hover,
 .ide-resource-list > div > button.is-selected {
-  background: color-mix(in srgb, var(--blue) 8%, var(--surface));
+  background: color-mix(in srgb, var(--iris) 8%, var(--surface-raised));
 }
 
 .ide-resource-list > div > button.is-selected {
-  box-shadow: inset 2px 0 var(--blue);
+  box-shadow: inset 2px 0 var(--iris);
 }
 
 .ide-resource-list button > span:first-child {
@@ -1201,7 +1241,7 @@
   min-width: 0;
   grid-template-columns: 9px minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
 }
 
 .ide-resource-list button code,
@@ -1213,14 +1253,15 @@
 }
 
 .ide-resource-list button code {
-  font-size: 0.63rem;
+  font-family: var(--font-data);
+  font-size: var(--text-mini);
 }
 
 .ide-resource-list button small,
 .ide-resource-list button > span:nth-child(2),
 .ide-resource-list button > span:nth-child(3) {
-  color: var(--muted);
-  font-size: 0.57rem;
+  color: var(--text-muted);
+  font-size: var(--text-micro);
 }
 
 .ide-resource-inspector {
@@ -1228,40 +1269,41 @@
 }
 
 .ide-resource-inspector > header {
-  padding: 18px 15px 14px;
-  border-bottom: 1px solid var(--console-line);
+  padding: var(--space-6) var(--space-6) var(--space-5);
+  border-bottom: 1px solid var(--edge);
 }
 
 .ide-resource-inspector > header span {
-  color: var(--blue);
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.52rem;
-  letter-spacing: 0.08em;
+  color: var(--iris);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
 }
 
 .ide-resource-inspector > header h2 {
-  margin: 5px 0 7px;
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.82rem;
+  margin: var(--space-2) 0 var(--space-3);
+  font-family: var(--font-display);
+  font-size: var(--text-base);
   font-weight: 500;
 }
 
 .ide-resource-inspector > header code {
   display: block;
   overflow: hidden;
-  color: var(--muted);
-  font-size: 0.58rem;
+  color: var(--text-muted);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .ide-resource-inspector > .notice {
-  margin: 11px;
+  margin: var(--space-5);
 }
 
 .resource-disclosure {
-  border-top: 1px solid var(--console-line);
+  border-top: 1px solid var(--edge);
 }
 
 .resource-disclosure > header {
@@ -1269,19 +1311,20 @@
   min-height: 68px;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
-  padding: 8px 14px;
-  background: var(--console-panel);
+  gap: var(--space-5);
+  padding: var(--space-4) var(--space-5);
+  background: var(--surface-raised);
 }
 
 .resource-disclosure__toggle {
   display: grid;
   min-width: 0;
+  min-height: 40px;
   grid-template-columns: 18px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 9px;
+  gap: var(--space-4);
   padding: 0;
-  color: var(--ink);
+  color: var(--text-strong);
   background: transparent;
   border: 0;
   cursor: pointer;
@@ -1290,9 +1333,9 @@
 
 .resource-disclosure__toggle > svg,
 .inspector-disclosure > button > svg {
-  color: var(--muted);
+  color: var(--text-muted);
   transform: rotate(-90deg);
-  transition: transform 140ms ease;
+  transition: transform var(--dur-state) var(--ease);
 }
 
 .resource-disclosure.is-open .resource-disclosure__toggle > svg,
@@ -1305,18 +1348,18 @@
   display: block;
 }
 
-.resource-disclosure__toggle strong { font-size: 0.73rem; }
-.resource-disclosure__toggle small { margin-top: 3px; color: var(--muted); font-size: 0.6rem; }
-.resource-disclosure__toggle code { color: var(--blue); font-size: 0.58rem; white-space: nowrap; }
-.resource-disclosure__actions { display: flex; gap: 7px; }
-.resource-disclosure__body { padding: 0 14px 14px; }
-.resource-disclosure__body .dense-table { border-color: var(--console-line); }
+.resource-disclosure__toggle strong { font-size: var(--text-base); }
+.resource-disclosure__toggle small { margin-top: var(--space-1); color: var(--text-muted); font-size: var(--text-micro); }
+.resource-disclosure__toggle code { color: var(--iris); font-family: var(--font-data); font-size: var(--text-micro); white-space: nowrap; }
+.resource-disclosure__actions { display: flex; gap: var(--space-3); }
+.resource-disclosure__body { padding: 0 var(--space-5) var(--space-5); }
+.resource-disclosure__body .dense-table { border-color: var(--edge); }
 
 .ide-inspector-titlebar {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-5);
 }
 
 .ide-inspector-titlebar > div:first-child { min-width: 0; }
@@ -1334,24 +1377,24 @@
 .model-filter select,
 .log-filter select {
   width: 100%;
-  min-height: 31px;
-  padding: 5px 8px;
-  color: var(--ink);
-  background: var(--surface-2);
-  border: 1px solid var(--console-line);
-  border-radius: 3px;
-  font-size: 0.65rem;
+  min-height: 40px;
+  padding: var(--space-2) var(--space-4);
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-fitting);
+  font-size: var(--text-mini);
 }
 
 .model-sweep {
   display: grid;
   grid-template-columns: minmax(150px, 0.7fr) minmax(90px, 1fr) auto;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-5);
   min-height: 50px;
-  padding: 7px 11px;
-  background: color-mix(in srgb, var(--blue) 4%, var(--console-panel));
-  border-bottom: 1px solid var(--console-line);
+  padding: var(--space-3) var(--space-5);
+  background: color-mix(in srgb, var(--iris) 4%, var(--surface-raised));
+  border-bottom: 1px solid var(--edge);
 }
 
 .model-sweep__readout span,
@@ -1360,65 +1403,65 @@
 }
 
 .model-sweep__readout span {
-  color: var(--blue);
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.48rem;
-  letter-spacing: 0.08em;
+  color: var(--iris);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
 }
 
 .model-sweep__readout strong {
-  margin-top: 3px;
-  font-size: 0.65rem;
+  margin-top: var(--space-1);
+  font-size: var(--text-mini);
 }
 
 .model-sweep__track {
   height: 3px;
   overflow: hidden;
-  background: color-mix(in srgb, var(--muted) 18%, transparent);
+  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
 }
 
 .model-sweep__track > span {
   display: block;
   width: 0;
   height: 100%;
-  background: var(--blue);
-  transition: width 180ms linear;
+  background: var(--iris);
+  transition: width var(--dur-move) linear;
 }
 
 .model-sweep.is-running .model-sweep__track > span {
-  box-shadow: 7px 0 10px color-mix(in srgb, var(--blue) 55%, transparent);
+  box-shadow: 7px 0 10px color-mix(in srgb, var(--iris) 55%, transparent);
 }
 
 .model-limit-editor {
-  padding: 12px;
-  border-top: 1px solid var(--console-line);
+  padding: var(--space-5);
+  border-top: 1px solid var(--edge);
 }
 
 .model-limit-editor > header {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 11px;
+  gap: var(--space-5);
+  margin-bottom: var(--space-5);
 }
 
 .model-limit-editor > header span,
 .model-limit-editor > header strong { display: block; }
-.model-limit-editor > header span { color: var(--blue); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.5rem; text-transform: uppercase; }
-.model-limit-editor > header strong { margin-top: 3px; font-size: 0.7rem; }
-.model-limit-editor > header code { color: var(--muted); font-size: 0.55rem; }
-.model-limit-editor > p { margin: 8px 0; color: var(--muted); font-size: 0.58rem; line-height: 1.45; }
-.model-limit-editor .rate-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
-.model-limit-editor .field { gap: 3px; }
-.model-limit-editor .field > span { min-height: auto; font-size: 0.55rem; }
+.model-limit-editor > header span { color: var(--iris); font-family: var(--font-label); font-size: var(--text-micro); letter-spacing: var(--track-label); text-transform: uppercase; }
+.model-limit-editor > header strong { margin-top: var(--space-1); font-size: var(--text-sm); }
+.model-limit-editor > header code { color: var(--text-muted); font-family: var(--font-data); font-size: var(--text-micro); }
+.model-limit-editor > p { margin: var(--space-4) 0; color: var(--text-muted); font-size: var(--text-micro); line-height: var(--leading-snug); }
+.model-limit-editor .rate-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.model-limit-editor .field { gap: var(--space-1); }
+.model-limit-editor .field > span { min-height: auto; font-size: var(--text-micro); }
 .model-limit-editor .field input,
-.model-limit-editor .field select { min-height: 31px; }
-.model-limit-editor .button-row { margin-top: 10px; }
-.model-limit-editor .button { min-height: 33px; padding: 6px 9px; font-size: 0.63rem; }
+.model-limit-editor .field select { min-height: 40px; }
+.model-limit-editor .button-row { margin-top: var(--space-5); }
+.model-limit-editor .button { min-height: 40px; padding: var(--space-3) var(--space-4); font-size: var(--text-mini); }
 
 .inspector-disclosure {
-  border-top: 1px solid var(--console-line);
+  border-top: 1px solid var(--edge);
 }
 
 .inspector-disclosure > button {
@@ -1427,10 +1470,10 @@
   min-height: 52px;
   grid-template-columns: 17px minmax(0, 1fr);
   align-items: center;
-  gap: 7px;
-  padding: 8px 12px;
-  color: var(--ink);
-  background: var(--surface-2);
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  color: var(--text-strong);
+  background: var(--surface-sunken);
   border: 0;
   cursor: pointer;
   text-align: left;
@@ -1438,12 +1481,12 @@
 
 .inspector-disclosure > button strong,
 .inspector-disclosure > button small { display: block; }
-.inspector-disclosure > button strong { font-size: 0.65rem; }
-.inspector-disclosure > button small { margin-top: 2px; color: var(--muted); font-size: 0.53rem; }
-.inspector-disclosure__body > div { display: grid; min-height: 43px; grid-template-columns: 8px minmax(0, 1fr) auto minmax(80px, auto); align-items: center; gap: 8px; padding: 7px 11px; border-top: 1px solid var(--console-line); }
-.inspector-disclosure__body > div.has-warning { box-shadow: inset 2px 0 var(--red); }
-.inspector-disclosure__body strong { font-size: 0.63rem; }
-.inspector-disclosure__body small { color: var(--muted); font-size: 0.52rem; }
+.inspector-disclosure > button strong { font-size: var(--text-mini); }
+.inspector-disclosure > button small { margin-top: var(--space-1); color: var(--text-muted); font-size: var(--text-micro); }
+.inspector-disclosure__body > div { display: grid; min-height: 43px; grid-template-columns: 8px minmax(0, 1fr) auto minmax(80px, auto); align-items: center; gap: var(--space-4); padding: var(--space-3) var(--space-5); border-top: 1px solid var(--edge); }
+.inspector-disclosure__body > div.has-warning { box-shadow: inset 2px 0 var(--fault); }
+.inspector-disclosure__body strong { font-size: var(--text-mini); }
+.inspector-disclosure__body small { color: var(--text-muted); font-size: var(--text-micro); }
 
 .status-code {
   display: inline-flex;
@@ -1452,31 +1495,39 @@
   min-height: 22px;
   align-items: center;
   justify-content: center;
-  padding: 2px 6px;
-  border: 1px solid var(--console-line);
-  border-radius: 3px;
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.54rem;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-fitting);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
 }
 
-.status-code--healthy { color: var(--green); background: color-mix(in srgb, var(--green) 8%, transparent); }
-.status-code--warning { color: var(--amber); background: color-mix(in srgb, var(--amber) 9%, transparent); }
-.status-code--fault { color: var(--red); background: color-mix(in srgb, var(--red) 8%, transparent); }
-.status-code--running { color: var(--blue); background: color-mix(in srgb, var(--blue) 10%, transparent); }
+/* The tint is deliberately weak: the code text itself carries the state colour,
+   and a solid fill at this size would fight the rows around it. */
+.status-code--healthy { color: var(--live); background: color-mix(in srgb, var(--live) 8%, transparent); }
+.status-code--warning { color: var(--hold); background: color-mix(in srgb, var(--hold) 9%, transparent); }
+.status-code--fault { color: var(--fault); background: color-mix(in srgb, var(--fault) 8%, transparent); }
+.status-code--running { color: var(--iris); background: color-mix(in srgb, var(--iris) 10%, transparent); }
 
 .log-resource-rows > button.is-running {
-  box-shadow: inset 2px 0 var(--blue);
-  background: color-mix(in srgb, var(--blue) 4%, var(--surface));
+  box-shadow: inset 2px 0 var(--iris);
+  background: color-mix(in srgb, var(--iris) 4%, var(--surface-raised));
 }
 
 .log-disclosure .attempt-list,
 .log-disclosure .body-grid { margin: 0; }
-.log-disclosure .body-grid { padding: 10px; }
+.log-disclosure .body-grid { padding: var(--space-5); }
 
 @media (min-width: 901px) {
+  /* A workbench page is a fixed-height frame whose two panes scroll on their own,
+     so it has to know exactly how much of the viewport the shell already spends.
+     --shell-chrome carries that total from .app-shell — where the paddings and the
+     mobile header are actually declared — instead of the 106px literal that used
+     to stand in for it and had stopped matching any of them. dvh rather than vh
+     because a browser toolbar must eat into the frame, not push it off-screen. */
   .resource-page {
     display: flex;
-    height: calc(100vh - 106px);
+    height: calc(100dvh - var(--shell-chrome));
     min-height: 600px;
     flex-direction: column;
     overflow: hidden;
@@ -1493,19 +1544,20 @@
   .resource-page .ide-resource-list { display: flex; min-height: 0; flex-direction: column; overflow: hidden; }
   .resource-page .ide-resource-list > div:last-child { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
   .resource-page .resource-inspector > .inspector-header,
-  .resource-page .ide-resource-inspector > header { position: sticky; z-index: 4; top: 0; background: var(--console-panel); }
+  .resource-page .ide-resource-inspector > header { position: sticky; z-index: 4; top: 0; background: var(--surface-raised); }
 }
 
 .ide-inspector-section {
-  border-top: 1px solid var(--console-line);
+  border-top: 1px solid var(--edge);
 }
 
 .ide-inspector-section > span {
   display: block;
-  padding: 9px 11px;
-  color: var(--muted);
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.5rem;
+  padding: var(--space-4) var(--space-5);
+  color: var(--text-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
 }
 
@@ -1514,26 +1566,30 @@
   min-height: 43px;
   grid-template-columns: 8px minmax(0, 1fr) auto minmax(80px, auto);
   align-items: center;
-  gap: 8px;
-  padding: 7px 11px;
-  border-top: 1px solid var(--console-line);
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--edge);
 }
 
 .ide-inspector-section > div.has-warning {
-  box-shadow: inset 2px 0 var(--red);
+  box-shadow: inset 2px 0 var(--fault);
 }
 
 .ide-inspector-section strong {
-  font-size: 0.63rem;
+  font-size: var(--text-mini);
 }
 
 .ide-inspector-section small {
-  color: var(--muted);
-  font-size: 0.52rem;
+  color: var(--text-muted);
+  font-size: var(--text-micro);
 }
 
+/* A 560px floor on the list column is wider than the pane once the inspector takes
+   its share, and the workbench has no scroller of its own, so the floor is what
+   would push the page sideways. Both columns are allowed to shrink and the rows
+   inside them ellipsis instead. */
 .log-workbench {
-  grid-template-columns: minmax(560px, 1.45fr) minmax(320px, 0.78fr);
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 0.78fr);
 }
 
 .log-filter {
@@ -1545,20 +1601,26 @@
 
 .log-filter select {
   width: 100%;
-  min-height: 31px;
-  padding: 5px 8px;
-  color: var(--ink);
-  background: var(--surface-2);
-  border: 1px solid var(--console-line);
-  border-radius: 3px;
-  font-size: 0.67rem;
+  min-height: 40px;
+  padding: var(--space-2) var(--space-4);
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-fitting);
+  font-size: var(--text-mini);
 }
 
+/* 56px on the status column, not 48: "Status" is the longest thing that lands
+   there and it needed 52 to render, so the header label was ellipsised in its
+   own column. */
 .log-workbench .ide-resource-list > header,
 .log-workbench .log-resource-rows > button {
-  grid-template-columns: minmax(170px, 1.05fr) minmax(170px, 1.2fr) 48px 64px 13px;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.2fr) 56px 64px 13px;
 }
 
+/* The provider name and the routing stage are the two longest strings in a log
+   row, so they take the width they can get and ellipsis rather than widening the
+   pane; both carry the full text on a title. */
 .log-workbench .log-resource-rows > button > span:nth-child(2) {
   display: block;
   min-width: 0;
@@ -1576,36 +1638,36 @@
 .log-workbench .log-resource-rows > button > strong,
 .log-workbench .log-resource-rows > button > small {
   grid-column: auto;
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.56rem;
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
 }
 
 .log-resource-rows > .page-skeleton,
 .log-resource-rows > .empty-state {
-  margin: 14px;
+  margin: var(--space-6);
 }
 
 .ide-resource-inspector--empty {
   display: grid;
   place-items: center;
   align-content: center;
-  gap: 7px;
-  padding: 34px;
-  color: var(--muted);
+  gap: var(--space-3);
+  padding: var(--space-9);
+  color: var(--text-muted);
   text-align: center;
 }
 
 .ide-resource-inspector--empty strong {
-  color: var(--ink);
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.74rem;
+  color: var(--text-strong);
+  font-family: var(--font-display);
+  font-size: var(--text-base);
 }
 
 .ide-resource-inspector--empty p {
   max-width: 250px;
   margin: 0;
-  font-size: 0.65rem;
-  line-height: 1.55;
+  font-size: var(--text-mini);
+  line-height: var(--leading-normal);
 }
 
 .log-resource-inspector {
@@ -1615,16 +1677,16 @@
 .log-resource-inspector .log-detail-grid {
   margin: 0;
   border: 0;
-  border-bottom: 1px solid var(--console-line);
+  border-bottom: 1px solid var(--edge);
 }
 
 .log-resource-inspector fieldset {
-  margin: 12px;
+  margin: var(--space-5);
 }
 
 .log-resource-inspector .body-grid {
   grid-template-columns: 1fr;
-  margin: 12px;
+  margin: var(--space-5);
 }
 
 .log-resource-inspector .body-grid pre {
@@ -1632,39 +1694,41 @@
 }
 
 .log-resource-inspector > .notice {
-  margin: 12px;
+  margin: var(--space-5);
 }
 
+/* A diagnosis is a warning about the request, not a failure of the console, so
+   it carries the hold hue in an accent bar rather than the fault red. */
 .log-diagnosis {
-  border-bottom: 1px solid var(--console-line);
-  box-shadow: inset 3px 0 var(--amber);
+  border-bottom: 1px solid var(--edge);
+  box-shadow: inset 3px 0 var(--hold);
 }
 
 .log-diagnosis > header {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
   min-height: 54px;
-  padding: 9px 12px;
-  background: color-mix(in srgb, var(--amber) 7%, var(--console-panel));
+  padding: var(--space-4) var(--space-5);
+  background: color-mix(in srgb, var(--hold) 7%, var(--surface-raised));
 }
 
-.log-diagnosis > header > svg { color: var(--amber); }
+.log-diagnosis > header > svg { color: var(--hold); }
 .log-diagnosis > header span,
 .log-diagnosis > header small,
 .log-diagnosis > header strong { display: block; }
-.log-diagnosis > header small { color: var(--amber); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.5rem; text-transform: uppercase; }
-.log-diagnosis > header strong { margin-top: 2px; font-size: 0.68rem; }
-.log-diagnosis > header code { color: var(--amber); font-size: 0.55rem; }
+.log-diagnosis > header small { color: var(--hold); font-family: var(--font-label); font-size: var(--text-micro); letter-spacing: var(--track-label); text-transform: uppercase; }
+.log-diagnosis > header strong { margin-top: var(--space-1); font-size: var(--text-mini); }
+.log-diagnosis > header code { color: var(--hold); font-family: var(--font-data); font-size: var(--text-micro); }
 
 .log-diagnosis__rows > div {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) auto;
   align-items: start;
-  gap: 8px;
-  padding: 9px 12px;
-  border-top: 1px solid var(--console-line);
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--edge);
 }
 
 .log-diagnosis__marker {
@@ -1672,24 +1736,24 @@
   width: 18px;
   height: 18px;
   place-items: center;
-  color: var(--amber);
-  border: 1px solid color-mix(in srgb, var(--amber) 55%, var(--console-line));
-  border-radius: 50%;
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.5rem;
+  color: var(--hold);
+  border: 1px solid color-mix(in srgb, var(--hold) 55%, var(--edge));
+  border-radius: var(--radius-pill);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
 }
 
-.log-diagnosis__rows strong { display: block; font-size: 0.62rem; }
-.log-diagnosis__rows p { margin: 3px 0 0; color: var(--muted); font-size: 0.58rem; line-height: 1.45; }
-.log-diagnosis__rows small { color: var(--muted); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.5rem; white-space: nowrap; }
+.log-diagnosis__rows strong { display: block; font-size: var(--text-mini); }
+.log-diagnosis__rows p { margin: var(--space-1) 0 0; color: var(--text-muted); font-size: var(--text-micro); line-height: var(--leading-snug); }
+.log-diagnosis__rows small { color: var(--text-muted); font-family: var(--font-data); font-size: var(--text-micro); white-space: nowrap; }
 .log-diagnosis__rows time { color: inherit; }
 
 .log-resource-inspector .attempt-list > div > p {
   grid-column: 2 / -1;
-  margin: -3px 0 3px;
-  color: var(--muted);
-  font-size: 0.58rem;
-  line-height: 1.4;
+  margin: calc(var(--space-1) * -1) 0 var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  line-height: var(--leading-snug);
 }
 
 .access-key-panel {
@@ -1702,28 +1766,38 @@
   bottom: 0;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  margin-top: 14px;
-  padding: 10px 12px;
-  background: color-mix(in srgb, var(--console-panel) 94%, transparent);
-  border: 1px solid var(--console-line);
-  border-radius: 4px;
+  gap: var(--space-6);
+  margin-top: var(--space-6);
+  padding: var(--space-5) var(--space-5);
+  background: color-mix(in srgb, var(--surface-raised) 94%, transparent);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-panel);
   backdrop-filter: blur(10px);
 }
 
 .console-actionbar > span {
-  color: var(--muted);
-  font-size: 0.63rem;
+  color: var(--text-muted);
+  font-size: var(--text-mini);
 }
 
-@media (max-width: 1400px) {
+/* Four layout breakpoints, matching the ones styles.css uses: 1280 thins the
+ * widest inspector-plus-grid pairings, 1050 floats the overview inspector and
+ * narrows the workbenches, 900 folds every two-pane layout into one column and
+ * turns the inspectors into drawers, 650 is the phone. Orphan widths — 560 and
+ * 1400 — used to sit between these, so a rule written at one of them silently
+ * disagreed with the next one down.
+ */
+
+@media (max-width: 1280px) {
+  .ops-console__workspace.has-inspector { grid-template-columns: minmax(0, 1fr) 310px; }
+
   .ops-console__workspace.has-inspector .provider-debug-head {
     grid-template-columns: minmax(210px, 1fr) auto;
   }
 
   .ops-console__workspace.has-inspector .provider-debug-head .limit-preview {
     grid-column: 1 / -1;
-    margin-left: 11px;
+    margin-left: var(--space-5);
   }
 
   .ops-console__workspace.has-inspector .route-debug-columns,
@@ -1733,17 +1807,15 @@
   }
 }
 
-@media (max-width: 1280px) {
-  .ops-console__workspace.has-inspector { grid-template-columns: minmax(0, 1fr) 310px; }
-}
-
 @media (max-width: 1050px) {
   .status-ledger { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .ledger-metric:nth-child(3) { border-right: 0; }
-  .ledger-metric:nth-child(-n+3) { border-bottom: 1px solid var(--console-line); }
+  .ledger-metric:nth-child(-n+3) { border-bottom: 1px solid var(--edge); }
   .ops-console__workspace,
   .ops-console__workspace.has-inspector { grid-template-columns: 1fr; }
 
+  /* Below this width the inspector genuinely floats over the page, which is the
+     one place in the console that earns a shadow. */
   .overview-inspector {
     display: none;
     position: fixed;
@@ -1752,14 +1824,17 @@
     width: min(390px, 100vw);
     overflow-y: auto;
     border-radius: 0;
-    box-shadow: -18px 0 50px rgb(8 15 20 / 0.24);
+    box-shadow: var(--lift-float);
   }
 
   .overview-inspector.is-open { display: block; }
   .overview-inspector.is-empty { display: none; }
   .inspector-close { display: inline-grid; }
   .ide-resource-workbench { grid-template-columns: minmax(0, 1fr) 300px; }
-  .log-workbench { grid-template-columns: minmax(500px, 1fr) 300px; }
+  /* A 500px floor on the list column plus the 300px inspector exceeds the pane at
+     the bottom of this range, and the workbench has no scroller of its own, so the
+     list is allowed to shrink instead. */
+  .log-workbench { grid-template-columns: minmax(0, 1fr) 300px; }
 }
 
 @media (max-width: 900px) {
@@ -1767,17 +1842,48 @@
   .signal-grid { grid-template-columns: 1fr; }
   .provider-debug-head {
     grid-template-columns: minmax(0, 1fr) auto;
-    padding-bottom: 10px;
+    padding-bottom: var(--space-5);
   }
-  .provider-debug-head .limit-preview { grid-column: 1 / -1; margin-left: 11px; }
+  .provider-debug-head .limit-preview { grid-column: 1 / -1; margin-left: var(--space-5); }
   .ide-resource-workbench { grid-template-columns: 1fr; }
   .ide-resource-list { border-right: 0; }
-  .ide-resource-inspector { border-top: 1px solid var(--console-line); }
+  .ide-resource-inspector { border-top: 1px solid var(--edge); }
   .log-workbench { grid-template-columns: 1fr; }
+
+  /* Stacked into one column, the workbench is as tall as its content, so the
+     fixed-height frame and its 600px floor both come off. */
+  .resource-page { min-height: 0; }
+  .provider-page .resource-list { display: block; overflow: visible; border-right: 0; }
+  .provider-page .resource-item { width: 100%; min-width: 0; border-right: 0; border-bottom: 1px solid var(--edge); }
+
+  /* The inspector becomes a drawer over the list rather than a pane beside it. It
+     starts below the mobile header for the same reason the nav drawer does: the
+     header stays reachable while the drawer is open. */
+  .resource-page .resource-inspector,
+  .resource-page .ide-resource-inspector {
+    display: none;
+    position: fixed;
+    z-index: 35;
+    inset: var(--mobile-header-height) 0 0 auto;
+    width: min(430px, 100vw);
+    overflow-y: auto;
+    color: var(--text-strong);
+    background: var(--surface-raised);
+    border: 0;
+    border-left: 1px solid var(--edge);
+    box-shadow: var(--lift-float);
+  }
+  .resource-page .resource-inspector.is-open,
+  .resource-page .ide-resource-inspector.is-open { display: block; }
+  .resource-inspector-close { display: inline-grid; }
+  .resource-page .inspector-header,
+  .resource-page .ide-resource-inspector > header { position: sticky; z-index: 4; top: 0; background: var(--surface-raised); }
+  .resource-disclosure > header { grid-template-columns: 1fr; }
+  .resource-disclosure__actions { padding-left: var(--space-8); }
 }
 
 @media (max-width: 650px) {
-  .main-pane { padding-top: 18px; }
+  .main-pane { padding-top: var(--space-7); }
 
   .ops-commandbar {
     align-items: stretch;
@@ -1787,114 +1893,180 @@
 
   .ops-commandbar__actions {
     justify-content: space-between;
-    border-top: 1px solid var(--console-line);
+    border-top: 1px solid var(--edge);
     border-left: 0;
   }
 
-  .console-refresh { min-height: 42px; }
+  /* Everything that can be tapped reaches 44px in both axes once the layout stops
+     being a pointer-driven dense grid. Height alone is not enough for the
+     icon-only and single-glyph controls: a 30px-wide square or a "1h" range button
+     is still a miss at arm's length, so each one gets a min-width too. */
+  .console-refresh { min-height: 44px; }
+  /* The rail's own 40px sits later in the cascade than the 44px floor in
+     styles.css, so the drawer's nav items have to be raised here or they stay
+     the one control on a phone that never reaches the target size. */
+  .nav-item { min-height: 44px; }
+  .console-icon {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .range-switcher button,
+  .provider-inspect,
+  .copy-base-url { min-width: 44px; min-height: 44px; }
+  .inspector-actions .button,
+  .model-limit-editor .button,
+  .model-limit-editor .field input,
+  .model-limit-editor .field select,
+  .ide-filter input,
+  .model-filter select,
+  .log-filter select { min-height: 44px; }
+  /* The rows are the buttons on these three lists, so the row minimum is the
+     touch target and there is no separate control to grow. */
+  .inspector-key-list button,
+  .resource-disclosure__toggle,
+  .provider-debug-toggle { min-height: 44px; }
   .status-ledger { grid-template-columns: 1fr 1fr; }
   .ledger-metric:nth-child(2n) { border-right: 0; }
-  .ledger-metric:nth-child(3) { border-right: 1px solid var(--console-line); }
-  .ledger-metric:nth-child(-n+6) { border-bottom: 1px solid var(--console-line); }
+  .ledger-metric:nth-child(3) { border-right: 1px solid var(--edge); }
+  .ledger-metric:nth-child(-n+6) { border-bottom: 1px solid var(--edge); }
   .signal-chart svg { height: 150px; }
   .signal-legend { flex-wrap: wrap; }
-  .model-ranking__table { padding: 0 9px; overflow-x: auto; }
+  .model-ranking__table { padding: 0 var(--space-4); overflow-x: auto; }
   .model-ranking__head, .model-ranking__row { min-width: 440px; }
 
   .provider-debug-head {
-    padding: 6px 8px 9px 0;
+    padding: var(--space-3) var(--space-4) var(--space-4) 0;
   }
 
   .provider-debug-head .limit-preview {
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    margin: 0 0 0 11px;
+    margin: 0 0 0 var(--space-5);
   }
 
+  /* The route table keeps all five of its readouts on a phone. Traffic, the next
+     key and the bottleneck are the numbers an operator opened this page for, so
+     rather than dropping the columns the list scrolls sideways inside its own
+     scroller — .route-debug-list already contains that scroll and does not pass it
+     to the page. The has-inspector selectors are repeated because the 1400 block
+     zeroes the same min-width at a higher specificity, and without them a phone
+     with the inspector open would fall back to a six-column grid it cannot fit.
+     The column labels are aria-hidden decoration and scroll along with the rows. */
   .route-debug-columns,
-  .route-debug-row {
-    min-width: 0;
-    grid-template-columns: minmax(0, 1fr) 52px 60px 14px;
+  .route-debug-row,
+  .ops-console__workspace.has-inspector .route-debug-columns,
+  .ops-console__workspace.has-inspector .route-debug-row {
+    min-width: 540px;
+    grid-template-columns: minmax(130px, 1fr) 70px 44px 56px 78px 14px;
   }
-  .route-debug-columns > span:nth-child(2),
-  .route-debug-columns > span:nth-child(5),
-  .route-debug-row .route-traffic,
-  .route-debug-row .route-bottleneck { display: none; }
-  .failure-list button { grid-template-columns: 40px minmax(0, 1fr) 14px; }
-  .failure-list button > span:nth-child(3),
-  .failure-list time { display: none; }
+
+  /* The failing key and the time it failed are the whole point of this panel, so
+     they move under the model instead of disappearing: the row becomes three lines
+     with the status code and the chevron spanning them. */
+  .failure-list button {
+    grid-template-columns: 40px minmax(0, 1fr) 14px;
+    row-gap: var(--space-1);
+  }
+
+  .failure-list button > span:first-child { grid-column: 1; grid-row: 1; }
+  .failure-list button > span:nth-child(2) { grid-column: 2; grid-row: 1; }
+  .failure-list button > span:nth-child(3) { grid-column: 2; grid-row: 2; }
+  .failure-list button > time { grid-column: 2; grid-row: 3; }
+  .failure-list button > svg { grid-column: 3; grid-row: 1 / -1; align-self: center; }
+
   .overview-inspector { width: 100vw; }
-  .ide-resource-list > header { display: none; }
-  .ide-resource-list > div > button {
-    grid-template-columns: minmax(0, 1fr) auto 13px;
-  }
-  .ide-resource-list button > span:nth-child(2) { display: none; }
-  .log-filter { grid-template-columns: 14px minmax(0, 1fr) 98px; }
+  /* The column labels are aria-hidden decoration, so they go; the values they
+     named all stay, restacked per page below. */
+  .ide-resource-list > header,
   .log-workbench .ide-resource-list > header { display: none; }
-  .log-workbench .log-resource-rows > button {
-    grid-template-columns: minmax(0, 1fr) 44px 58px 13px;
-  }
-  .log-workbench .log-resource-rows > button > span:nth-child(2) { display: none; }
-  .console-actionbar { position: static; align-items: stretch; flex-direction: column; }
-  .console-actionbar .button { width: 100%; }
-}
 
-@media (max-width: 900px) {
-  .resource-page { min-height: 0; }
-  .provider-page .resource-list { display: block; overflow: visible; border-right: 0; }
-  .provider-page .resource-item { width: 100%; min-width: 0; border-right: 0; border-bottom: 1px solid var(--console-line); }
-  .resource-page .resource-inspector,
-  .resource-page .ide-resource-inspector {
-    display: none;
-    position: fixed;
-    z-index: 35;
-    inset: 54px 0 0 auto;
-    width: min(430px, 100vw);
-    overflow-y: auto;
-    color: var(--ink);
-    background: var(--console-panel);
-    border: 0;
-    border-left: 1px solid var(--console-line);
-    box-shadow: -18px 0 50px rgb(8 15 20 / 0.24);
-  }
-  .resource-page .resource-inspector.is-open,
-  .resource-page .ide-resource-inspector.is-open { display: block; }
-  .resource-inspector-close { display: inline-grid; }
-  .resource-page .inspector-header,
-  .resource-page .ide-resource-inspector > header { position: sticky; z-index: 4; top: 0; background: var(--console-panel); }
-  .resource-disclosure > header { grid-template-columns: 1fr; }
-  .resource-disclosure__actions { padding-left: 27px; }
-}
-
-@media (max-width: 650px) {
+  /* The status filter drops below the search box: side by side, neither one has
+     room for its own longest option. */
   .model-filter,
   .log-filter { grid-template-columns: 14px minmax(0, 1fr); }
   .model-filter label:last-child,
   .log-filter label:last-child { grid-column: 2; }
+
+  .console-actionbar { position: static; align-items: stretch; flex-direction: column; }
+  .console-actionbar .button { width: 100%; }
+
   .model-sweep { grid-template-columns: minmax(0, 1fr); }
   .model-sweep__track { grid-column: 1; grid-row: auto; }
   .model-sweep .button-row { flex-wrap: wrap; justify-content: flex-start; }
   .model-sweep .button { flex: 1; }
-  .ide-resource-list > div > button { grid-template-columns: minmax(0, 1fr) auto 13px; }
-  .model-page .ide-resource-list button > span:nth-child(2) { display: block; }
-  .model-page .ide-resource-list button > span:nth-child(3) { display: block; }
-  .model-page .ide-resource-list button > span:nth-child(2) { font-size: 0.52rem; }
-  .model-page .ide-resource-list > div > button { grid-template-columns: minmax(0, 1fr) 40px 36px 13px; }
-  .log-workbench .log-resource-rows > button {
-    grid-template-columns: minmax(0, 1fr) 42px 13px;
+
+  /* Every resource row becomes two lines here instead of shedding a column: the
+     alias leads, and whatever the page put in the second cell — the provider name
+     on Models and on Providers — drops underneath it indented to the alias. The
+     tally keeps the right-hand column and the chevron spans both lines. */
+  .ide-resource-list > div > button {
+    grid-template-columns: minmax(0, 1fr) auto 13px;
     grid-template-rows: auto auto;
-    row-gap: 3px;
+    row-gap: var(--space-1);
+  }
+
+  .ide-resource-list > div > button > span:first-child { grid-column: 1; grid-row: 1; }
+  .ide-resource-list > div > button > span:nth-child(2) {
+    grid-column: 1;
+    grid-row: 2;
+    padding-left: var(--space-6);
+    font-size: var(--text-micro);
+  }
+  .ide-resource-list > div > button > span:nth-child(3) { grid-column: 2; grid-row: 1; }
+  .ide-resource-list > div > button > svg { grid-column: 3; grid-row: 1 / -1; align-self: center; }
+
+  /* A log row does the same, but its second cell is the model and route rather
+     than a provider, and the status code and latency stack on the right. The
+     right-hand column is sized for the latency rather than the status code:
+     "4218 ms" is the wider of the two things that land there. */
+  .log-workbench .log-resource-rows > button {
+    grid-template-columns: minmax(0, 1fr) 56px 13px;
+    grid-template-rows: auto auto;
+    row-gap: var(--space-1);
   }
   .log-workbench .log-resource-rows > button > span:first-child { grid-column: 1; grid-row: 1; }
-  .log-workbench .log-resource-rows > button > span:nth-child(2) { display: block; grid-column: 1; grid-row: 2; padding-left: 17px; }
+  .log-workbench .log-resource-rows > button > span:nth-child(2) { display: block; grid-column: 1; grid-row: 2; padding-left: var(--space-6); }
   .log-workbench .log-resource-rows > button > strong { grid-column: 2; grid-row: 1; }
-  .log-workbench .log-resource-rows > button > small { grid-column: 2; grid-row: 2; }
+  .log-workbench .log-resource-rows > button > small { grid-column: 2; grid-row: 2; text-align: right; }
   .log-workbench .log-resource-rows > button > svg { grid-column: 3; grid-row: 1 / 3; }
+
   .resource-page .resource-inspector,
   .resource-page .ide-resource-inspector { width: 100vw; }
-  .inspector-header { min-height: 0; padding: 15px; }
+  .inspector-header { min-height: 0; padding: var(--space-6); }
   .inspector-header .button-row { flex-wrap: wrap; }
   .resource-disclosure__toggle { grid-template-columns: 18px minmax(0, 1fr); }
   .resource-disclosure__toggle code { grid-column: 2; }
   .access-key-panel { grid-template-columns: minmax(0, 1fr); }
   .access-key-panel > div { min-width: 0; }
+
+  /* The manual model entry pairs a text field with an Add button on one line. Below
+     this width the button squeezes the field down to a few characters, so the two
+     stack and the button takes the full measure to stay a comfortable target. */
+  .manual-model-entry { grid-template-columns: minmax(0, 1fr); }
+  .manual-model-entry .button { width: 100%; }
+}
+
+
+/* styles.css already collapses every duration in the document to 0.01ms, which is
+ * the right blanket rule and is not repeated here. What that cannot reach is the
+ * console's two pieces of continuous motion, which do not depend on a duration
+ * being long: the refresh spinner loops forever, and the model sweep's progress
+ * bar animates its own width as results arrive. Both are named explicitly.
+ *
+ * The state transforms are left in place on purpose. A disclosure chevron pointing
+ * down rather than sideways is a static marker of whether the group is open, not an
+ * animation — with the transition already neutralised it simply snaps, which is
+ * exactly what reduced motion asks for. Opacity is left alone for the same reason:
+ * a disabled button fading back is the feedback that tells an operator the press
+ * registered, and removing it would leave the control looking inert.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .console-refresh.is-refreshing svg {
+    animation: none !important;
+  }
+
+  .model-sweep__track > span {
+    transition: none !important;
+  }
 }

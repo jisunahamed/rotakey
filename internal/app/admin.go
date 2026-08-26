@@ -230,6 +230,14 @@ type providerInput struct {
 	AllowPrivateNetwork bool              `json:"allow_private_network"`
 	APIFormat           string            `json:"api_format"`
 	AnthropicVersion    string            `json:"anthropic_version"`
+	// DefaultKeyBalanceUSD seeds the balance of every key created on this
+	// provider. It is a pointer because null means "seed nothing", which is a
+	// different instruction from seeding zero.
+	DefaultKeyBalanceUSD *float64 `json:"default_key_balance_usd,omitempty"`
+	// ApplyBalanceToExistingKeys rewrites the balance of every key already on the
+	// provider, which is how an operator records a top-up across a whole account
+	// at once. It is off by default so an unrelated edit cannot reset spend.
+	ApplyBalanceToExistingKeys bool `json:"apply_balance_to_existing_keys,omitempty"`
 }
 
 func validateProviderInput(input *providerInput) error {
@@ -280,6 +288,10 @@ func validateProviderInput(input *providerInput) error {
 	}
 	if _, err := validateProviderURL(input.BaseURL, input.AllowPrivateNetwork); err != nil {
 		return err
+	}
+	if input.DefaultKeyBalanceUSD != nil &&
+		(*input.DefaultKeyBalanceUSD < 0 || *input.DefaultKeyBalanceUSD > maxCredentialBalanceUSD) {
+		return fmt.Errorf("the per-key balance must be a positive USD amount")
 	}
 	for key, value := range input.ExtraHeaders {
 		canonical := http.CanonicalHeaderKey(key)
@@ -391,11 +403,12 @@ func (s *Server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 	_, err = s.db.Exec(r.Context(), `
 		INSERT INTO providers
 		    (id, name, slug, base_url, auth_header, auth_scheme, extra_headers,
-		     timeout_seconds, enabled, allow_private_network, api_format, anthropic_version)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		     timeout_seconds, enabled, allow_private_network, api_format, anthropic_version,
+		     default_key_balance_usd)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 	`, id, input.Name, input.Slug, input.BaseURL, input.AuthHeader, input.AuthScheme,
 		headers, input.TimeoutSeconds, input.Enabled, input.AllowPrivateNetwork,
-		input.APIFormat, input.AnthropicVersion)
+		input.APIFormat, input.AnthropicVersion, input.DefaultKeyBalanceUSD)
 	if err != nil {
 		writeError(w, http.StatusConflict, "provider_conflict", "Provider slug already exists or the provider is invalid.")
 		return
@@ -445,14 +458,35 @@ func (s *Server) handleUpdateProvider(w http.ResponseWriter, r *http.Request) {
 	tag, err := s.db.Exec(r.Context(), `
 		UPDATE providers SET name=$2, slug=$3, base_url=$4, auth_header=$5,
 		    auth_scheme=$6, extra_headers=$7, timeout_seconds=$8, enabled=$9,
-		    allow_private_network=$10, api_format=$11, anthropic_version=$12, updated_at=NOW()
+		    allow_private_network=$10, api_format=$11, anthropic_version=$12,
+		    default_key_balance_usd=$13, updated_at=NOW()
 		WHERE id=$1
 	`, r.PathValue("id"), input.Name, input.Slug, input.BaseURL, input.AuthHeader,
 		input.AuthScheme, headers, input.TimeoutSeconds, input.Enabled, input.AllowPrivateNetwork,
-		input.APIFormat, input.AnthropicVersion)
+		input.APIFormat, input.AnthropicVersion, input.DefaultKeyBalanceUSD)
 	if err != nil || tag.RowsAffected() == 0 {
 		writeError(w, http.StatusConflict, "provider_update_failed", "Provider could not be updated.")
 		return
+	}
+	// Recording a top-up across a whole account is the reason this exists: the
+	// operator raises the per-key figure once and asks for it to land on the keys
+	// that already exist, which also clears their spend so the new balance is what
+	// is actually left rather than what was left before the top-up.
+	if input.ApplyBalanceToExistingKeys {
+		if _, err := s.db.Exec(r.Context(), `
+			UPDATE credentials
+			SET balance_usd=$2, balance_spent_usd=0, updated_at=NOW()
+			WHERE provider_id=$1
+		`, r.PathValue("id"), input.DefaultKeyBalanceUSD); err != nil {
+			writeError(w, http.StatusInternalServerError, "credential_update_failed",
+				"The provider was saved, but the balance could not be applied to its API keys.")
+			return
+		}
+		if _, err := s.db.Exec(r.Context(), `
+			UPDATE providers SET balance_spent_usd=0, updated_at=NOW() WHERE id=$1
+		`, r.PathValue("id")); err != nil {
+			s.logger.Warn("provider pooled spend reset failed", "provider_id", r.PathValue("id"), "error", err)
+		}
 	}
 	s.audit(r.Context(), adminIDFromContext(r.Context()), "provider.update", "provider", r.PathValue("id"), map[string]any{"name": input.Name})
 	w.WriteHeader(http.StatusNoContent)
@@ -814,13 +848,19 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 		if !inspections[index].Valid {
 			validationError = "Saved without validation: " + inspections[index].Warning
 		}
+		// A key created without its own figure inherits the provider's, so an
+		// operator adding twenty keys to one account types the balance once.
+		balance := credential.BalanceUSD
+		if balance == nil {
+			balance = provider.DefaultKeyBalanceUSD
+		}
 		if _, err := tx.Exec(r.Context(), `
 			INSERT INTO credentials
 			    (id, provider_id, label, secret_cipher, secret_suffix, is_primary,
 			     enabled, status, last_validated_at, validation_error, balance_usd)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),$9,$10)
 		`, id, r.PathValue("id"), credential.Label, encrypted, secretSuffix(credential.Secret),
-			credential.IsPrimary, enabled, status, validationError, credential.BalanceUSD); err != nil {
+			credential.IsPrimary, enabled, status, validationError, balance); err != nil {
 			writeError(w, http.StatusConflict, "credential_conflict", "Credential labels must be unique inside a provider.")
 			return
 		}

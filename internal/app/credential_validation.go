@@ -600,6 +600,14 @@ func modelCapabilityProfile(provider Provider, input *modelInput, source string)
 			profile["chat"] = "native"
 			profile["messages"] = "translated"
 			profile["tools"] = "native_unverified"
+		} else if input.SupportsResponses {
+			// A route that serves only Responses can still answer a Chat or an
+			// Anthropic caller, because the gateway translates the request up into
+			// Responses and the answer back down.
+			input.SupportsMessages = true
+			profile["chat"] = "translated"
+			profile["messages"] = "translated"
+			profile["tools"] = "native_unverified"
 		} else {
 			input.SupportsMessages = false
 			profile["chat"] = "off"

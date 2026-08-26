@@ -17,13 +17,13 @@ func (e anthropicUnsupportedError) Error() string {
 	return fmt.Sprintf("%s cannot be translated across provider protocols", e.Feature)
 }
 
-func translateAnthropicRequestToChat(source map[string]any) (map[string]any, error) {
-	if feature := unsupportedTopLevelField(source, "model", "max_tokens", "messages", "system", "temperature", "top_p", "stop_sequences", "stream", "tools", "tool_choice", "metadata", "thinking", "container", "mcp_servers", "context_management", "output_config"); feature != "" {
-		return nil, anthropicUnsupportedError{Feature: feature}
-	}
-	if feature := findAnthropicOnlyFeature(source); feature != "" {
-		return nil, anthropicUnsupportedError{Feature: feature}
-	}
+// translateAnthropicRequestToChat converts a Messages request into an OpenAI
+// Chat request. Anything Chat has no place for is dropped and named in the
+// returned slice rather than refused: a caller that sends one Anthropic-only
+// field should still get an answer from the model, and the operator can see in
+// the request log exactly what did not survive the crossing.
+func translateAnthropicRequestToChat(source map[string]any) (map[string]any, []string, error) {
+	dropped := unsupportedFields(source, "model", "max_tokens", "messages", "system", "temperature", "top_p", "stop_sequences", "stream", "tools", "tool_choice", "metadata", "thinking", "container", "mcp_servers", "context_management", "output_config")
 	chat := map[string]any{}
 	for _, field := range []string{"temperature", "top_p", "stream"} {
 		if value, ok := source[field]; ok {
@@ -39,37 +39,33 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, err
 
 	messages := make([]any, 0)
 	if system, ok := source["system"]; ok {
-		text, err := anthropicText(system)
-		if err != nil {
-			return nil, err
-		}
+		text := anthropicText(system)
 		if text != "" {
 			messages = append(messages, map[string]any{"role": "system", "content": text})
 		}
 	}
+	// An empty conversation is the one thing that cannot be repaired: there is no
+	// request left to send once it is dropped.
 	rawMessages, ok := source["messages"].([]any)
 	if !ok || len(rawMessages) == 0 {
-		return nil, anthropicUnsupportedError{Feature: "messages"}
+		return nil, dropped, anthropicUnsupportedError{Feature: "messages"}
 	}
 	for _, raw := range rawMessages {
 		message, ok := raw.(map[string]any)
 		if !ok {
-			return nil, anthropicUnsupportedError{Feature: "message"}
+			dropped = appendUniqueStrings(dropped, "message")
+			continue
 		}
 		role, _ := message["role"].(string)
 		switch role {
 		case "system", "developer":
-			content, err := anthropicContentToChat(message["content"])
-			if err != nil {
-				return nil, err
-			}
+			content, lost := anthropicContentToChat(message["content"])
+			dropped = appendUniqueStrings(dropped, lost...)
 			messages = append(messages, map[string]any{"role": "system", "content": content})
 			continue
 		case "tool":
-			content, err := anthropicContentToChat(message["content"])
-			if err != nil {
-				return nil, err
-			}
+			content, lost := anthropicContentToChat(message["content"])
+			dropped = appendUniqueStrings(dropped, lost...)
 			toolCallID, _ := message["tool_call_id"].(string)
 			if toolCallID == "" {
 				toolCallID, _ = message["tool_use_id"].(string)
@@ -78,7 +74,10 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, err
 			continue
 		case "user", "assistant":
 		default:
-			return nil, anthropicUnsupportedError{Feature: "message role"}
+			// An unrecognised role is carried as a user turn instead of being
+			// discarded, because its text is still part of the conversation.
+			dropped = appendUniqueStrings(dropped, "message role "+role)
+			role = "user"
 		}
 		if text, ok := message["content"].(string); ok {
 			messages = append(messages, map[string]any{"role": role, "content": text})
@@ -86,7 +85,8 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, err
 		}
 		blocks, ok := message["content"].([]any)
 		if !ok {
-			return nil, anthropicUnsupportedError{Feature: "message content"}
+			dropped = appendUniqueStrings(dropped, "message content")
+			continue
 		}
 		parts := make([]any, 0)
 		toolCalls := make([]any, 0)
@@ -94,31 +94,32 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, err
 		for _, rawBlock := range blocks {
 			block, ok := rawBlock.(map[string]any)
 			if !ok {
-				return nil, anthropicUnsupportedError{Feature: "content block"}
+				dropped = appendUniqueStrings(dropped, "content block")
+				continue
 			}
 			switch block["type"] {
 			case "text":
 				parts = append(parts, map[string]any{"type": "text", "text": block["text"]})
 			case "image":
-				image, err := anthropicImageToChat(block)
-				if err != nil {
-					return nil, err
+				image, ok := anthropicImageToChat(block)
+				if !ok {
+					dropped = appendUniqueStrings(dropped, "image source")
+					continue
 				}
 				parts = append(parts, image)
 			case "tool_use":
 				encoded, err := json.Marshal(block["input"])
 				if err != nil {
-					return nil, err
+					dropped = appendUniqueStrings(dropped, "tool_use input")
+					continue
 				}
 				toolCalls = append(toolCalls, map[string]any{
 					"id": block["id"], "type": "function",
 					"function": map[string]any{"name": block["name"], "arguments": string(encoded)},
 				})
 			case "tool_result":
-				content, err := anthropicContentToChat(block["content"])
-				if err != nil {
-					return nil, err
-				}
+				content, lost := anthropicContentToChat(block["content"])
+				dropped = appendUniqueStrings(dropped, lost...)
 				toolResults = append(toolResults, map[string]any{
 					"role": "tool", "tool_call_id": block["tool_use_id"], "content": content,
 				})
@@ -126,7 +127,13 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, err
 				// OpenAI chat has no equivalent history block. It is safe to omit
 				// this prior reasoning while preserving the assistant's visible output.
 			default:
-				return nil, anthropicUnsupportedError{Feature: fmt.Sprint(block["type"])}
+				// A document, a search result or any block a later Anthropic version
+				// adds is summarised as whatever text it carries, so the turn keeps
+				// its meaning instead of vanishing.
+				if text := anthropicText(block); text != "" {
+					parts = append(parts, map[string]any{"type": "text", "text": text})
+				}
+				dropped = appendUniqueStrings(dropped, fmt.Sprint(block["type"]))
 			}
 		}
 		if len(parts) > 0 || len(toolCalls) > 0 {
@@ -150,10 +157,15 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, err
 		for _, raw := range tools {
 			tool, ok := raw.(map[string]any)
 			if !ok {
-				return nil, anthropicUnsupportedError{Feature: "tool"}
+				dropped = appendUniqueStrings(dropped, "tool")
+				continue
 			}
+			// A server-side tool runs inside Anthropic's own infrastructure, so an
+			// OpenAI upstream cannot be asked to call it. The rest of the tool list
+			// still reaches the model.
 			if kind, _ := tool["type"].(string); kind != "" && kind != "custom" {
-				return nil, anthropicUnsupportedError{Feature: "server tool " + kind}
+				dropped = appendUniqueStrings(dropped, "server tool "+kind)
+				continue
 			}
 			translated = append(translated, map[string]any{
 				"type": "function", "function": map[string]any{
@@ -161,7 +173,9 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, err
 				},
 			})
 		}
-		chat["tools"] = translated
+		if len(translated) > 0 {
+			chat["tools"] = translated
+		}
 	}
 	if choice, ok := source["tool_choice"].(map[string]any); ok {
 		switch choice["type"] {
@@ -174,36 +188,38 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, err
 		case "none":
 			chat["tool_choice"] = "none"
 		default:
-			return nil, anthropicUnsupportedError{Feature: "tool_choice"}
+			// Letting the model choose is the safe reading of an instruction this
+			// gateway does not recognise.
+			dropped = appendUniqueStrings(dropped, "tool_choice")
 		}
 		if disabled, _ := choice["disable_parallel_tool_use"].(bool); disabled {
 			chat["parallel_tool_calls"] = false
 		}
 	}
-	return chat, nil
+	// A tool list that did not survive makes tool_choice meaningless, and some
+	// upstreams reject the pair.
+	if _, hasTools := chat["tools"]; !hasTools {
+		delete(chat, "tool_choice")
+	}
+	return chat, dropped, nil
 }
 
-func translateChatRequestToAnthropic(source map[string]any) (map[string]any, error) {
-	if feature := unsupportedTopLevelField(source, "model", "messages", "max_tokens", "max_completion_tokens", "max_output_tokens", "temperature", "top_p", "stop", "stream", "stream_options", "tools", "tool_choice", "parallel_tool_calls"); feature != "" {
-		return nil, anthropicUnsupportedError{Feature: feature}
-	}
-	if options, ok := source["stream_options"]; ok && options != nil {
-		streamOptions, ok := options.(map[string]any)
-		if !ok {
-			return nil, anthropicUnsupportedError{Feature: "stream_options"}
-		}
-		if feature := unsupportedTopLevelField(streamOptions, "include_usage"); feature != "" {
-			return nil, anthropicUnsupportedError{Feature: "stream_options." + feature}
-		}
-		if include, exists := streamOptions["include_usage"]; exists {
-			if _, ok := include.(bool); !ok {
-				return nil, anthropicUnsupportedError{Feature: "stream_options.include_usage"}
-			}
-		}
-	}
-	for _, field := range []string{"response_format", "audio", "modalities", "prediction", "logprobs", "top_logprobs"} {
-		if value, ok := source[field]; ok && value != nil {
-			return nil, anthropicUnsupportedError{Feature: field}
+// translateChatRequestToAnthropic converts an OpenAI Chat request into a Messages
+// request. Like its mirror image it drops what Anthropic has no place for and
+// names it, so a caller using one OpenAI-only knob still gets an answer.
+func translateChatRequestToAnthropic(source map[string]any) (map[string]any, []string, error) {
+	dropped := unsupportedFields(source, "model", "messages", "max_tokens", "max_completion_tokens", "max_output_tokens", "temperature", "top_p", "stop", "stream", "stream_options", "tools", "tool_choice", "parallel_tool_calls", "response_format")
+	// response_format has no Anthropic equivalent, but asking for JSON is a
+	// meaningful instruction, so it is restated to the model in the system prompt
+	// rather than silently discarded.
+	jsonInstruction := ""
+	if format, ok := source["response_format"].(map[string]any); ok {
+		switch format["type"] {
+		case "json_object":
+			jsonInstruction = "Reply with a single valid JSON object and nothing else."
+		case "json_schema":
+			schema, _ := json.Marshal(format["json_schema"])
+			jsonInstruction = "Reply with a single valid JSON object and nothing else, matching this schema: " + string(schema)
 		}
 	}
 	result := map[string]any{}
@@ -227,23 +243,23 @@ func translateChatRequestToAnthropic(source map[string]any) (map[string]any, err
 	}
 
 	system := make([]string, 0)
+	if jsonInstruction != "" {
+		system = append(system, jsonInstruction)
+	}
 	messages := make([]any, 0)
 	rawMessages, ok := source["messages"].([]any)
 	if !ok || len(rawMessages) == 0 {
-		return nil, anthropicUnsupportedError{Feature: "messages"}
+		return nil, dropped, anthropicUnsupportedError{Feature: "messages"}
 	}
 	for _, raw := range rawMessages {
 		message, ok := raw.(map[string]any)
 		if !ok {
-			return nil, anthropicUnsupportedError{Feature: "message"}
+			dropped = appendUniqueStrings(dropped, "message")
+			continue
 		}
 		role, _ := message["role"].(string)
 		if role == "system" || role == "developer" {
-			text, err := openAIText(message["content"])
-			if err != nil {
-				return nil, err
-			}
-			system = append(system, text)
+			system = append(system, openAIText(message["content"]))
 			continue
 		}
 		if role == "tool" {
@@ -255,12 +271,13 @@ func translateChatRequestToAnthropic(source map[string]any) (map[string]any, err
 			continue
 		}
 		if role != "user" && role != "assistant" {
-			return nil, anthropicUnsupportedError{Feature: "message role"}
+			// The turn's text still belongs in the conversation, so an unrecognised
+			// role is carried as a user turn rather than dropped.
+			dropped = appendUniqueStrings(dropped, "message role "+role)
+			role = "user"
 		}
-		blocks, err := openAIContentToAnthropic(message["content"])
-		if err != nil {
-			return nil, err
-		}
+		blocks, lost := openAIContentToAnthropic(message["content"])
+		dropped = appendUniqueStrings(dropped, lost...)
 		if calls, ok := message["tool_calls"].([]any); ok {
 			for _, rawCall := range calls {
 				call, _ := rawCall.(map[string]any)
@@ -270,13 +287,22 @@ func translateChatRequestToAnthropic(source map[string]any) (map[string]any, err
 					decoder := json.NewDecoder(strings.NewReader(arguments))
 					decoder.UseNumber()
 					if err := decoder.Decode(&input); err != nil {
-						return nil, anthropicUnsupportedError{Feature: "invalid tool arguments"}
+						// Malformed arguments came from the model's own earlier turn, so
+						// the call is preserved with an empty input rather than failing
+						// the whole conversation.
+						input = map[string]any{}
+						dropped = appendUniqueStrings(dropped, "tool arguments")
 					}
 				}
 				blocks = append(blocks, map[string]any{
 					"type": "tool_use", "id": call["id"], "name": function["name"], "input": input,
 				})
 			}
+		}
+		// Anthropic rejects a turn with no content at all, so an empty one is
+		// skipped instead of being sent.
+		if len(blocks) == 0 {
+			continue
 		}
 		messages = append(messages, map[string]any{"role": role, "content": blocks})
 	}
@@ -290,14 +316,19 @@ func translateChatRequestToAnthropic(source map[string]any) (map[string]any, err
 		for _, raw := range tools {
 			tool, _ := raw.(map[string]any)
 			if tool["type"] != "function" {
-				return nil, anthropicUnsupportedError{Feature: "non-function tool"}
+				// A hosted OpenAI tool runs in OpenAI's infrastructure and cannot be
+				// offered to Claude, but the remaining tools still can.
+				dropped = appendUniqueStrings(dropped, "non-function tool")
+				continue
 			}
 			function, _ := tool["function"].(map[string]any)
 			translated = append(translated, map[string]any{
 				"name": function["name"], "description": function["description"], "input_schema": function["parameters"],
 			})
 		}
-		result["tools"] = translated
+		if len(translated) > 0 {
+			result["tools"] = translated
+		}
 	}
 	if choice, ok := source["tool_choice"]; ok {
 		switch value := choice.(type) {
@@ -323,43 +354,54 @@ func translateChatRequestToAnthropic(source map[string]any) (map[string]any, err
 		choice["disable_parallel_tool_use"] = true
 		result["tool_choice"] = choice
 	}
-	return result, nil
+	if _, hasTools := result["tools"]; !hasTools {
+		delete(result, "tool_choice")
+	}
+	return result, dropped, nil
 }
 
-func unsupportedTopLevelField(source map[string]any, allowed ...string) string {
+// unsupportedFields names every top-level field the target protocol has no place
+// for. They are dropped rather than refused: failing a conversation mid-flight
+// over one field the caller can live without is the outcome this gateway works
+// hardest to avoid, and the names travel to the request log so an operator can
+// still see what was left behind.
+func unsupportedFields(source map[string]any, allowed ...string) []string {
 	allowedSet := make(map[string]bool, len(allowed))
 	for _, field := range allowed {
 		allowedSet[field] = true
 	}
-	unknown := make([]string, 0)
+	dropped := make([]string, 0)
 	for field, value := range source {
 		if !allowedSet[field] && value != nil {
-			unknown = append(unknown, field)
+			dropped = append(dropped, field)
 		}
 	}
-	if len(unknown) == 0 {
-		return ""
-	}
-	sort.Strings(unknown)
-	return unknown[0]
+	sort.Strings(dropped)
+	return dropped
 }
 
-func openAIContentToAnthropic(raw any) ([]any, error) {
+// openAIContentToAnthropic converts one OpenAI message's content parts and
+// reports what it had to leave behind, so no part type can fail a whole request.
+func openAIContentToAnthropic(raw any) ([]any, []string) {
+	dropped := make([]string, 0)
 	if raw == nil {
-		return []any{}, nil
+		return []any{}, dropped
 	}
 	if text, ok := raw.(string); ok {
-		return []any{map[string]any{"type": "text", "text": text}}, nil
+		if text == "" {
+			return []any{}, dropped
+		}
+		return []any{map[string]any{"type": "text", "text": text}}, dropped
 	}
 	parts, ok := raw.([]any)
 	if !ok {
-		return nil, anthropicUnsupportedError{Feature: "message content"}
+		return []any{map[string]any{"type": "text", "text": fmt.Sprint(raw)}}, dropped
 	}
 	blocks := make([]any, 0, len(parts))
 	for _, rawPart := range parts {
 		part, _ := rawPart.(map[string]any)
 		switch part["type"] {
-		case "text", "input_text":
+		case "text", "input_text", "output_text":
 			blocks = append(blocks, map[string]any{"type": "text", "text": part["text"]})
 		case "image_url", "input_image":
 			image, ok := part["image_url"].(map[string]any)
@@ -372,7 +414,8 @@ func openAIContentToAnthropic(raw any) ([]any, error) {
 			if strings.HasPrefix(url, "data:") {
 				pieces := strings.SplitN(strings.TrimPrefix(url, "data:"), ";base64,", 2)
 				if len(pieces) != 2 {
-					return nil, anthropicUnsupportedError{Feature: "image data URL"}
+					dropped = appendUniqueStrings(dropped, "image data URL")
+					continue
 				}
 				blocks = append(blocks, map[string]any{"type": "image", "source": map[string]any{
 					"type": "base64", "media_type": pieces[0], "data": pieces[1],
@@ -380,61 +423,87 @@ func openAIContentToAnthropic(raw any) ([]any, error) {
 			} else if url != "" {
 				blocks = append(blocks, map[string]any{"type": "image", "source": map[string]any{"type": "url", "url": url}})
 			} else {
-				return nil, anthropicUnsupportedError{Feature: "image URL"}
+				dropped = appendUniqueStrings(dropped, "image URL")
 			}
 		default:
-			return nil, anthropicUnsupportedError{Feature: fmt.Sprint(part["type"])}
+			// An audio or file part cannot cross to Messages, but whatever text it
+			// carries can, so the turn keeps as much meaning as possible.
+			if text, ok := part["text"].(string); ok && text != "" {
+				blocks = append(blocks, map[string]any{"type": "text", "text": text})
+			}
+			dropped = appendUniqueStrings(dropped, fmt.Sprint(part["type"]))
 		}
 	}
-	return blocks, nil
+	return blocks, dropped
 }
 
-func anthropicText(raw any) (string, error) {
+// anthropicText flattens any Anthropic content shape to plain text. It never
+// fails: a block this gateway does not model still usually carries readable text
+// somewhere inside it, and returning that is always better for the caller than
+// refusing the request over a field name.
+func anthropicText(raw any) string {
+	switch typed := raw.(type) {
+	case nil:
+		return ""
+	case string:
+		return typed
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, block := range typed {
+			if text := anthropicText(block); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	case map[string]any:
+		if text, ok := typed["text"].(string); ok {
+			return text
+		}
+		// A document or search-result block nests its readable part one level
+		// deeper, so follow the two keys Anthropic uses for it.
+		for _, key := range []string{"content", "source"} {
+			if text := anthropicText(typed[key]); text != "" {
+				return text
+			}
+		}
+		return ""
+	default:
+		return ""
+	}
+}
+
+// anthropicContentToChat converts one message's content blocks and reports the
+// block types it could not carry across, which the caller folds into the
+// request's dropped-field list.
+func anthropicContentToChat(raw any) (any, []string) {
+	dropped := make([]string, 0)
 	if raw == nil {
-		return "", nil
+		return "", dropped
 	}
 	if text, ok := raw.(string); ok {
-		return text, nil
+		return text, dropped
 	}
 	blocks, ok := raw.([]any)
 	if !ok {
-		return "", anthropicUnsupportedError{Feature: "text content"}
-	}
-	parts := make([]string, 0, len(blocks))
-	for _, rawBlock := range blocks {
-		block, _ := rawBlock.(map[string]any)
-		if block["type"] != "text" {
-			return "", anthropicUnsupportedError{Feature: fmt.Sprint(block["type"])}
-		}
-		parts = append(parts, fmt.Sprint(block["text"]))
-	}
-	return strings.Join(parts, "\n"), nil
-}
-
-func anthropicContentToChat(raw any) (any, error) {
-	if raw == nil {
-		return "", nil
-	}
-	if text, ok := raw.(string); ok {
-		return text, nil
-	}
-	blocks, ok := raw.([]any)
-	if !ok {
-		return nil, anthropicUnsupportedError{Feature: "message content"}
+		// A content value of an unexpected shape is still readable as text more
+		// often than not, so it is flattened rather than rejected.
+		return anthropicText(raw), dropped
 	}
 	parts := make([]any, 0, len(blocks))
 	for _, rawBlock := range blocks {
 		block, ok := rawBlock.(map[string]any)
 		if !ok {
-			return nil, anthropicUnsupportedError{Feature: "content block"}
+			dropped = appendUniqueStrings(dropped, "content block")
+			continue
 		}
 		switch block["type"] {
 		case "text":
 			parts = append(parts, map[string]any{"type": "text", "text": block["text"]})
 		case "image":
-			image, err := anthropicImageToChat(block)
-			if err != nil {
-				return nil, err
+			image, ok := anthropicImageToChat(block)
+			if !ok {
+				dropped = appendUniqueStrings(dropped, "image source")
+				continue
 			}
 			parts = append(parts, image)
 		case "thinking", "redacted_thinking":
@@ -443,21 +512,27 @@ func anthropicContentToChat(raw any) (any, error) {
 			// Deferred tool discovery is an Anthropic-only optimization. Every
 			// client function definition is already sent to the OpenAI upstream.
 		default:
-			return nil, anthropicUnsupportedError{Feature: fmt.Sprint(block["type"])}
+			if text := anthropicText(block); text != "" {
+				parts = append(parts, map[string]any{"type": "text", "text": text})
+			}
+			dropped = appendUniqueStrings(dropped, fmt.Sprint(block["type"]))
 		}
 	}
 	if len(parts) == 0 {
-		return "", nil
+		return "", dropped
 	}
 	if len(parts) == 1 {
 		if part, ok := parts[0].(map[string]any); ok && part["type"] == "text" {
-			return part["text"], nil
+			return part["text"], dropped
 		}
 	}
-	return parts, nil
+	return parts, dropped
 }
 
-func anthropicImageToChat(block map[string]any) (map[string]any, error) {
+// anthropicImageToChat reports false when the image source names a transport
+// this gateway cannot express as a URL, which is the one case where dropping the
+// block is the only honest option.
+func anthropicImageToChat(block map[string]any) (map[string]any, bool) {
 	source, _ := block["source"].(map[string]any)
 	var url string
 	switch source["type"] {
@@ -466,59 +541,33 @@ func anthropicImageToChat(block map[string]any) (map[string]any, error) {
 	case "url":
 		url = fmt.Sprint(source["url"])
 	default:
-		return nil, anthropicUnsupportedError{Feature: "image source"}
+		return nil, false
 	}
-	return map[string]any{"type": "image_url", "image_url": map[string]any{"url": url}}, nil
+	return map[string]any{"type": "image_url", "image_url": map[string]any{"url": url}}, true
 }
 
-func openAIText(raw any) (string, error) {
+// openAIText flattens a system or developer message to plain text. A part shape
+// it does not recognise contributes whatever text it holds instead of failing,
+// because a system prompt is too important to drop over its packaging.
+func openAIText(raw any) string {
 	if text, ok := raw.(string); ok {
-		return text, nil
+		return text
 	}
 	parts, ok := raw.([]any)
 	if !ok {
-		return "", anthropicUnsupportedError{Feature: "system content"}
+		if raw == nil {
+			return ""
+		}
+		return fmt.Sprint(raw)
 	}
 	values := make([]string, 0, len(parts))
 	for _, rawPart := range parts {
 		part, _ := rawPart.(map[string]any)
-		if part["type"] != "text" && part["type"] != "input_text" {
-			return "", anthropicUnsupportedError{Feature: "system content"}
-		}
-		values = append(values, fmt.Sprint(part["text"]))
-	}
-	return strings.Join(values, "\n"), nil
-}
-
-func findAnthropicOnlyFeature(value any) string {
-	switch typed := value.(type) {
-	case map[string]any:
-		for key, child := range typed {
-			// Claude Code adds prompt-cache hints by default. OpenAI-compatible
-			// providers cannot honor them, but the request remains valid without them.
-			if key == "cache_control" {
-				continue
-			}
-			if key == "citations" || key == "file_id" {
-				return key
-			}
-			if key == "type" {
-				if kind, _ := child.(string); kind == "document" || kind == "search_result" {
-					return kind
-				}
-			}
-			if found := findAnthropicOnlyFeature(child); found != "" {
-				return found
-			}
-		}
-	case []any:
-		for _, child := range typed {
-			if found := findAnthropicOnlyFeature(child); found != "" {
-				return found
-			}
+		if text, ok := part["text"].(string); ok && text != "" {
+			values = append(values, text)
 		}
 	}
-	return ""
+	return strings.Join(values, "\n")
 }
 
 func translateAnthropicResponseToChat(body []byte, alias string) ([]byte, int64, int64, error) {

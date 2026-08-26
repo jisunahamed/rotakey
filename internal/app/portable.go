@@ -39,19 +39,24 @@ type ExportSettings struct {
 }
 
 type ExportProvider struct {
-	Name                string             `json:"name"`
-	Slug                string             `json:"slug"`
-	BaseURL             string             `json:"base_url"`
-	AuthHeader          string             `json:"auth_header"`
-	AuthScheme          string             `json:"auth_scheme"`
-	ExtraHeaders        map[string]string  `json:"extra_headers,omitempty"`
-	TimeoutSeconds      int                `json:"timeout_seconds"`
-	Enabled             bool               `json:"enabled"`
-	AllowPrivateNetwork bool               `json:"allow_private_network"`
-	APIFormat           string             `json:"api_format"`
-	AnthropicVersion    string             `json:"anthropic_version"`
-	Models              []ExportModel      `json:"models"`
-	Credentials         []ExportCredential `json:"credentials"`
+	Name                string            `json:"name"`
+	Slug                string            `json:"slug"`
+	BaseURL             string            `json:"base_url"`
+	AuthHeader          string            `json:"auth_header"`
+	AuthScheme          string            `json:"auth_scheme"`
+	ExtraHeaders        map[string]string `json:"extra_headers,omitempty"`
+	TimeoutSeconds      int               `json:"timeout_seconds"`
+	Enabled             bool              `json:"enabled"`
+	AllowPrivateNetwork bool              `json:"allow_private_network"`
+	APIFormat           string            `json:"api_format"`
+	AnthropicVersion    string            `json:"anthropic_version"`
+	// DefaultKeyBalanceUSD and BalanceSpentUSD travel with the provider so a
+	// restored account seeds new keys with the same figure and keeps the pooled
+	// spend that could not be charged to any one key.
+	DefaultKeyBalanceUSD *float64           `json:"default_key_balance_usd,omitempty"`
+	BalanceSpentUSD      float64            `json:"balance_spent_usd,omitempty"`
+	Models               []ExportModel      `json:"models"`
+	Credentials          []ExportCredential `json:"credentials"`
 }
 
 type ExportModel struct {
@@ -154,10 +159,12 @@ func exportProvider(provider Provider, aliasByModelID, secrets map[string]string
 		AuthHeader: provider.AuthHeader, AuthScheme: provider.AuthScheme,
 		ExtraHeaders: provider.ExtraHeaders, TimeoutSeconds: provider.TimeoutSeconds,
 		Enabled: provider.Enabled, AllowPrivateNetwork: provider.AllowPrivateNetwork,
-		APIFormat:        valueOr(provider.APIFormat, "openai"),
-		AnthropicVersion: valueOr(provider.AnthropicVersion, "2023-06-01"),
-		Models:           make([]ExportModel, 0, len(provider.Models)),
-		Credentials:      make([]ExportCredential, 0, len(provider.Credentials)),
+		APIFormat:            valueOr(provider.APIFormat, "openai"),
+		AnthropicVersion:     valueOr(provider.AnthropicVersion, "2023-06-01"),
+		DefaultKeyBalanceUSD: provider.DefaultKeyBalanceUSD,
+		BalanceSpentUSD:      provider.BalanceSpentUSD,
+		Models:               make([]ExportModel, 0, len(provider.Models)),
+		Credentials:          make([]ExportCredential, 0, len(provider.Credentials)),
 	}
 	for _, model := range provider.Models {
 		exported.Models = append(exported.Models, ExportModel{

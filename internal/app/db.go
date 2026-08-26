@@ -124,6 +124,8 @@ func scanProvider(row pgx.Row) (Provider, error) {
 		&provider.AllowPrivateNetwork,
 		&provider.APIFormat,
 		&provider.AnthropicVersion,
+		&provider.DefaultKeyBalanceUSD,
+		&provider.BalanceSpentUSD,
 		&provider.CreatedAt,
 		&provider.UpdatedAt,
 	)
@@ -139,6 +141,7 @@ func scanProvider(row pgx.Row) (Provider, error) {
 const providerColumns = `
 	id, name, slug, base_url, auth_header, auth_scheme, extra_headers,
 	timeout_seconds, enabled, allow_private_network, api_format, anthropic_version,
+	default_key_balance_usd::float8, balance_spent_usd::float8,
 	created_at, updated_at
 `
 
@@ -151,6 +154,7 @@ const routeColumns = `
 		p.id, p.name, p.slug, p.base_url, p.auth_header, p.auth_scheme,
 		p.extra_headers, p.timeout_seconds, p.enabled, p.allow_private_network,
 		p.api_format, p.anthropic_version,
+		p.default_key_balance_usd::float8, p.balance_spent_usd::float8,
 		p.created_at, p.updated_at
 `
 
@@ -204,6 +208,8 @@ func scanRoute(row pgx.Row) (routeRuntime, error) {
 		&route.Provider.AllowPrivateNetwork,
 		&route.Provider.APIFormat,
 		&route.Provider.AnthropicVersion,
+		&route.Provider.DefaultKeyBalanceUSD,
+		&route.Provider.BalanceSpentUSD,
 		&route.Provider.CreatedAt,
 		&route.Provider.UpdatedAt,
 	)
