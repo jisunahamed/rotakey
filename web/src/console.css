@@ -5,8 +5,20 @@
  * be made in two places and the two copies drifted apart; now there is one.
  */
 
+/* The console runs a narrower rail than the base shell's default, and its pages
+   open with a dense command bar rather than a marketing headline, so they sit
+   closer to the top. Both are retuned through the shell's own variables rather
+   than through the rules that read them: --rail-width kept the rail and the
+   workspace offset in agreement while this file hardcoded 214px into both and
+   left the token saying 232px, and --pane-pad-top is what the full-height
+   workbench frame subtracts, so overriding the padding directly made the frame
+   subtract a padding that was no longer applied. */
+.app-shell {
+  --rail-width: 214px;
+  --pane-pad-top: var(--space-9);
+}
+
 .sidebar {
-  width: 214px;
   padding: var(--space-6) var(--space-4) var(--space-5);
   border-right-color: var(--rail-edge);
 }
@@ -27,11 +39,19 @@
   border-radius: var(--radius-fitting);
 }
 
+/* The rail is denser than the base shell's default, but only while it is a rail.
+   Once it becomes a touch drawer the 44px floor from styles.css has to survive,
+   and a base-layer 40px here beat it at every width — the patch that put it back
+   started at 650px, leaving the whole 651-900px range, where the drawer is
+   already in use, on a 40px target. */
 .nav-item {
-  min-height: 40px;
   gap: var(--space-5);
   padding: 0 var(--space-4);
   font-size: var(--text-sm);
+}
+
+@media (min-width: 901px) {
+  .nav-item { min-height: 40px; }
 }
 
 /* The rail keeps its own dark surfaces in both themes, and the active item is
@@ -43,13 +63,15 @@
 }
 
 .workspace {
-  margin-left: 214px;
   background: var(--surface-canvas);
 }
 
+/* A wider measure and tighter side gutters than the base shell; the top padding
+   is retuned through --pane-pad-top above. */
 .main-pane {
   width: min(100%, 1600px);
-  padding: var(--space-9) clamp(var(--space-8), 3vw, var(--space-11)) var(--space-12);
+  padding-right: clamp(var(--space-8), 3vw, var(--space-11));
+  padding-left: clamp(var(--space-8), 3vw, var(--space-11));
 }
 
 .page-header {
@@ -72,16 +94,29 @@
    hairline, the panel radius, and the lightest elevation in the system. */
 .resource-layout,
 .access-key-panel,
-.settings-list,
-.security-baseline {
+.settings-list {
   border-color: var(--edge);
   border-radius: var(--radius-panel);
   box-shadow: var(--lift-panel);
 }
 
+/* The security note takes the same radius and elevation but keeps its 3px live
+   bar: that bar is its only border, and folding it into the group above painted
+   it the neutral hairline colour, which turned the one marker that says "this is
+   already secure" into a grey line. */
+.security-baseline {
+  border-radius: var(--radius-panel);
+  box-shadow: var(--lift-panel);
+}
+
+/* The console's own iris wash is lighter than the base shell's flat one so the
+   selected row reads against this file's cooler list background, but the bar stays
+   3px: the same width marks the active rail item and a failed key, and dropping it
+   to 2px here made "this is the row you are looking at" the one marker in the
+   console thinner than the rest. */
 .resource-item.is-selected {
   background: color-mix(in srgb, var(--iris) 11%, var(--surface-raised));
-  box-shadow: inset 2px 0 var(--iris);
+  box-shadow: inset 3px 0 var(--iris);
 }
 
 .dense-row,
@@ -677,12 +712,21 @@
 
 .manual-model-entry .field { margin: 0; }
 
+/* Both grids hold the same limit cells, so they share the frame — but not the
+   track count. The preview sits in a provider row and lays all seven limits out
+   in a line; the inspector has a narrow column and wraps them onto two rows of
+   four. Declaring seven here and overriding it further down left the shared
+   figure dead for the inspector, so an edit to it changed one grid and not the
+   other. Each grid now states its own tracks once. */
 .limit-preview,
 .inspector-limit-grid {
   display: grid;
-  grid-template-columns: repeat(7, minmax(55px, 1fr));
   min-width: 0;
   border: 1px solid var(--edge);
+}
+
+.limit-preview {
+  grid-template-columns: repeat(7, minmax(55px, 1fr));
 }
 
 .limit-cell {
@@ -1049,7 +1093,7 @@
   border-top: 1px solid var(--edge);
   color: var(--text-muted);
   font-size: var(--text-micro);
-  line-height: 1.55;
+  line-height: var(--leading-normal);
 }
 
 .inspector-key-list { border-top: 1px solid var(--edge); }
@@ -1371,10 +1415,19 @@
 .ide-inspector-titlebar > div:first-child { min-width: 0; }
 .resource-inspector-close { display: none; }
 
+/* The two filter strips are the same shape but not the same width: the log page's
+   narrower inspector leaves the list column less room, so its status select gets
+   118px against the model page's 126px. They used to be declared together and then
+   the log figure redeclared further down, so the shared value was dead and an edit
+   to it changed nothing on either page. */
 .model-filter,
 .log-filter {
   display: grid;
   grid-template-columns: 14px minmax(0, 1fr) 126px;
+}
+
+.log-filter {
+  grid-template-columns: 14px minmax(0, 1fr) 118px;
 }
 
 .model-filter label,
@@ -1598,24 +1651,6 @@
   grid-template-columns: minmax(0, 1.45fr) minmax(0, 0.78fr);
 }
 
-.log-filter {
-  display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) 118px;
-}
-
-.log-filter label { min-width: 0; }
-
-.log-filter select {
-  width: 100%;
-  min-height: 40px;
-  padding: var(--space-2) var(--space-4);
-  color: var(--text-strong);
-  background: var(--surface-sunken);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-fitting);
-  font-size: var(--text-mini);
-}
-
 /* 56px on the status column, not 48: "Status" is the longest thing that lands
    there and it needed 52 to render, so the header label was ellipsised in its
    own column. */
@@ -1762,8 +1797,31 @@
   line-height: var(--leading-snug);
 }
 
-.access-key-panel {
-  grid-template-columns: minmax(240px, 0.9fr) minmax(280px, 1.3fr);
+/* The console panel holds two blocks, not the three the base shell's track list
+   allows for, so above the reflow it drops the trailing auto column and below it
+   the two simply stack. Both have to stay inside width queries: as a base-layer
+   rule the two-column form also beat the 1280px reflow in styles.css, so the panel
+   held a 520px minimum across every width down to 900px and pushed the page into a
+   horizontal scroll on a laptop screen. Stacking here rather than leaning on that
+   reflow avoids its empty third track, which would otherwise leave a gap's worth of
+   dead space down the right edge. */
+@media (min-width: 1281px) {
+  .access-key-panel {
+    grid-template-columns: minmax(240px, 0.9fr) minmax(280px, 1.3fr);
+  }
+}
+
+@media (max-width: 1280px) {
+  .access-key-panel {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: var(--space-6);
+  }
+
+  .access-key-panel > div:nth-child(2) {
+    grid-column: auto;
+    grid-row: auto;
+  }
 }
 
 .console-actionbar {
@@ -1863,8 +1921,11 @@
   .log-workbench { grid-template-columns: 1fr; }
 
   /* Stacked into one column, the workbench is as tall as its content, so the
-     fixed-height frame and its 600px floor both come off. */
+     fixed-height frame and both floors come off — the page's and the workbench's
+     own. Leaving the 650px floor on meant a two-row list on a phone sat above
+     several hundred pixels of empty panel. */
   .resource-page { min-height: 0; }
+  .ide-resource-workbench { min-height: 0; }
   .provider-page .resource-list { display: block; overflow: visible; border-right: 0; }
   .provider-page .resource-item { width: 100%; min-width: 0; border-right: 0; border-bottom: 1px solid var(--edge); }
 
@@ -1914,10 +1975,8 @@
      icon-only and single-glyph controls: a 30px-wide square or a "1h" range button
      is still a miss at arm's length, so each one gets a min-width too. */
   .console-refresh { min-height: 44px; }
-  /* The rail's own 40px sits later in the cascade than the 44px floor in
-     styles.css, so the drawer's nav items have to be raised here or they stay
-     the one control on a phone that never reaches the target size. */
-  .nav-item { min-height: 44px; }
+  /* The rail's own denser height only applies from 901px up now, so the drawer
+     keeps the 44px floor from styles.css without needing to be raised here. */
   .console-icon {
     width: 44px;
     height: 44px;
@@ -2052,7 +2111,8 @@
   .inspector-header .button-row { flex-wrap: wrap; }
   .resource-disclosure__toggle { grid-template-columns: 18px minmax(0, 1fr); }
   .resource-disclosure__toggle code { grid-column: 2; }
-  .access-key-panel { grid-template-columns: minmax(0, 1fr); }
+  /* The panel already stacks from 1280px down, so only the overflow guard is
+     still needed here. */
   .access-key-panel > div { min-width: 0; }
 
   /* The manual model entry pairs a text field with an Add button on one line. Below

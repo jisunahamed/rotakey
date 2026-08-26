@@ -163,17 +163,21 @@ h3 {
    the workspace's left inset have to agree, and they are the only two things
    that care. Declaring it here keeps that pair in one place.
 
-   The same goes for the two heights below. --mobile-header-height is what the
-   sticky header occupies once the rail folds away, and the drawer, the inspector
-   drawers and the chrome total all have to agree with it or they overlap by a few
-   pixels. --shell-chrome is everything a full-height workbench page has to fit
-   underneath: the main pane's own top and bottom padding, plus the mobile header
-   where one exists. The workbench used to subtract a hardcoded 106px, which was a
-   guess that no longer matched any of the paddings it was standing in for. */
+   The same goes for the heights below. --mobile-header-height is what the sticky
+   header occupies once the rail folds away, and the drawer, the inspector drawers
+   and the chrome total all have to agree with it or they overlap by a few pixels.
+   --shell-chrome is what a full-height workbench page has to fit underneath: the
+   main pane's own top and bottom padding. It is derived from the same two
+   variables .main-pane reads rather than restating their values, because it had
+   already drifted once — it named the console's overridden top padding while the
+   rule beside it declared the base shell's, so the two disagreed by 16px and only
+   looked right because the console override happened to win. */
 .app-shell {
   --rail-width: 232px;
   --mobile-header-height: 56px;
-  --shell-chrome: calc(var(--space-9) + var(--space-12));
+  --pane-pad-top: var(--space-11);
+  --pane-pad-bottom: var(--space-12);
+  --shell-chrome: calc(var(--pane-pad-top) + var(--pane-pad-bottom));
 
   min-height: 100dvh;
 }
@@ -376,7 +380,7 @@ h3 {
 .main-pane {
   width: min(100%, 1460px);
   margin: 0 auto;
-  padding: var(--space-11) clamp(var(--space-8), 4vw, var(--space-12)) var(--space-12);
+  padding: var(--pane-pad-top) clamp(var(--space-8), 4vw, var(--space-12)) var(--pane-pad-bottom);
 }
 
 .desktop-theme {
@@ -2464,6 +2468,23 @@ fieldset legend {
     grid-column: auto;
     grid-row: auto;
   }
+
+  /* Four tracks with three gaps take about 269px of a 375px screen's 325px of
+     measure, so the flexible column the comment above the rule describes — the one
+     holding the upstream error — was left roughly 56px, about six characters, and
+     every error wrapped into a ragged tower. The attempt number keeps its column,
+     the key label and the duration share the first line, and the outcome takes the
+     full measure below them. */
+  .attempt-list > div {
+    grid-template-columns: 20px minmax(0, 1fr) auto;
+    align-items: start;
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .attempt-list > div > span { grid-column: 1; grid-row: 1; }
+  .attempt-list > div > strong { grid-column: 2; grid-row: 1; }
+  .attempt-list > div > small { grid-column: 3; grid-row: 1; }
+  .attempt-list > div > code { grid-column: 2 / -1; grid-row: 2; }
 
   .log-detail-grid {
     grid-template-columns: 1fr 1fr;

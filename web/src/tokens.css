@@ -188,61 +188,12 @@
   }
 }
 
-/* The console's own stylesheets were written against an older set of names.
- * Aliasing them here means one palette drives everything, old rules included,
- * instead of two colour systems drifting apart.
+/* The console's older colour names — --canvas, --ink, --blue, --sidebar-*,
+ * --console-* and the rest — were aliased here during the palette rewrite. Every
+ * stylesheet and component has since moved onto the real token names, so the
+ * aliases were referenced nowhere while still needing to be maintained in two
+ * theme blocks that had already drifted apart: the system-dark copy was missing
+ * four of them. An alias nobody reads cannot be verified, so the next rule to use
+ * one would have picked up a light value under system dark. The names are gone;
+ * use --surface-canvas, --text-strong, --iris, --rail-* and --edge-* directly.
  */
-:root,
-:root[data-theme="dark"] {
-  --canvas: var(--surface-canvas);
-  --surface: var(--surface-raised);
-  --surface-2: var(--surface-sunken);
-  --ink: var(--text-strong);
-  --muted: var(--text-muted);
-  --line: var(--edge);
-  --line-strong: var(--edge-strong);
-  --blue: var(--iris);
-  --blue-soft: var(--iris-wash);
-  --green: var(--live);
-  --green-soft: var(--live-wash);
-  --amber: var(--hold);
-  --amber-soft: var(--hold-wash);
-  --red: var(--fault);
-  --red-soft: var(--fault-wash);
-  --shadow: var(--lift-float);
-  --sidebar: var(--rail);
-  --sidebar-ink: var(--rail-text);
-  --sidebar-muted: var(--rail-muted);
-  --console-canvas: var(--surface-canvas);
-  --console-panel: var(--surface-raised);
-  --console-code: var(--text-strong);
-  --console-line: var(--edge);
-  --console-line-strong: var(--edge-strong);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root[data-theme="system"] {
-    --canvas: var(--surface-canvas);
-    --surface: var(--surface-raised);
-    --surface-2: var(--surface-sunken);
-    --ink: var(--text-strong);
-    --muted: var(--text-muted);
-    --line: var(--edge);
-    --line-strong: var(--edge-strong);
-    --blue: var(--iris);
-    --blue-soft: var(--iris-wash);
-    --green: var(--live);
-    --green-soft: var(--live-wash);
-    --amber: var(--hold);
-    --amber-soft: var(--hold-wash);
-    --red: var(--fault);
-    --red-soft: var(--fault-wash);
-    --shadow: var(--lift-float);
-    --sidebar: var(--rail);
-    --console-canvas: var(--surface-canvas);
-    --console-panel: var(--surface-raised);
-    --console-code: var(--text-strong);
-    --console-line: var(--edge);
-    --console-line-strong: var(--edge-strong);
-  }
-}
