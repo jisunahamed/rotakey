@@ -68,8 +68,8 @@ const navItems: Array<{ id: Page; label: string; icon: typeof Activity }> = [
   { id: "providers", label: "Providers", icon: Database },
   { id: "models", label: "Model routes", icon: Route },
   { id: "logs", label: "Request logs", icon: FileClock },
-  { id: "access", label: "Access key", icon: KeyRound },
-  { id: "settings", label: "System", icon: SettingsIcon }
+  { id: "access", label: "Gateway key", icon: KeyRound },
+  { id: "settings", label: "Settings", icon: SettingsIcon }
 ];
 
 const pageFromLocation = (): Page => {
@@ -464,7 +464,7 @@ function LoadingScreen() {
         <div className="boot-line">
           <span />
         </div>
-        <p>Checking control plane</p>
+        <p>Starting Rotakey</p>
       </div>
     </div>
   );
@@ -493,7 +493,7 @@ function SetupScreen({
       });
       onComplete(username, result.gateway_key, result.csrf_token);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Setup failed.");
+      setError(caught instanceof Error ? caught.message : "The gateway did not answer. Check that it is running, then try again.");
     } finally {
       setBusy(false);
     }
@@ -504,10 +504,10 @@ function SetupScreen({
       <section className="auth-panel auth-panel--setup">
         <div className="auth-panel__intro">
           <p className="eyebrow">First run · owner setup</p>
-          <h1>One gateway.<br />Every configured model.</h1>
+          <h1>Set up Rotakey.</h1>
           <p>
-            Create the only admin account, then save the generated gateway key. Providers remain
-            private behind a single model-wise API.
+            Create the only admin account, then save the generated gateway key. Providers stay
+            private behind one API.
           </p>
           <div className="setup-rail" aria-hidden="true">
             <span className="is-active">Owner</span>
@@ -554,7 +554,7 @@ function SetupScreen({
             />
           </label>
           <Button type="submit" disabled={busy}>
-            {busy ? "Securing control plane…" : "Create owner and gateway key"}
+            {busy ? "Creating owner and gateway key…" : "Create owner and gateway key"}
           </Button>
         </form>
       </section>
@@ -583,7 +583,7 @@ function LoginScreen({
       });
       onLogin(username, result.csrf_token);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Sign in failed.");
+      setError(caught instanceof Error ? caught.message : "The gateway did not answer. Try signing in again.");
     } finally {
       setBusy(false);
     }
@@ -599,8 +599,8 @@ function LoginScreen({
         <form className="auth-form" onSubmit={submit}>
           <div>
             <p className="eyebrow">Owner access</p>
-            <h1>Inspect the next route.</h1>
-            <p>Sign in to configure providers, credentials, models and limits.</p>
+            <h1>Sign in to Rotakey.</h1>
+            <p>Configure providers, API keys, model routes and limits.</p>
           </div>
           {error && <InlineNotice tone="danger">{error}</InlineNotice>}
           <label className="field">
@@ -707,7 +707,7 @@ function OverviewPage({
       setExpandedProviders((current) => new Set([...current].filter((id) => result.providers.some((provider) => provider.id === id))));
     } catch (caught) {
       if (mine !== generation.current) return;
-      setError(caught instanceof Error ? caught.message : "Overview could not be loaded.");
+      setError(caught instanceof Error ? caught.message : "The gateway did not answer. It may still be starting up.");
     } finally {
       if (mine === generation.current) setRefreshing(false);
     }
@@ -739,7 +739,25 @@ function OverviewPage({
   const selectedCredential = selectedRoute?.segments.find((segment) => segment.id === selected?.id);
   return (
     <>
-      {error && <InlineNotice tone="danger">{error}</InlineNotice>}
+      {/* A first load that fails leaves nothing to show, and the command bar that
+          holds Refresh lives inside the overview block below — so on that path the
+          page used to be one sentence with no control on it at all. The other three
+          list pages answer a dead first load with an empty state that carries the
+          retry; this one now does the same, and keeps the inline notice for the case
+          where a refresh failed but the last good numbers are still on screen. */}
+      {!overview && error ? (
+        <>
+          <h1 className="sr-only">Gateway overview</h1>
+          <EmptyState
+            level={2}
+            title="Overview could not be loaded"
+            description={error}
+            action={<Button onClick={() => void load()}><RefreshCw size={14} aria-hidden="true" /> Try again</Button>}
+          />
+        </>
+      ) : error ? (
+        <InlineNotice tone="danger">{error}</InlineNotice>
+      ) : null}
       {overview && (
         <div className="ops-console">
           {/* Every other page opens with a PageHeader h1. This one opens straight
@@ -760,7 +778,7 @@ function OverviewPage({
                 onClick={() => {
                   void copyText(overview.base_url || `${location.origin}/v1`)
                     .then(() => notify("Base URL copied."))
-                    .catch(() => notify("Clipboard access was blocked.", "danger"));
+                    .catch(() => notify(clipboardBlocked, "danger"));
                 }}
               ><Clipboard size={14} aria-hidden="true" /><span>Copy</span></button>
             </div>
@@ -894,7 +912,7 @@ function OverviewPage({
                     { method: "POST", json: { credential_id: credentialID } }
                   );
                   notify(
-                    inspection.valid ? `API key is valid · ${inspection.models.length} models visible.` : inspection.warning || "API key validation failed.",
+                    inspection.valid ? `API key is valid · ${inspection.models.length} models visible.` : inspection.warning || keyCheckFailed,
                     inspection.valid ? "success" : "danger"
                   );
                   await load();
@@ -1016,7 +1034,7 @@ function ModelUsageRanking({ routes, range }: { routes: Overview["routes"]; rang
 function AttentionQueue({ alerts, onSelect }: { alerts: Overview["alerts"]; onSelect: (alert: Overview["alerts"][number]) => void }) {
   return (
     <section className="console-panel attention-panel">
-      <ConsolePanelHeader eyebrow="Attention queue" title={alerts.length ? `${alerts.length} signals` : "All clear"} />
+      <ConsolePanelHeader eyebrow="Attention queue" title={alerts.length ? `${alerts.length} need attention` : "All clear"} />
       {alerts.length === 0 ? (
         <div className="all-clear"><Check size={16} aria-hidden="true" /><span><strong>No intervention needed</strong><small>Routes and API keys are ready.</small></span></div>
       ) : (
@@ -1059,7 +1077,7 @@ function ProviderCapacityGroup({
         <button className="provider-debug-toggle" onClick={onToggle} aria-expanded={expanded} aria-controls={`provider-models-${provider.id}`}>
           <ChevronDown size={15} aria-hidden="true" />
           <StatusDot state={!provider.enabled ? "disabled" : provider.keys_ready ? "healthy" : "exhausted"} />
-          <span><strong title={provider.name}>{provider.name}</strong><small title={`${provider.models_ready}/${provider.models_total} models ready · ${provider.keys_ready}/${provider.keys_total} keys ready${provider.credit.tracked_keys > 0 ? ` · ${formatUSD(provider.credit.remaining_usd)} balance left` : ""}`}>{provider.models_ready}/{provider.models_total} models ready · {provider.keys_ready}/{provider.keys_total} keys ready{provider.credit.tracked_keys > 0 ? ` · ${formatUSD(provider.credit.remaining_usd)} balance left` : ""}</small></span>
+          <span><strong title={provider.name}>{provider.name}</strong><small title={`${provider.models_ready}/${provider.models_total} routes ready · ${provider.keys_ready}/${provider.keys_total} keys ready${provider.credit.tracked_keys > 0 ? ` · ${formatUSD(provider.credit.remaining_usd)} balance left` : ""}`}>{provider.models_ready}/{provider.models_total} routes ready · {provider.keys_ready}/{provider.keys_total} keys ready{provider.credit.tracked_keys > 0 ? ` · ${formatUSD(provider.credit.remaining_usd)} balance left` : ""}</small></span>
         </button>
         <div className="limit-preview">
           {capacityDimensions.map((dimension) => <LimitCell key={dimension} dimension={dimension} limit={provider.capacity[dimension]} />)}
@@ -1073,11 +1091,11 @@ function ProviderCapacityGroup({
       <div className="route-debug-list" id={`provider-models-${provider.id}`} hidden={!expanded}>
         {expanded && <>
           <div className="route-debug-columns" aria-hidden="true">
-            <span>Public model</span><span>Traffic</span><span>Keys</span><span>Next key</span><span>Model override</span><span />
+            <span>Public alias</span><span>Traffic</span><span>Keys</span><span>Next key</span><span>Model override</span><span />
           </div>
           {routes.length ? routes.map((route) => (
             <RouteDebugRow key={route.id} route={route} selected={selected} onSelect={onSelect} />
-          )) : <p className="provider-model-empty">No model routes configured for this provider.</p>}
+          )) : <p className="provider-model-empty">No routes yet. Add one on the Model routes page.</p>}
         </>}
       </div>
     </section>
@@ -1199,12 +1217,12 @@ function OverviewInspector({
   // return so the hook order does not change with the selection.
   const drawer = useDrawerOverlay({ open, active: useMediaQuery("(max-width: 1050px)"), onClose });
   if (!provider && !route && !credential) {
-    return <aside className={`overview-inspector is-empty${open ? " is-open" : ""}`}><CircleGauge size={20} aria-hidden="true" /><strong>Select a route signal</strong><p>Inspect the next key, limiting bucket and reset without leaving Overview.</p></aside>;
+    return <aside className={`overview-inspector is-empty${open ? " is-open" : ""}`}><CircleGauge size={20} aria-hidden="true" /><strong>Select a provider, route or key</strong><p>Inspect the next key, limiting bucket and reset without leaving Overview.</p></aside>;
   }
   return (
     <aside className={`overview-inspector${open ? " is-open" : ""}`} ref={drawer as React.Ref<HTMLElement>} tabIndex={-1}>
       <header>
-        <div><span>{credential ? "API key" : route ? "Public model" : "Provider"}</span><h2>{credential?.label || route?.alias || provider?.name}</h2></div>
+        <div><span>{credential ? "API key" : route ? "Model route" : "Provider"}</span><h2>{credential?.label || route?.alias || provider?.name}</h2></div>
         <button className="console-icon inspector-close" onClick={onClose} aria-label="Close inspector"><X size={15} aria-hidden="true" /></button>
       </header>
       {route && (
@@ -1223,14 +1241,14 @@ function OverviewInspector({
           {credential.validation_error && <InlineNotice tone="danger">{credential.validation_error}</InlineNotice>}
           {credential.credit?.exhausted && (
             <InlineNotice tone="danger">
-              This key has nothing left, so the router skips it. Raise the balance per key on the provider page to bring it back.
+              This key is out of balance, so the router skips it. Raise the balance per key on the provider page to bring it back.
             </InlineNotice>
           )}
           <div className="inspector-definition">
             <Definition label="Status" value={statusLabel(credential.status)} />
-            <Definition label="Secret" value={`•••• ${credential.secret_suffix}`} />
-            <Definition label="Routing role" value={[credential.primary ? "primary" : "", credential.cursor ? "next" : ""].filter(Boolean).join(" · ") || "fallback"} />
-            <Definition label="Validated" value={credential.last_validated_at ? formatRelativeTime(credential.last_validated_at) : "not recorded"} />
+            <Definition label="Key ending" value={`•••• ${credential.secret_suffix}`} />
+            <Definition label="Routing role" value={[credential.primary ? "Primary" : "", credential.cursor ? "next" : ""].filter(Boolean).join(" · ") || "fallback"} />
+            <Definition label="Last checked" value={credential.last_validated_at ? formatRelativeTime(credential.last_validated_at) : "not recorded"} />
             <Definition
               label="Balance left"
               value={credential.credit ? formatUSD(credential.credit.remaining_usd) : "not tracked"}
@@ -1254,7 +1272,7 @@ function OverviewInspector({
             <Definition label="Routes ready" value={`${provider.models_ready}/${provider.models_total}`} />
             <Definition label="Keys ready" value={`${provider.keys_ready}/${provider.keys_total}`} />
             <Definition label="Key warnings" value={String(provider.keys_warning)} />
-            <Definition label="State" value={provider.enabled ? "enabled" : "disabled"} />
+            <Definition label="Provider" value={provider.enabled ? "On" : "Off"} />
             <Definition
               label="Balance per key"
               value={provider.default_key_balance_usd == null ? "not tracked" : formatUSD(provider.default_key_balance_usd)}
@@ -1297,10 +1315,10 @@ function OverviewInspector({
           <HeadroomReadout label="Next request bucket" headroom={route.next_request_headroom} />
           <HeadroomReadout label="Next token bucket" headroom={route.next_token_headroom} />
           <div className="inspector-key-list">
-            <span>Credential path</span>
+            <span>Key order</span>
             {route.segments.map((segment) => (
               <button key={segment.id} onClick={() => onSelectCredential(segment.id)} aria-label={`${segment.label}, ${segment.cursor ? "serves the next request" : statusLabel(segment.status)}${segmentTrafficLabel(segment) ? `, ${segmentTrafficLabel(segment)}` : ""}`}>
-                <StatusDot state={segment.status} /><strong title={segment.label}>{segment.label}</strong><small title={segmentTrafficLabel(segment)}>{segmentTrafficLabel(segment) || (segment.cursor ? "next" : segment.status)}</small><ChevronRight size={13} aria-hidden="true" />
+                <StatusDot state={segment.status} /><strong title={segment.label}>{segment.label}</strong><small title={segmentTrafficLabel(segment)}>{segmentTrafficLabel(segment) || (segment.cursor ? "next" : statusLabel(segment.status))}</small><ChevronRight size={13} aria-hidden="true" />
               </button>
             ))}
           </div>
@@ -1311,12 +1329,12 @@ function OverviewInspector({
           <Button variant="quiet" disabled={busy} onClick={() => {
             setBusy(true);
             void onRecheck(credential.id).finally(() => setBusy(false));
-          }}><RefreshCw size={14} aria-hidden="true" /> {busy ? "Checking…" : "Re-check key"}</Button>
+          }}><RefreshCw size={14} aria-hidden="true" /> {busy ? "Checking…" : "Check key"}</Button>
         ) : provider ? (
           <Button variant="quiet" disabled={busy} onClick={() => {
             setBusy(true);
             void onTest().finally(() => setBusy(false));
-          }}><Activity size={14} aria-hidden="true" /> {busy ? "Testing…" : "Test provider"}</Button>
+          }}><Activity size={14} aria-hidden="true" /> {busy ? "Checking…" : "Check every key"}</Button>
         ) : null}
         {provider && <Button variant="quiet" onClick={() => navigate("providers", { provider: provider.id })}>Open provider</Button>}
         {route && <Button variant="quiet" onClick={() => navigate("providers", { provider: route.provider_id })}>Manage model limits</Button>}
@@ -1337,6 +1355,13 @@ function Definition({ label, value, mono = false }: { label: string; value: stri
   return <div><span>{label}</span><strong className={mono ? "is-mono" : ""} title={value}>{value}</strong></div>;
 }
 
+/** A limit is either the provider's shared key limit or one set for a single model.
+ *  The enum reaching the screen said "shared" and "model" with no noun, which reads
+ *  as a category rather than as the limit doing the limiting. */
+function limitScopeLabel(scope: string | undefined) {
+  return scope === "model" ? "model limit" : "shared key limit";
+}
+
 function HeadroomReadout({ label, headroom }: { label: string; headroom?: Overview["routes"][number]["next_request_headroom"] }) {
   if (!headroom) {
     return <div className="headroom-readout is-unlimited"><span>{label}</span><strong>Unlimited</strong><small>No rate limit is set on this path.</small></div>;
@@ -1344,7 +1369,7 @@ function HeadroomReadout({ label, headroom }: { label: string; headroom?: Overvi
   const ratio = headroom.limit ? Math.max(0, Math.min(1, headroom.remaining / headroom.limit)) : 1;
   return (
     <div className={`headroom-readout ${ratio <= 0 ? "is-critical" : ratio <= 0.2 ? "is-warning" : ""}`}>
-      <span>{label} · {headroom.scope}</span>
+      <span>{label} · {limitScopeLabel(headroom.scope)}</span>
       <strong title={`${headroom.remaining.toLocaleString()} / ${headroom.limit.toLocaleString()} ${headroom.dimension.toUpperCase()}`}>{formatCompact(headroom.remaining)} / {formatCompact(headroom.limit)} {headroom.dimension}</strong>
       <div><i style={{ width: `${ratio * 100}%` }} /></div>
       <small>{headroom.reset_at ? <>Resets <LiveResetTime value={headroom.reset_at} /></> : "Per request limit"}</small>
@@ -1547,7 +1572,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
           level={2}
           title="Connect the first upstream"
           description="You will define its base URL, model aliases, API keys and limits before enabling traffic."
-          action={<Button onClick={() => setPanel({ type: "wizard" })}><Plus size={15} aria-hidden="true" /> Start provider setup</Button>}
+          action={<Button onClick={() => setPanel({ type: "wizard" })}><Plus size={15} aria-hidden="true" /> Add provider</Button>}
         />
       ) : (
         <div className="resource-layout">
@@ -1564,7 +1589,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                   onClick={() => { setSelectedID(provider.id); setProviderInspectorOpen(true); }}
                 >
                   <StatusDot state={!provider.enabled ? "disabled" : healthy ? "healthy" : "exhausted"} />
-                  <span><strong title={provider.name}>{provider.name} <em className={`protocol-badge is-${provider.api_format}`}>{provider.api_format}</em></strong><small title={provider.base_url}>{provider.base_url}</small></span>
+                  <span><strong title={provider.name}>{provider.name} <em className={`protocol-badge is-${provider.api_format}`}>{provider.api_format === "anthropic" ? "Anthropic" : "OpenAI"}</em></strong><small title={provider.base_url}>{provider.base_url}</small></span>
                   <span className="resource-item__count">{provider.models.length} model{provider.models.length === 1 ? "" : "s"}</span>
                   <ChevronRight size={15} aria-hidden="true" />
                 </button>
@@ -1583,8 +1608,8 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                   {(() => {
                     const flagged = selected.credentials.filter((credential) => credential.validation_error).length;
                     return flagged === 1
-                      ? "1 API key needs attention. Open the marked key to replace or re-check it."
-                      : `${flagged} API keys need attention. Open each marked key to replace or re-check it.`;
+                      ? "1 API key needs attention. Open the marked key to replace it or check it again."
+                      : `${flagged} API keys need attention. Open each marked key to replace it or check it again.`;
                   })()}
                 </InlineNotice>
               )}
@@ -1604,7 +1629,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                       setTesting(true);
                       void testProvider(selected, notify).finally(() => setTesting(false));
                     }}
-                  ><Activity size={15} aria-hidden="true" /> {testing ? "Testing…" : "Test"}</Button>
+                  ><Activity size={15} aria-hidden="true" /> {testing ? "Checking…" : "Check every key"}</Button>
                   <Button variant="quiet" onClick={() => setPanel({ type: "provider", providerID: selected.id })}>Edit</Button>
                   <Button
                     variant="danger"
@@ -1641,12 +1666,12 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                 action={(
                   <div className="button-row">
                     <Button variant="quiet" onClick={() => setPanel({ type: "import", providerID: selected.id })}><RefreshCw size={14} aria-hidden="true" /> Load models</Button>
-                    <Button variant="quiet" onClick={() => setPanel({ type: "model", providerID: selected.id })}><Plus size={14} aria-hidden="true" /> Manual</Button>
+                    <Button variant="quiet" onClick={() => setPanel({ type: "model", providerID: selected.id })}><Plus size={14} aria-hidden="true" /> Add route by hand</Button>
                   </div>
                 )}
               >
                 {selected.models.length === 0 ? (
-                  <p className="inline-empty">No route can receive traffic yet.</p>
+                  <p className="inline-empty">No routes yet. Load models, or add one route by hand.</p>
                 ) : (
                   <div className="dense-table">
                     {selected.models.map((model) => (
@@ -1678,7 +1703,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                 action={<Button variant="quiet" onClick={() => setPanel({ type: "credential", providerID: selected.id })}><Plus size={14} aria-hidden="true" /> Add API key</Button>}
               >
                 {selected.credentials.length === 0 ? (
-                  <p className="inline-empty">No key is available for this provider.</p>
+                  <p className="inline-empty">No API keys yet. Add one to start routing traffic here.</p>
                 ) : (
                   <div className="dense-table">
                     {selected.credentials.map((credential) => (
@@ -1691,10 +1716,10 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                         <StatusDot state={credential.status} />
                         <span>
                           <strong title={credential.label}>{credential.label}</strong>
-                          <small title={credential.validation_error ? credential.validation_error : `${credential.is_primary ? "PRIMARY · " : ""}•••• ${credential.secret_suffix}${credentialBalanceNote(credential)}`}>
+                          <small title={credential.validation_error ? credential.validation_error : `${credential.is_primary ? "Primary · " : ""}•••• ${credential.secret_suffix}${credentialBalanceNote(credential)}`}>
                             {credential.validation_error
                               ? credential.validation_error
-                              : `${credential.is_primary ? "PRIMARY · " : ""}•••• ${credential.secret_suffix}${credentialBalanceNote(credential)}`}
+                              : `${credential.is_primary ? "Primary · " : ""}•••• ${credential.secret_suffix}${credentialBalanceNote(credential)}`}
                           </small>
                         </span>
                         <LimitSummary policy={credential.limits} />
@@ -1776,8 +1801,8 @@ function ProviderCreditStat({ provider }: { provider: Provider }) {
   ) - safeNumber(provider.balance_spent_usd));
   const exhausted = tracked.filter((credential) => (credential.balance_usd ?? 0) - credential.balance_spent_usd <= 0).length;
   return (
-    <span title={exhausted ? `${exhausted} of ${tracked.length} tracked keys have nothing left and are skipped.` : `Across ${tracked.length} tracked key${tracked.length === 1 ? "" : "s"}.`}>
-      <strong>{formatUSD(remaining)}</strong> balance left{exhausted ? ` · ${exhausted} key${exhausted === 1 ? "" : "s"} empty` : ""}
+    <span title={exhausted ? `${exhausted} of ${tracked.length} tracked keys are out of balance and are skipped.` : `Across ${tracked.length} tracked key${tracked.length === 1 ? "" : "s"}.`}>
+      <strong>{formatUSD(remaining)}</strong> balance left{exhausted ? ` · ${exhausted} key${exhausted === 1 ? "" : "s"} out of balance` : ""}
     </span>
   );
 }
@@ -1802,7 +1827,7 @@ function ProviderCapacityStrip({ provider }: { provider: Provider }) {
     <section className="pool-capacity" aria-label={`${provider.name} API key pool capacity`}>
       <header>
         <div>
-          <p className="eyebrow">Pool arithmetic</p>
+          <p className="eyebrow">Combined key limits</p>
           <h3>Total provider capacity</h3>
         </div>
         <span>{capacity?.ready_keys ?? 0}/{capacity?.total_keys ?? provider.credentials.length} keys ready</span>
@@ -1860,12 +1885,12 @@ function ProviderPowerButton({
       // as the notification rather than folded into a success line.
       if (result.warnings.length > 0) {
         result.warnings.forEach((warning) => notify(warning, "danger"));
-        onDone(`${provider.name} is off.`);
+        onDone(`${provider.name} turned off.`);
         return;
       }
       onDone(turningOff
-        ? `${provider.name} is off. Its routes are excluded from routing.`
-        : `${provider.name} is on and eligible for routing again.`);
+        ? `${provider.name} turned off. Its routes stop receiving traffic.`
+        : `${provider.name} turned on.`);
     } catch (caught) {
       notify(errorMessage(caught), "danger");
     } finally {
@@ -1896,7 +1921,7 @@ async function testProvider(provider: Pick<Provider, "id">, notify: (message: st
   try {
     const result = await api<{ ok: boolean; valid: number; total: number }>(`/api/admin/providers/${provider.id}/test`, { method: "POST" });
     notify(
-      result.ok ? `${result.valid}/${result.total} API keys are valid.` : `${result.total - result.valid} of ${result.total} API keys need attention.`,
+      result.ok ? `${result.valid} of ${result.total} API keys passed the check.` : `${result.total - result.valid} of ${result.total} API keys need attention.`,
       result.ok ? "success" : "danger"
     );
   } catch (caught) {
@@ -1974,7 +1999,7 @@ function ProviderWizard({ onClose, onComplete }: { onClose: () => void; onComple
       if (invalid >= 0) {
         setUnverifiedCredentialLabels(credentials.filter((_, index) => !inspections[index].valid).map((credential) => credential.label));
         setCanContinueWithoutValidation(true);
-        setError(`${credentials[invalid].label}: ${inspections[invalid].warning || "API key validation failed."}`);
+        setError(`${credentials[invalid].label}: ${inspections[invalid].warning || keyCheckFailed}`);
         return;
       }
       setStep(2);
@@ -2077,7 +2102,7 @@ function ProviderWizard({ onClose, onComplete }: { onClose: () => void; onComple
       {step === 3 && (
         <div className="review-list">
           <div><span>Provider</span><strong>{provider.name || "Missing"}</strong><code>{provider.base_url || "Missing base URL"}</code></div>
-          <div><span>Public models</span><strong>{Object.keys(selectedModels).length}</strong><small>{discoveredModels.length} discovered from the provider.</small></div>
+          <div><span>Model routes</span><strong>{Object.keys(selectedModels).length}</strong><small>{discoveredModels.length} discovered from the provider.</small></div>
           <div><span>API keys</span><strong>{credentialInputs(credentialDrafts, limits).length}</strong><small>{unverifiedCredentialLabels.length ? `${unverifiedCredentialLabels.length} saved without validation, then encrypted.` : "Validated again on save, then encrypted."}</small></div>
         </div>
       )}
@@ -2100,9 +2125,13 @@ function ProviderWizard({ onClose, onComplete }: { onClose: () => void; onComple
               return;
             }
             setStep(step + 1);
-          }}>{busy ? "Checking API keys…" : step === 1 ? "Check keys & load models" : "Continue"}</Button>
+          }}>{busy ? "Checking API keys…" : step === 1 ? "Check keys and load models" : "Continue"}</Button>
         ) : (
-          <Button onClick={() => void finish()} disabled={busy}>{busy ? "Creating provider…" : "Create provider"}</Button>
+          /* The action that opens this wizard is called "Add provider" in both
+             places it appears, so the button that completes it says the same thing.
+             It used to say "Create provider", which reads as a different action from
+             the one the operator started. */
+          <Button onClick={() => void finish()} disabled={busy}>{busy ? "Adding provider…" : "Add provider"}</Button>
         )}
       </div>
     </Sheet>
@@ -2234,9 +2263,9 @@ function ProviderFields({ value, onChange, existingKeys }: { value: ProviderDraf
       <fieldset>
         <legend>Balance per API key</legend>
         <p className="fieldset-note">
-          Type the credit sitting on one key of this account and every key added here starts with that figure.
-          Rotakey subtracts the estimated cost of each request it serves and shows what is left, so you never
-          type a balance into twenty keys by hand. Leave it blank to not track balances on this provider.
+          Type the credit sitting on one key of this account and every key added here starts with that
+          figure. Rotakey subtracts the estimated cost of each request it serves and shows what is left.
+          Leave it blank to not track balances on this provider.
         </p>
         <label className="field">
           <span>Balance per key <small>USD</small></span>
@@ -2260,7 +2289,7 @@ function ProviderFields({ value, onChange, existingKeys }: { value: ProviderDraf
           />
         )}
       </fieldset>
-      <Toggle checked={value.enabled} onChange={(enabled) => onChange({ ...value, enabled })} label="Enable provider" description="Disabled providers are never considered for routing." />
+      <Toggle checked={value.enabled} onChange={(enabled) => onChange({ ...value, enabled })} label="Provider is on" description="A provider that is off is never considered for routing." />
       <Toggle checked={value.allow_private_network} onChange={(allow_private_network) => onChange({ ...value, allow_private_network })} label="Allow private-network target" description="Also permits HTTP. Enable only for a provider you operate on this VPS or LAN." />
     </div>
   );
@@ -2311,7 +2340,7 @@ type ModelDraft = Omit<ModelRoute, "id" | "provider_id" | "created_at" | "update
 function ModelFields({ value, onChange }: { value: ModelDraft; onChange: (value: ModelDraft) => void }) {
   return (
     <div className="form-stack">
-      <label className="field"><span>Public model alias <small>Applications put this in the model field</small></span><input required placeholder="groq/llama-3.3-70b" value={value.public_alias} onChange={(e) => onChange({ ...value, public_alias: e.target.value })} /></label>
+      <label className="field"><span>Public alias <small>Applications put this in the model field</small></span><input required placeholder="groq/llama-3.3-70b" value={value.public_alias} onChange={(e) => onChange({ ...value, public_alias: e.target.value })} /></label>
       <label className="field"><span>Upstream model ID</span><input required placeholder="llama-3.3-70b-versatile" value={value.upstream_model} onChange={(e) => onChange({ ...value, upstream_model: e.target.value })} /></label>
       <div className="field-pair">
         <label className="field"><span>Default max output tokens</span><input type="number" min={1} value={value.default_max_output_tokens} onChange={(e) => onChange({ ...value, default_max_output_tokens: Number(e.target.value) })} /></label>
@@ -2392,7 +2421,7 @@ function ModelForm({ provider, model, onClose, onComplete, notify }: { provider:
           .then(() => onComplete(`Route ${model.public_alias} deleted.`))
           .catch((caught) => notify(errorMessage(caught), "danger"))
           .finally(() => setDeleting(false));
-      }}><Trash2 size={14} aria-hidden="true" /> {deleting ? "Deleting…" : "Delete model"}</Button> : undefined}
+      }}><Trash2 size={14} aria-hidden="true" /> {deleting ? "Deleting…" : "Delete route"}</Button> : undefined}
     >
       <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
         <ModelFields value={draft} onChange={setDraft} />
@@ -2599,18 +2628,18 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
       <Toggle checked={enabled} onChange={setEnabled} label="Enable API key" description="Re-enabling also clears quarantine and circuit-breaker state." />
       <div className="validation-action">
         <div>
-          <strong>Validate key and discover models</strong>
+          <strong>Check the key and load models</strong>
           <small>Rotakey calls the provider’s `/models` endpoint now and checks again when saving.</small>
         </div>
         <Button type="button" variant="quiet" disabled={busy} onClick={() => void checkKey()}>
-          <RefreshCw size={14} aria-hidden="true" /> {busy ? "Checking…" : "Check & load models"}
+          <RefreshCw size={14} aria-hidden="true" /> {busy ? "Checking…" : "Check key"}
         </Button>
       </div>
       {inspection && (
         <InlineNotice tone={inspection.valid ? "success" : "danger"}>
           {inspection.valid
             ? `API key and ${inspection.protocol} base URL verified · ${inspection.models.length} models loaded · ${inspection.latency_ms} ms`
-            : inspection.warning || "API key validation failed."}
+            : inspection.warning || keyCheckFailed}
         </InlineNotice>
       )}
       {inspection?.valid && (
@@ -2637,8 +2666,8 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
           <label className="field"><span>Model route</span><select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)}>{provider.models.map((model) => <option key={model.id} value={model.id}>{model.public_alias}</option>)}</select></label>
           <RateFields value={modelLimits} onChange={setModelLimits} compact />
           <div className="button-row">
-            <Button type="button" variant="quiet" onClick={() => void api(`/api/admin/credentials/${credential.id}/model-limits/${selectedModel}`, { method: "PUT", json: modelLimits }).then(() => onComplete("Model-specific limits saved.")).catch((caught) => notify(errorMessage(caught), "danger"))}>Save model limit</Button>
-            {credential.model_limits[selectedModel] && <Button type="button" variant="quiet" onClick={() => void api(`/api/admin/credentials/${credential.id}/model-limits/${selectedModel}`, { method: "DELETE" }).then(() => onComplete("Model-specific limits removed.")).catch((caught) => notify(errorMessage(caught), "danger"))}>Use shared limit</Button>}
+            <Button type="button" variant="quiet" onClick={() => void api(`/api/admin/credentials/${credential.id}/model-limits/${selectedModel}`, { method: "PUT", json: modelLimits }).then(() => onComplete("Model limit saved on 1 API key.")).catch((caught) => notify(errorMessage(caught), "danger"))}>Save model limit</Button>
+            {credential.model_limits[selectedModel] && <Button type="button" variant="quiet" onClick={() => void api(`/api/admin/credentials/${credential.id}/model-limits/${selectedModel}`, { method: "DELETE" }).then(() => onComplete("Shared limit in use on 1 API key.")).catch((caught) => notify(errorMessage(caught), "danger"))}>Use shared limit</Button>}
           </div>
         </fieldset>
       )}
@@ -2676,7 +2705,7 @@ function CredentialBalanceFields({ credential, balance, onBalanceChange, resetSp
       <legend>API key balance</legend>
       <p className="fieldset-note">
         Optional. Record the credit on this key and Rotakey subtracts the estimated cost of every request it serves.
-        A key with nothing left is skipped by the router, so traffic moves to your other keys instead of failing upstream.
+        A key that is out of balance is skipped by the router, so traffic moves to your other keys instead of failing upstream.
         Leave it blank to not track a balance on this key.
       </p>
       <div className="field-pair">
@@ -2738,7 +2767,7 @@ function ModelImportForm({ provider, onClose, onComplete, notify }: { provider: 
         json: {}
       });
       setInspection(result);
-      if (!result.valid) notify(result.warning || "Models could not be loaded.", "danger");
+      if (!result.valid) notify(result.warning || discoveryFailed, "danger");
     } catch (caught) {
       notify(errorMessage(caught), "danger");
     } finally {
@@ -2786,7 +2815,7 @@ function ModelImportForm({ provider, onClose, onComplete, notify }: { provider: 
         <InlineNotice tone={inspection.valid ? "success" : "danger"}>
           {inspection.valid
             ? `${inspection.models.length} models loaded in ${inspection.latency_ms} ms.`
-            : inspection.warning || "The API key could not load models."}
+            : inspection.warning || discoveryFailed}
         </InlineNotice>
       )}
       {inspection?.valid && (
@@ -2844,7 +2873,7 @@ function ModelCatalog({
   return (
     <section className="model-catalog">
       <header>
-        <div><strong>Select public models</strong><small>{selectedCount} selected · {existingIDs.size} already routed</small></div>
+        <div><strong>Select models to route</strong><small>{selectedCount} selected · {existingIDs.size} already routed</small></div>
         <div className="button-row">
           {selectedCount > 0 && <Button type="button" variant="quiet" onClick={() => onChange({})}>Clear all selected</Button>}
         </div>
@@ -3135,14 +3164,14 @@ function ModelsPage({
                 <div className="button-row"><button className="console-icon resource-inspector-close" onClick={() => setModelInspectorOpen(false)} aria-label="Close model inspector"><X size={15} aria-hidden="true" /></button><Button variant="quiet" disabled={rechecking || deletingRoute} onClick={() => {
                   setRechecking(true);
                   void api(`/api/admin/models/${selected.id}/probe`, { method: "POST" })
-                    .then(() => { notify("Model capability probe passed."); return reload(); })
+                    .then(() => { notify("Model check passed."); return reload(); })
                     .catch((caught) => { notify(errorMessage(caught), "danger"); return reload(); })
                     .finally(() => setRechecking(false));
-                }}><Activity size={13} aria-hidden="true" /> {rechecking ? "Checking…" : "Recheck model"}</Button><Button variant="danger" disabled={rechecking || deletingRoute} onClick={() => {
+                }}><Activity size={13} aria-hidden="true" /> {rechecking ? "Checking…" : "Check model"}</Button><Button variant="danger" disabled={rechecking || deletingRoute} onClick={() => {
                   if (confirm(deleteRouteWarning(selected.public_alias))) {
                     setDeletingRoute(true);
                     void api(`/api/admin/models/${selected.id}`, { method: "DELETE" })
-                      .then(() => { notify("Model route deleted."); return reload(); })
+                      .then(() => { notify(`Route ${selected.public_alias} deleted.`); return reload(); })
                       .catch((caught) => notify(errorMessage(caught), "danger"))
                       .finally(() => setDeletingRoute(false));
                   }
@@ -3151,14 +3180,14 @@ function ModelsPage({
               <div className="inspector-definition">
                 <Definition label="Provider" value={selected.provider.name} />
                 {routingMode === "model" && poolSizes[selected.public_alias] > 1 && <Definition label="Pooled with" value={`${poolSizes[selected.public_alias] - 1} other provider route${poolSizes[selected.public_alias] === 2 ? "" : "s"}`} />}
-                <Definition label="Route state" value={selected.enabled ? "enabled" : "disabled"} />
-                <Definition label="Capability check" value={healthyKeyCount(selected) === 0 ? "waiting for a healthy API key" : selected.capability_status === "probe_verified" ? "probe verified" : selected.capability_status === "catalog_verified" ? "catalog verified" : selected.capability_status === "failed" ? "unavailable" : selected.capability_status || "unverified"} />
-                <Definition label="Chat endpoint" value={selected.capability_profile?.chat || (selected.supports_chat ? "native" : "off")} />
-                <Definition label="Responses" value={selected.capability_profile?.responses || (selected.supports_responses ? "native" : "translated")} />
-                <Definition label="Messages" value={selected.capability_profile?.messages || (selected.supports_messages ? "enabled" : "off")} />
-                <Definition label="Streaming" value={selected.capability_profile?.streaming || "unknown"} />
-                <Definition label="Tools" value={selected.capability_profile?.tools || "unknown"} />
-                <Definition label="Thinking" value={selected.capability_profile?.thinking || "unknown"} />
+                <Definition label="Route" value={selected.enabled ? "On" : "Off"} />
+                <Definition label="Capability check" value={healthyKeyCount(selected) === 0 ? "Waiting for a healthy API key" : capabilityLabelFor(selected.capability_status)} />
+                <Definition label="Chat endpoint" value={protocolLabelFor(selected.capability_profile?.chat || (selected.supports_chat ? "native" : "off"))} />
+                <Definition label="Responses" value={protocolLabelFor(selected.capability_profile?.responses || (selected.supports_responses ? "native" : "translated"))} />
+                <Definition label="Messages" value={protocolLabelFor(selected.capability_profile?.messages || (selected.supports_messages ? "native" : "off"))} />
+                <Definition label="Streaming" value={protocolLabelFor(selected.capability_profile?.streaming)} />
+                <Definition label="Tools" value={protocolLabelFor(selected.capability_profile?.tools)} />
+                <Definition label="Thinking" value={protocolLabelFor(selected.capability_profile?.thinking)} />
                 <Definition label="Output ceiling" value={`${selected.default_max_output_tokens} tokens`} />
                 <Definition label="Tokenizer" value={selected.tokenizer} mono />
               </div>
@@ -3166,13 +3195,13 @@ function ModelsPage({
               <ModelLimitEditor model={selected} credentials={selected.credentials} notify={notify} onSaved={reload} />
               <section className={`ide-inspector-section inspector-disclosure${credentialsOpen ? " is-open" : ""}`}>
                 <button type="button" onClick={() => setCredentialsOpen((current) => !current)} aria-expanded={credentialsOpen}>
-                  <ChevronDown size={14} aria-hidden="true" /><span><strong>Credential path</strong><small>{selected.credentials.length} API key{selected.credentials.length === 1 ? "" : "s"}</small></span>
+                  <ChevronDown size={14} aria-hidden="true" /><span><strong>Key order</strong><small>{selected.credentials.length} API key{selected.credentials.length === 1 ? "" : "s"}</small></span>
                 </button>
                 {credentialsOpen && <div className="inspector-disclosure__body">{selected.credentials.map((credential) => (
                   <div key={credential.id} className={credential.validation_error ? "has-warning" : ""}>
                     <StatusDot state={credential.status} />
                     <strong title={credential.label}>{credential.label}</strong>
-                    <small>{credential.is_primary ? "primary" : credential.status}</small>
+                    <small>{credential.is_primary ? "Primary" : statusLabel(credential.status)}</small>
                     <span>
                       <small>{credential.model_limits[selected.id] ? "model override" : "shared provider limit"}</small>
                       <LimitSummary policy={credential.model_limits[selected.id] || credential.limits} />
@@ -3234,11 +3263,11 @@ function ModelLimitEditor({
   const confirmFanOut = (question: string) => target !== "all" || confirm(question);
   const save = async () => {
     if (targets.length === 0) return;
-    if (!confirmFanOut(`Replace this model's limit on ${scope}? Any per-key override for ${model.public_alias} is overwritten.`)) return;
+    if (!confirmFanOut(`Save this model's limit on ${scope}? Any limit already set for ${model.public_alias} on those keys is replaced.`)) return;
     setBusy(true);
     try {
       await Promise.all(targets.map((credential) => api(`/api/admin/credentials/${credential.id}/model-limits/${model.id}`, { method: "PUT", json: draft })));
-      notify(`Model limit saved for ${targets.length} API key${targets.length === 1 ? "" : "s"}.`);
+      notify(`Model limit saved on ${targets.length} API key${targets.length === 1 ? "" : "s"}.`);
       await onSaved();
     } catch (caught) {
       notify(errorMessage(caught), "danger");
@@ -3248,12 +3277,12 @@ function ModelLimitEditor({
   };
   const clear = async () => {
     if (targets.length === 0) return;
-    if (!confirmFanOut(`Remove this model's override from ${scope}? They fall back to the shared provider limit.`)) return;
+    if (!confirmFanOut(`Use the shared limit on ${scope}? This model's own limit is removed from them.`)) return;
     setBusy(true);
     try {
       await Promise.all(targets.map((credential) => api(`/api/admin/credentials/${credential.id}/model-limits/${model.id}`, { method: "DELETE" })));
       setDraft(emptyPolicy());
-      notify(`Shared provider limits restored for ${targets.length} API key${targets.length === 1 ? "" : "s"}.`);
+      notify(`Shared limit in use on ${targets.length} API key${targets.length === 1 ? "" : "s"}.`);
       await onSaved();
     } catch (caught) {
       notify(errorMessage(caught), "danger");
@@ -3377,7 +3406,7 @@ function LogsPage() {
       {error && (
         <InlineNotice tone="danger">
           {error} The list keeps retrying every two seconds.{" "}
-          <button className="link-button" onClick={() => void load()}>Retry now</button>
+          <button className="link-button" onClick={() => void load()}>Try again</button>
         </InlineNotice>
       )}
       <div className="ide-resource-workbench log-workbench">
@@ -3426,7 +3455,7 @@ function LogsPage() {
                   <small>{log.request_id}</small>
                 </span>
                 <span aria-hidden="true"><code title={log.model_alias}>{log.model_alias}</code><small title={`${log.provider_name} · ${routingStageLabel(log)}${log.error_code ? ` · ${log.error_code}` : ""}`}>{log.provider_name} · {routingStageLabel(log)}{log.error_code ? ` · ${log.error_code}` : ""}</small></span>
-                <strong aria-hidden="true" className={`status-code status-code--${log.running ? "running" : log.status_code >= 500 ? "fault" : log.status_code >= 400 ? "warning" : "healthy"}`}>{log.running ? "RUN" : log.status_code}</strong>
+                <strong aria-hidden="true" className={`status-code status-code--${log.running ? "running" : log.status_code >= 500 ? "fault" : log.status_code >= 400 ? "warning" : "healthy"}`}>{log.running ? "Run" : log.status_code}</strong>
                 <small aria-hidden="true">{log.latency_ms} ms</small>
                 <ChevronRight size={13} aria-hidden="true" />
               </button>
@@ -3436,15 +3465,15 @@ function LogsPage() {
         {selected ? (
           <aside className={`ide-resource-inspector log-resource-inspector${logInspectorOpen ? " is-open" : ""}`} ref={logDrawer as React.Ref<HTMLElement>} tabIndex={-1}>
             <header className="ide-inspector-titlebar">
-              <div><span>{selected.endpoint} · {selected.running ? "RUNNING" : `HTTP ${selected.status_code}`}</span><h2 title={selected.request_id}>{selected.request_id}</h2><code title={selected.model_alias}>{selected.model_alias}</code></div>
-              <div className="button-row"><strong className={`status-code status-code--${selected.running ? "running" : selected.status_code >= 500 ? "fault" : selected.status_code >= 400 ? "warning" : "healthy"}`}>{selected.running ? "RUNNING" : selected.status_code}</strong><button className="console-icon resource-inspector-close" onClick={() => setLogInspectorOpen(false)} aria-label="Close log inspector"><X size={15} aria-hidden="true" /></button></div>
+              <div><span>{selected.endpoint} · {selected.running ? "Running" : `HTTP ${selected.status_code}`}</span><h2 title={selected.request_id}>{selected.request_id}</h2><code title={selected.model_alias}>{selected.model_alias}</code></div>
+              <div className="button-row"><strong className={`status-code status-code--${selected.running ? "running" : selected.status_code >= 500 ? "fault" : selected.status_code >= 400 ? "warning" : "healthy"}`}>{selected.running ? "Running" : selected.status_code}</strong><button className="console-icon resource-inspector-close" onClick={() => setLogInspectorOpen(false)} aria-label="Close log inspector"><X size={15} aria-hidden="true" /></button></div>
             </header>
             {/* Label-then-value pairs read in order, so the pairing is already clear;
                 the list role is what gives the group a count and lets a screen
                 reader step between the four rather than through loose text. */}
             <div className="log-detail-grid" role="list">
               <div role="listitem"><span>Provider</span><strong>{selected.provider_name}</strong></div>
-              <div role="listitem"><span>API key</span><strong>{routingStageLabel(selected)}</strong></div>
+              <div role="listitem"><span>Served by</span><strong>{routingStageLabel(selected)}</strong></div>
               <div role="listitem"><span>Latency</span><strong>{selected.latency_ms} ms</strong></div>
               <div role="listitem"><span>Tokens</span><strong title={`${selected.input_tokens} input · ${selected.output_tokens} output`}>{formatCompact(selected.input_tokens)} in · {formatCompact(selected.output_tokens)} out</strong></div>
             </div>
@@ -3492,7 +3521,7 @@ function LogDiagnosis({ log }: { log: RequestLog }) {
               <strong>{decision.credential_label || "Routing pool"}</strong>
               <p>{routingDecisionMessage(decision)}</p>
             </span>
-            <small>{decision.reset_at ? <>reset <LiveResetTime value={decision.reset_at} /></> : decision.scope || "routing"}</small>
+            <small>{decision.reset_at ? <>reset <LiveResetTime value={decision.reset_at} /></> : decision.scope ? limitScopeLabel(decision.scope) : "routing"}</small>
           </div>
         ))}
         {failedAttempts.map((attempt, index) => (
@@ -3547,6 +3576,54 @@ function deleteRouteWarning(alias: string) {
   return `Delete route ${alias}? Requests using this alias stop immediately, and the route cannot be restored — you would add it again from scratch.`;
 }
 
+/** What the console says when a provider turns a key away. Three call sites showed
+ *  this — the credential panel, the provider wizard and the overview inspector —
+ *  and all three used to say only "API key validation failed", which names the
+ *  step that failed and no way out of it. */
+const keyCheckFailed =
+  "The provider rejected this key. Replace it, or check it again if you have just created it.";
+
+/** Loading a provider's catalog fails for one of two reasons and the operator can
+ *  act on both, so both are named. The two call sites — the load-models panel's
+ *  toast and its notice — used to word this differently, which read as two
+ *  different failures. */
+const discoveryFailed =
+  "The provider did not return a model list. Check the API key and the base URL, then try again.";
+
+/** Copying can be refused by the browser — an insecure origin, or a denied
+ *  permission — and the operator still needs the value, so the message ends with the
+ *  way to get it. Four call sites copy something; only one of them used to say this
+ *  much. */
+const clipboardBlocked = "Your browser blocked the copy. Select the text and copy it manually.";
+
+/** The capability enum comes off the route row as a database value —
+ *  `probe_verified`, `catalog_verified`, `unverified` — and the inspector used to
+ *  print it with the underscore swapped for a space, which told the operator how
+ *  the column is stored rather than what is known about the route. */
+const capabilityPhrase: Record<string, string> = {
+  probe_verified: "Checked live",
+  catalog_verified: "Listed by the provider",
+  failed: "Unavailable",
+  unverified: "Not checked yet"
+};
+
+/** The per-protocol capability enum, same reasoning. "translated" on its own does
+ *  not say who translates or that the call still works. */
+const protocolPhrase: Record<string, string> = {
+  native: "Native",
+  translated: "Translated by the gateway",
+  off: "Off",
+  unknown: "Not checked yet"
+};
+
+function capabilityLabelFor(value: string | undefined) {
+  return capabilityPhrase[value ?? "unverified"] ?? capabilityPhrase.unverified;
+}
+
+function protocolLabelFor(value: string | undefined) {
+  return protocolPhrase[value ?? "unknown"] ?? protocolPhrase.unknown;
+}
+
 /** One attempt's outcome as a single line. An attempt that never reached a status
  *  code carries only an error, and the old expression printed it on both sides of
  *  the separator — "connection_error · connection_error". replaced_parameters was
@@ -3562,11 +3639,15 @@ function attemptSummary(attempt: RequestLog["attempts"][number]) {
   return parts.join(" · ");
 }
 
+/** What served the request, which is usually an API key but not always: a call the
+ *  gateway rejected on its own never reached one. The inspector labels this row
+ *  "Served by" rather than "API key" because two of the three fallbacks below are
+ *  not keys, and a label that names the wrong thing is worse than a general one. */
 function routingStageLabel(log: RequestLog) {
   if (log.credential_label) return log.credential_label;
   if (log.provider_name === "gateway") return "Gateway validation";
-  if (log.attempts?.length) return "No final API key";
-  return "Pre-routing rejection";
+  if (log.attempts?.length) return "No key was reached";
+  return "Rejected before routing";
 }
 
 function humanizeErrorCode(code: string) {
@@ -3628,7 +3709,7 @@ function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNe
   const openAIURL = `${rootURL}/v1`;
   return (
     <>
-      <PageHeader eyebrow="Unified authentication" title="Access key" description="One active key works with OpenAI SDKs, Anthropic SDKs and Claude Code. Upstream provider secrets never leave Rotakey." />
+      <PageHeader eyebrow="Unified authentication" title="Gateway key" description="One active key works with OpenAI SDKs, Anthropic SDKs and Claude Code. Upstream provider secrets never leave Rotakey." />
       {error && (
         <InlineNotice tone="danger">
           {error} The examples below use this page's own address until the settings load.{" "}
@@ -3636,14 +3717,14 @@ function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNe
         </InlineNotice>
       )}
       <section className="access-key-panel">
-        <div className="key-prefix"><ShieldCheck size={20} aria-hidden="true" /><span><small>Active key prefix</small><code>{settings?.gateway_key_prefix ? `${settings.gateway_key_prefix}••••••••••••` : error ? "unavailable" : "Loading…"}</code></span></div>
+        <div className="key-prefix"><ShieldCheck size={20} aria-hidden="true" /><span><small>Current key prefix</small><code>{settings?.gateway_key_prefix ? `${settings.gateway_key_prefix}••••••••••••` : error ? "unavailable" : "Loading…"}</code></span></div>
         <div>
           <strong>Rotating the key</strong>
           <p>Rotation revokes the current key in the same database transaction and shows the replacement once. Update every application before you close that panel. Use the button at the bottom of this page.</p>
         </div>
       </section>
       <section className="section-block code-example">
-        <div className="section-heading"><div><p className="eyebrow">OpenAI lane</p><h2>Chat Completions and Responses</h2></div><Button variant="quiet" onClick={() => void copyText(openAIURL).then(() => notify("OpenAI base URL copied.")).catch(() => notify("Clipboard access was blocked.", "danger"))}><Clipboard size={14} aria-hidden="true" /> Copy base URL</Button></div>
+        <div className="section-heading"><div><p className="eyebrow">OpenAI SDKs</p><h2>Chat Completions and Responses</h2></div><Button variant="quiet" onClick={() => void copyText(openAIURL).then(() => notify("OpenAI base URL copied.")).catch(() => notify(clipboardBlocked, "danger"))}><Clipboard size={14} aria-hidden="true" /> Copy base URL</Button></div>
         <pre>{`curl "${openAIURL}/chat/completions" \\
   -H "Authorization: Bearer $ROTAKEY_KEY" \\
   -H "Content-Type: application/json" \\
@@ -3654,7 +3735,7 @@ function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNe
           <div><p className="eyebrow">Codex CLI &amp; Desktop</p><h2>{codexReady === null ? "Set up Codex" : `${codexReady} model route${codexReady === 1 ? "" : "s"} ready`}</h2></div>
           <div className="button-row">
             <a className="button button--quiet" href="https://github.com/jisunahamed/rotakey/blob/main/docs/CODEX.md" target="_blank" rel="noreferrer"><BookOpen size={14} aria-hidden="true" /> Full guide</a>
-            <Button variant="quiet" onClick={() => void copyText(`rotakey-codex install --url ${rootURL}`).then(() => notify("Codex setup command copied.")).catch(() => notify("Clipboard access was blocked.", "danger"))}><Clipboard size={14} aria-hidden="true" /> Copy setup</Button>
+            <Button variant="quiet" onClick={() => void copyText(`rotakey-codex install --url ${rootURL}`).then(() => notify("Codex setup command copied.")).catch(() => notify(clipboardBlocked, "danger"))}><Clipboard size={14} aria-hidden="true" /> Copy setup</Button>
           </div>
         </div>
         <pre>{`rotakey-codex install --url ${rootURL}
@@ -3663,7 +3744,7 @@ codex --profile rotakey`}</pre>
         <p>The installer prompts for the gateway key, protects it in the OS credential store, and writes only a managed Rotakey profile. Run <code>rotakey-codex sync</code> after changing model routes.</p>
       </section>
       <section className="section-block code-example">
-        <div className="section-heading"><div><p className="eyebrow">Anthropic lane</p><h2>Messages SDK and Claude Code</h2></div><div className="button-row"><a className="button button--quiet" href="https://github.com/jisunahamed/rotakey/blob/main/docs/CLAUDE-CODE.md" target="_blank" rel="noreferrer"><BookOpen size={14} aria-hidden="true" /> Full guide</a><Button variant="quiet" onClick={() => void copyText(rootURL).then(() => notify("Anthropic base URL copied.")).catch(() => notify("Clipboard access was blocked.", "danger"))}><Clipboard size={14} aria-hidden="true" /> Copy base URL</Button></div></div>
+        <div className="section-heading"><div><p className="eyebrow">Anthropic SDKs</p><h2>Messages SDK and Claude Code</h2></div><div className="button-row"><a className="button button--quiet" href="https://github.com/jisunahamed/rotakey/blob/main/docs/CLAUDE-CODE.md" target="_blank" rel="noreferrer"><BookOpen size={14} aria-hidden="true" /> Full guide</a><Button variant="quiet" onClick={() => void copyText(rootURL).then(() => notify("Anthropic base URL copied.")).catch(() => notify(clipboardBlocked, "danger"))}><Clipboard size={14} aria-hidden="true" /> Copy base URL</Button></div></div>
         <pre>{`export ANTHROPIC_BASE_URL="${rootURL}"
 export ANTHROPIC_API_KEY="$ROTAKEY_KEY"
 
@@ -3713,10 +3794,10 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
   if (!settings) {
     return error ? (
       <>
-        <PageHeader eyebrow="Control plane policy" title="System" description="Bound waiting and retention so the gateway stays predictable on a small VPS." />
+        <PageHeader eyebrow="Control plane policy" title="Settings" description="Bound waiting and retention so the gateway stays predictable on a small VPS." />
         <EmptyState
           level={2}
-          title="System settings could not be loaded"
+          title="Settings could not be loaded"
           description={error}
           action={<Button onClick={() => setAttempt((n) => n + 1)}><RefreshCw size={14} aria-hidden="true" /> Try again</Button>}
         />
@@ -3738,7 +3819,7 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
         setLoadedMode(result.routing_mode);
         // A mode switch renames aliases in the same transaction, so the
         // save confirmation reports what changed and what could not.
-        const parts = ["System settings saved."];
+        const parts = ["Settings saved."];
         if (result.aliases_rewritten > 0) parts.push(`${result.aliases_rewritten} model alias${result.aliases_rewritten === 1 ? "" : "es"} renamed for ${result.routing_mode === "model" ? "model" : "provider"}-wise routing.`);
         if (result.alias_conflicts.length > 0) parts.push(`Kept unchanged to avoid a collision: ${result.alias_conflicts.join(", ")}.`);
         notify(parts.join(" "), result.alias_conflicts.length > 0 ? "danger" : "success");
@@ -3748,7 +3829,7 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
   };
   return (
     <>
-      <PageHeader eyebrow="Control plane policy" title="System" description="Bound waiting and retention so the gateway stays predictable on a small VPS." />
+      <PageHeader eyebrow="Control plane policy" title="Settings" description="Bound waiting and retention so the gateway stays predictable on a small VPS." />
       <section className="settings-list">
         <label className="settings-row"><span><strong>Routing mode</strong><small>{settings.routing_mode === "model" ? "Model-wise: one alias pools every provider publishing that name, rotating across providers and keys. Saving strips the provider prefix from aliases that carry one." : "Provider-wise: each alias belongs to one provider. Saving prepends the provider slug to aliases that lack one."}</small></span><div><select value={settings.routing_mode} onChange={(event) => setSettings({ ...settings, routing_mode: event.target.value as RoutingMode })}><option value="provider">Provider-wise</option><option value="model">Model-wise (pooled)</option></select></div></label>
         <label className="settings-row"><span><strong>Default Anthropic resource provider</strong><small>Files have no model field, so uploads need one native Anthropic provider. Batches remain model-routed.</small></span><div><select value={settings.default_anthropic_provider_id || ""} onChange={(event) => setSettings({ ...settings, default_anthropic_provider_id: event.target.value })}><option value="">Not configured</option>{providers.filter((provider) => provider.api_format === "anthropic" && provider.enabled).map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></div></label>
@@ -3892,9 +3973,12 @@ function SecretReveal({ title, keyValue, message, onClose, notify }: { title: st
       discardMessage="Close without confirming that the key is saved? This key cannot be shown again."
     >
       <InlineNotice tone="danger">{message}</InlineNotice>
-      <div className="secret-value"><code>{keyValue}</code><Button variant="quiet" onClick={() => void copyText(keyValue).then(() => notify("Gateway key copied.")).catch(() => notify("Clipboard access was blocked. Select the key and copy it manually.", "danger"))}><Clipboard size={14} aria-hidden="true" /> Copy</Button></div>
+      <div className="secret-value"><code>{keyValue}</code><Button variant="quiet" onClick={() => void copyText(keyValue).then(() => notify("Gateway key copied.")).catch(() => notify(clipboardBlocked, "danger"))}><Clipboard size={14} aria-hidden="true" /> Copy</Button></div>
       <label className="confirmation-check"><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /><span>I stored this key securely.</span></label>
-      <div className="sheet-actions"><span /><Button disabled={!confirmed} onClick={onClose}>Finish</Button></div>
+      {/* The button dismisses the panel and nothing else — the key already exists.
+          "Finish" implied a remaining step, and the checkbox above it is what the
+          operator actually finishes. */}
+      <div className="sheet-actions"><span /><Button disabled={!confirmed} onClick={onClose}>Close</Button></div>
     </Sheet>
   );
 }
@@ -4204,7 +4288,11 @@ async function copyText(value: string) {
 
 function errorMessage(caught: unknown) {
   if (caught instanceof APIError || caught instanceof Error) return caught.message;
-  return "The operation could not be completed.";
+  // Everything the console throws is an Error, so this fallback only fires when a
+  // rejection carries no message at all — a dropped connection, or a request the
+  // browser cancelled. There is nothing to report except the one thing that helps:
+  // the request never landed, so trying it again is safe.
+  return "The gateway did not answer. Try again.";
 }
 
 export default App;

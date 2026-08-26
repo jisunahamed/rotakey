@@ -680,6 +680,9 @@
   border-color: var(--iris);
 }
 
+/* The one micro-label in the console that is not set in caps: it carries a brand
+   name, and "OPENAI" is not how that brand is written. The label face and its
+   tracking still mark it as a badge rather than running text. */
 .protocol-badge {
   display: inline-flex;
   margin-left: var(--space-3);
@@ -689,7 +692,6 @@
   color: var(--text-muted);
   font: 500 var(--text-micro) / var(--leading-snug) var(--font-label);
   letter-spacing: var(--track-label);
-  text-transform: uppercase;
   vertical-align: 1px;
 }
 
