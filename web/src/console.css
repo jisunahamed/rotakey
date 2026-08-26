@@ -265,11 +265,9 @@
   border-left: 1px solid var(--edge);
 }
 
-/* The balance cell only exists when some API key tracks credit, so the column
-   count follows the cells that are actually rendered. */
-/* Eight metrics rather than seven when some key tracks a balance, and the balance
-   cell is the widest of them — "$12.40 / $50.00" — so the row needs the explicit
-   zero minimum or the last column pushes the ledger past the page edge. */
+/* Eight metrics rather than seven when some API key tracks a balance. The narrower
+   breakpoints below re-declare .status-ledger after this rule, so they win at the
+   same specificity and both counts collapse to the same mobile grid. */
 .status-ledger--credit {
   grid-template-columns: repeat(8, minmax(0, 1fr));
 }
@@ -938,7 +936,6 @@
 .inspector-definition {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  border-bottom: 1px solid var(--edge);
 }
 
 .inspector-definition > div {
@@ -949,6 +946,15 @@
 }
 
 .inspector-definition > div:nth-child(even) { border-right: 0; }
+
+/* The number of definitions varies with what the resource tracks — a key with a
+   balance shows nine, without one it shows six. An odd count used to leave the
+   last cell alone in its row with a divider running into empty space and a bottom
+   rule that stopped halfway across. It takes the whole row instead. */
+.inspector-definition > div:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+  border-right: 0;
+}
 
 .inspector-definition span,
 .inspector-definition strong {
@@ -1808,9 +1814,15 @@
 }
 
 @media (max-width: 1050px) {
+  /* Three columns whether the ledger carries seven metrics or eight. Declared
+     after .status-ledger--credit so it wins at equal specificity. The hairlines
+     are keyed to the column count rather than to a metric count: the right edge
+     is cleared at the end of every row, and every row after the first carries a
+     top rule. Keyed to fixed child numbers, row two lost its separator as soon
+     as the balance cell appeared. */
   .status-ledger { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .ledger-metric:nth-child(3) { border-right: 0; }
-  .ledger-metric:nth-child(-n+3) { border-bottom: 1px solid var(--edge); }
+  .ledger-metric:nth-child(3n) { border-right: 0; }
+  .ledger-metric:nth-child(n+4) { border-top: 1px solid var(--edge); }
   .ops-console__workspace,
   .ops-console__workspace.has-inspector { grid-template-columns: 1fr; }
 
@@ -1927,10 +1939,13 @@
   .inspector-key-list button,
   .resource-disclosure__toggle,
   .provider-debug-toggle { min-height: 44px; }
+  /* Two columns, and the same column-keyed hairlines as the 1050px step: right
+     edge cleared at the end of each row, top rule on every row but the first.
+     The old rules restored a border on the third cell, which the odd-child base
+     rule already carried, and stopped the row separators at six cells. */
   .status-ledger { grid-template-columns: 1fr 1fr; }
   .ledger-metric:nth-child(2n) { border-right: 0; }
-  .ledger-metric:nth-child(3) { border-right: 1px solid var(--edge); }
-  .ledger-metric:nth-child(-n+6) { border-bottom: 1px solid var(--edge); }
+  .ledger-metric:nth-child(n+3) { border-top: 1px solid var(--edge); }
   .signal-chart svg { height: 150px; }
   .signal-legend { flex-wrap: wrap; }
   .model-ranking__table { padding: 0 var(--space-4); overflow-x: auto; }

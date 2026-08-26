@@ -39,7 +39,8 @@ import {
   Sheet,
   StatusDot,
   statusLabel,
-  Toggle
+  Toggle,
+  useDrawerOverlay
 } from "./components";
 import {
   emptyCreditTotals,
@@ -292,6 +293,20 @@ function App() {
     );
   }
 
+  const toastBody = toast && (
+    <div className={`toast toast--${toast.tone}`} key={toast.id}>
+      {toast.tone === "success" ? (
+        <Check size={16} aria-hidden="true" />
+      ) : (
+        <AlertTriangle size={16} aria-hidden="true" />
+      )}
+      <span className="toast__message">{toast.message}</span>
+      <button className="icon-button toast__close" onClick={dismissToast} aria-label="Dismiss this message">
+        <X size={15} aria-hidden="true" />
+      </button>
+    </div>
+  );
+
   return (
     <div className="app-shell">
       <a className="skip-link" href="#workspace">Skip to content</a>
@@ -328,7 +343,10 @@ function App() {
           ))}
         </nav>
         <div className="sidebar__bottom">
-          {version?.update_available && (
+          {/* latest_version is optional in the payload, so both readouts are gated
+              on the string itself rather than on the flag. A release check that
+              reports an update without naming the version rendered "Rotakey v". */}
+          {version?.update_available && version.latest_version && (
             <a className="release-notice" href={version.release_url} target="_blank" rel="noreferrer">
               <span>Update available</span>
               <strong>Rotakey v{version.latest_version}</strong>
@@ -367,7 +385,7 @@ function App() {
           </div>
           <div className="sidebar__version" title={version?.commit ? `Commit ${version.commit}` : undefined}>
             Rotakey v{version?.current_version ?? "0.2.7"}
-            {version?.update_available ? <span>new v{version.latest_version}</span> : <span>up to date</span>}
+            {version?.update_available && version.latest_version ? <span>new v{version.latest_version}</span> : <span>up to date</span>}
           </div>
         </div>
       </aside>
@@ -411,28 +429,18 @@ function App() {
           notify={notify}
         />
       )}
-      {/* The live region is always in the document, and only its contents change.
-          A region inserted at the same moment as its text is unreliably announced
-          — several screen readers only watch regions that existed beforehand, so
-          the first toast of a session went unread. The wrapper needs no styling:
-          the toast itself is position: fixed, so an empty block leaves no trace. */}
-      <div
-        role={toast?.tone === "danger" ? "alert" : "status"}
-        aria-live={toast?.tone === "danger" ? "assertive" : "polite"}
-      >
-        {toast && (
-          <div className={`toast toast--${toast.tone}`} key={toast.id}>
-            {toast.tone === "success" ? (
-              <Check size={16} aria-hidden="true" />
-            ) : (
-              <AlertTriangle size={16} aria-hidden="true" />
-            )}
-            <span className="toast__message">{toast.message}</span>
-            <button className="icon-button toast__close" onClick={dismissToast} aria-label="Dismiss this message">
-              <X size={15} aria-hidden="true" />
-            </button>
-          </div>
-        )}
+      {/* Two regions, each with a fixed role, and the toast renders into whichever
+          one matches its tone. One shared wrapper that swapped role and aria-live
+          at the same moment its text arrived was no better than inserting the
+          region late: a screen reader that had already registered the node as
+          polite could announce an error quietly, or miss it. Both wrappers need no
+          styling — the toast itself is position: fixed, so an empty block leaves no
+          trace. */}
+      <div role="status" aria-live="polite">
+        {toast?.tone !== "danger" && toastBody}
+      </div>
+      <div role="alert" aria-live="assertive">
+        {toast?.tone === "danger" && toastBody}
       </div>
     </div>
   );
@@ -669,6 +677,9 @@ function OverviewPage({
   const [selected, setSelected] = useState<InspectTarget | null>(null);
   const [expandedProviders, setExpandedProviders] = useState<Set<string>>(() => new Set());
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  // Matches the stylesheet breakpoint where the inspector stops being a column
+  // and starts covering the console.
+  const inspectorFloating = useMediaQuery("(max-width: 1050px)");
   const [refreshing, setRefreshing] = useState(false);
   // Every request carries the generation the range was on when it left. The `all`
   // range is much slower than `1h`, so without this a stale reply lands after a
@@ -762,7 +773,7 @@ function OverviewPage({
                     key={value}
                     className={range === value ? "is-active" : ""}
                     aria-pressed={range === value}
-                    aria-label={value === "all" ? "All time" : value === "1h" ? "Last hour" : value === "24h" ? "Last 24 hours" : "Last 7 days"}
+                    aria-label={rangeLabel(value)}
                     onClick={() => {
                       setRange(value);
                       history.replaceState({}, "", `/admin/overview?range=${value}`);
@@ -776,7 +787,7 @@ function OverviewPage({
             </div>
           </header>
 
-          <section className={`status-ledger${overview.summary.credit.tracked_keys > 0 ? " status-ledger--credit" : ""}`} aria-label={`${range} gateway status`}>
+          <section className={`status-ledger${overview.summary.credit.tracked_keys > 0 ? " status-ledger--credit" : ""}`} aria-label={`${rangeLabel(range)} gateway status`}>
             <LedgerMetric label="Routes ready" value={`${overview.summary.routes_ready}/${overview.summary.routes_total}`} tone={overview.summary.routes_ready < overview.summary.routes_total ? "danger" : "healthy"} />
             <LedgerMetric label="API keys ready" value={`${overview.summary.keys_ready}/${overview.summary.keys_total}`} tone={overview.summary.keys_warning ? "warning" : "healthy"} />
             <LedgerMetric label="Requests" value={formatNumber(overview.summary.requests)} />
@@ -794,7 +805,9 @@ function OverviewPage({
           </section>
 
           <div className={`ops-console__workspace${selected ? " has-inspector" : ""}`}>
-            <div className="ops-console__main">
+            {/* While the inspector floats over the console, the console behind it
+                is inert — otherwise Tab leaves the drawer for controls it covers. */}
+            <div className="ops-console__main" inert={inspectorFloating && inspectorOpen && Boolean(selected)}>
               <ModelUsageRanking routes={overview.routes} range={overview.range} />
               <div className="signal-grid">
                 <SignalTimeline overview={overview} />
@@ -835,7 +848,7 @@ function OverviewPage({
               </section>
 
               <section className="console-panel failure-panel">
-                <ConsolePanelHeader eyebrow="Request evidence" title="Recent failures" detail={`Selected range · ${range}`} />
+                <ConsolePanelHeader eyebrow="Request evidence" title="Recent failures" detail={`Selected range · ${rangeLabel(range)}`} />
                 {overview.recent_failures.length === 0 ? (
                   <p className="console-empty">No failed requests in this range.</p>
                 ) : (
@@ -947,7 +960,7 @@ function SignalTimeline({ overview }: { overview: Overview }) {
   }));
   return (
     <section className="console-panel signal-panel">
-      <ConsolePanelHeader eyebrow="Signal timeline" title={`Traffic · ${overview.range}`} detail={`P50 ${overview.summary.latency_p50_ms} ms`} />
+      <ConsolePanelHeader eyebrow="Signal timeline" title={`Traffic · ${rangeLabel(overview.range)}`} detail={`P50 ${overview.summary.latency_p50_ms} ms`} />
       <div className="signal-chart">
         {/* A line chart has no text equivalent, so the label carries the shape of
             the data: the peaks and the number of buckets that saw errors. */}
@@ -974,15 +987,29 @@ function SignalTimeline({ overview }: { overview: Overview }) {
   );
 }
 
+/** The range is a URL enum, and reading it out raw produced labels like "all
+ *  gateway status" and "Traffic · all". These are the same words the range
+ *  switcher's own buttons announce, so a heading and its control agree. */
+const rangeNames: Record<Overview["range"], string> = {
+  "1h": "Last hour",
+  "24h": "Last 24 hours",
+  "7d": "Last 7 days",
+  all: "All time"
+};
+
+function rangeLabel(range: Overview["range"]) {
+  return rangeNames[range] ?? String(range);
+}
+
 function ModelUsageRanking({ routes, range }: { routes: Overview["routes"]; range: Overview["range"] }) {
   const ranking = [...routes].filter((route) => route.requests > 0).sort((a, b) => b.estimated_cost_usd - a.estimated_cost_usd || b.tokens - a.tokens || b.requests - a.requests).slice(0, 6);
-  return <section className="console-panel model-ranking"><ConsolePanelHeader eyebrow="Usage ledger" title="Model ranking" detail={`${range} · ranked by estimated cost`} />
+  return <section className="console-panel model-ranking"><ConsolePanelHeader eyebrow="Usage ledger" title="Model ranking" detail={`${rangeLabel(range)} · ranked by estimated cost`} />
     {/* Four columns of figures with a header row is a table, and it is read as one:
         without the roles a screen reader announces twenty-four loose numbers with
         no indication of which column any of them belongs to. Below 650px the table
         scrolls sideways inside the panel, and a scroll container that only a
         pointer can move is unreachable — tabIndex makes the arrow keys work. */}
-    {ranking.length === 0 ? <p className="console-empty">No model usage in this range.</p> : <div className="model-ranking__table" role="table" aria-label={`Model usage ranked by estimated cost, ${range}`} tabIndex={0}><div className="model-ranking__head" role="row"><span role="columnheader">Model</span><span role="columnheader">Requests</span><span role="columnheader">Tokens</span><span role="columnheader">Cost</span></div>{ranking.map((route, index) => <div className="model-ranking__row" role="row" key={route.id}><strong role="rowheader"><i aria-hidden="true">{index + 1}</i><code title={route.alias}>{route.alias}</code></strong><span role="cell">{formatNumber(route.requests)}</span><span role="cell">{formatCompact(route.tokens)}</span><span role="cell">{formatUSD(route.estimated_cost_usd)}</span></div>)}</div>}
+    {ranking.length === 0 ? <p className="console-empty">No model usage in this range.</p> : <div className="model-ranking__table" role="table" aria-label={`Model usage ranked by estimated cost, ${rangeLabel(range)}`} tabIndex={0}><div className="model-ranking__head" role="row"><span role="columnheader">Model</span><span role="columnheader">Requests</span><span role="columnheader">Tokens</span><span role="columnheader">Cost</span></div>{ranking.map((route, index) => <div className="model-ranking__row" role="row" key={route.id}><strong role="rowheader"><i aria-hidden="true">{index + 1}</i><code title={route.alias}>{route.alias}</code></strong><span role="cell">{formatNumber(route.requests)}</span><span role="cell">{formatCompact(route.tokens)}</span><span role="cell">{formatUSD(route.estimated_cost_usd)}</span></div>)}</div>}
   </section>;
 }
 
@@ -1039,16 +1066,44 @@ function ProviderCapacityGroup({
         </div>
         <button className="provider-inspect" onClick={() => onSelect({ type: "provider", id: provider.id })} aria-label={`Inspect ${provider.name}`}>Inspect</button>
       </div>
-      {expanded && <div className="route-debug-list" id={`provider-models-${provider.id}`}>
-        <div className="route-debug-columns" aria-hidden="true">
-          <span>Public model</span><span>Traffic</span><span>Keys</span><span>Next key</span><span>Model override</span><span />
-        </div>
-        {routes.length ? routes.map((route) => (
-          <RouteDebugRow key={route.id} route={route} selected={selected} onSelect={onSelect} />
-        )) : <p className="provider-model-empty">No model routes configured for this provider.</p>}
-      </div>}
+      {/* The container is always in the document so aria-controls resolves. It
+          used to be mounted only while expanded, which pointed the toggle at a
+          missing ID — a screen reader announced a collapsed control with nothing
+          to expand. The rows themselves stay unmounted until they are needed. */}
+      <div className="route-debug-list" id={`provider-models-${provider.id}`} hidden={!expanded}>
+        {expanded && <>
+          <div className="route-debug-columns" aria-hidden="true">
+            <span>Public model</span><span>Traffic</span><span>Keys</span><span>Next key</span><span>Model override</span><span />
+          </div>
+          {routes.length ? routes.map((route) => (
+            <RouteDebugRow key={route.id} route={route} selected={selected} onSelect={onSelect} />
+          )) : <p className="provider-model-empty">No model routes configured for this provider.</p>}
+        </>}
+      </div>
     </section>
   );
+}
+
+/** One bucket's capacity, as the two strings every capacity readout needs: the
+ *  sentence a screen reader or a title attribute gets, and the abbreviation that
+ *  fits in a four-character cell. Both the overview's limit cells and the
+ *  provider page's capacity strip render the same bucket, and they had drifted —
+ *  an unknown remaining read "?" in one and "? / 400K" in the other. The compact
+ *  form is unspaced because the narrower of the two cells ellipsises at about
+ *  eight characters. */
+function limitReading(limit?: { limit: number; remaining: number; unlimited: boolean; unknown: boolean }) {
+  if (!limit) return { sentence: "no limit set", compact: "—" };
+  if (limit.unlimited) return { sentence: "unlimited", compact: "∞" };
+  if (limit.unknown) {
+    return {
+      sentence: `remaining unknown of ${formatNumber(limit.limit)}`,
+      compact: `?/${formatCompact(limit.limit)}`
+    };
+  }
+  return {
+    sentence: `${formatNumber(limit.remaining)} of ${formatNumber(limit.limit)} left`,
+    compact: `${formatCompact(limit.remaining)}/${formatCompact(limit.limit)}`
+  };
 }
 
 function LimitCell({ dimension, limit }: { dimension: string; limit?: Overview["providers"][number]["capacity"][string] }) {
@@ -1057,17 +1112,11 @@ function LimitCell({ dimension, limit }: { dimension: string; limit?: Overview["
   // The cell is four characters wide by design, so the reading it abbreviates goes
   // on the title in full: "88K/400K" is a rounding of the number an operator is
   // about to make a capacity decision on.
-  const reading = !limit
-    ? "no limit set"
-    : limit.unlimited
-      ? "unlimited"
-      : limit.unknown
-        ? `remaining unknown of ${formatNumber(limit.limit)}`
-        : `${formatNumber(limit.remaining)} of ${formatNumber(limit.limit)} left`;
+  const reading = limitReading(limit);
   return (
-    <span className={`limit-cell limit-cell--${tone}`} title={`${dimension.toUpperCase()} provider capacity: ${reading}`}>
+    <span className={`limit-cell limit-cell--${tone}`} title={`${dimension.toUpperCase()} provider capacity: ${reading.sentence}`}>
       <small>{dimension}</small>
-      <strong>{!limit ? "—" : limit.unlimited ? "∞" : limit.unknown ? "?" : `${formatCompact(limit.remaining)}/${formatCompact(limit.limit)}`}</strong>
+      <strong>{reading.compact}</strong>
     </span>
   );
 }
@@ -1144,11 +1193,16 @@ function OverviewInspector({
   navigate: (page: Page, query?: Record<string, string>) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  // Below 1050px this stops being a pane beside the console and becomes a fixed
+  // panel over it, so it takes focus, keeps Tab inside itself, closes on Escape
+  // and hands focus back on close. The hook has to run before the empty-state
+  // return so the hook order does not change with the selection.
+  const drawer = useDrawerOverlay({ open, active: useMediaQuery("(max-width: 1050px)"), onClose });
   if (!provider && !route && !credential) {
     return <aside className={`overview-inspector is-empty${open ? " is-open" : ""}`}><CircleGauge size={20} aria-hidden="true" /><strong>Select a route signal</strong><p>Inspect the next key, limiting bucket and reset without leaving Overview.</p></aside>;
   }
   return (
-    <aside className={`overview-inspector${open ? " is-open" : ""}`}>
+    <aside className={`overview-inspector${open ? " is-open" : ""}`} ref={drawer as React.Ref<HTMLElement>} tabIndex={-1}>
       <header>
         <div><span>{credential ? "API key" : route ? "Public model" : "Provider"}</span><h2>{credential?.label || route?.alias || provider?.name}</h2></div>
         <button className="console-icon inspector-close" onClick={onClose} aria-label="Close inspector"><X size={15} aria-hidden="true" /></button>
@@ -1372,15 +1426,21 @@ function LiveResetTime({ value }: { value: string }) {
 }
 
 function formatResetTime(value: string, now = Date.now()) {
-  const milliseconds = new Date(value).getTime() - now;
+  const reset = new Date(value).getTime();
+  if (Number.isNaN(reset)) return "unknown";
+  const milliseconds = reset - now;
   if (milliseconds <= 0) return "now";
   if (milliseconds < 60_000) return `in ${Math.ceil(milliseconds / 1000)}s`;
   if (milliseconds < 3_600_000) return `in ${Math.ceil(milliseconds / 60_000)}m`;
-  return `at ${new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  return `at ${new Date(reset).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
 }
 
 function formatRelativeTime(value: string) {
-  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
+  const stamp = new Date(value).getTime();
+  // Every comparison against NaN is false, so an unparseable timestamp used to
+  // fall through this ladder and render the literal text "NaNd ago".
+  if (Number.isNaN(stamp)) return "at an unknown time";
+  const seconds = Math.max(0, Math.floor((Date.now() - stamp) / 1000));
   if (seconds < 10) return "just now";
   if (seconds < 60) return `${seconds}s ago`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
@@ -1395,6 +1455,14 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
   const [error, setError] = useState("");
   const [openSection, setOpenSection] = useState<"models" | "credentials" | null>(null);
   const [providerInspectorOpen, setProviderInspectorOpen] = useState(false);
+  // Below 900px the inspector is a fixed drawer over the provider list, so it
+  // behaves like one for a keyboard too. Above it, nothing changes.
+  const inspectorFloating = useMediaQuery("(max-width: 900px)");
+  const providerDrawer = useDrawerOverlay({
+    open: providerInspectorOpen,
+    active: inspectorFloating,
+    onClose: () => setProviderInspectorOpen(false)
+  });
   const [testing, setTesting] = useState(false);
   const [deleting, setDeleting] = useState(false);
   // The panel holds ids, not the records themselves. A snapshot taken when the
@@ -1458,7 +1526,10 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
         description="Setup stays provider-wise. Every application still calls one model-wise gateway."
         actions={<Button onClick={() => setPanel({ type: "wizard" })}><Plus size={15} aria-hidden="true" /> Add provider</Button>}
       />
-      {error && (
+      {/* On a failed first load the empty state below already carries the message
+          and the retry, so the banner would say the same thing twice. It appears
+          only when a refresh fails over a list that is still on screen. */}
+      {error && providers.length > 0 && (
         <InlineNotice tone="danger">
           {error}{" "}
           <button type="button" className="link-button" onClick={() => void load()}>Try again</button>
@@ -1480,7 +1551,9 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
         />
       ) : (
         <div className="resource-layout">
-          <section className="resource-list" aria-label="Providers">
+          {/* The list is inert while the drawer covers it, for the same reason the
+              nav drawer makes the page behind it inert. */}
+          <section className="resource-list" aria-label="Providers" inert={inspectorFloating && providerInspectorOpen && Boolean(selected)}>
             {providers.map((provider) => {
               const healthy = provider.credentials.filter((credential) => credential.enabled && credential.status === "healthy").length;
               return (
@@ -1499,7 +1572,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
             })}
           </section>
           {selected && (
-            <section className={`resource-inspector${providerInspectorOpen ? " is-open" : ""}`}>
+            <section className={`resource-inspector${providerInspectorOpen ? " is-open" : ""}`} ref={providerDrawer as React.Ref<HTMLElement>} tabIndex={-1}>
               {!selected.enabled && (
                 <InlineNotice tone="danger">
                   This provider is turned off. Its routes are excluded from every request until it is turned back on.
@@ -1739,25 +1812,18 @@ function ProviderCapacityStrip({ provider }: { provider: Provider }) {
       <div className="pool-capacity__limits" role="list">
         {capacityDimensions.map((dimension) => {
           const limit = capacity?.limits?.[dimension];
-          const reading = !limit
-            ? "no limit set"
-            : limit.unlimited
-              ? "unlimited"
-              : limit.unknown
-                ? `remaining unknown of ${formatNumber(limit.limit)}`
-                : `${formatNumber(limit.remaining)} of ${formatNumber(limit.limit)} left`;
+          const reading = limitReading(limit);
           return (
-            <div key={dimension} role="listitem" aria-label={`${dimensionNames[dimension]}: ${reading}`}>
+            <div
+              key={dimension}
+              role="listitem"
+              /* The figure ellipsises inside a seventh of the strip, so the full
+                 reading stays reachable by pointer as well as by screen reader. */
+              title={`${dimension.toUpperCase()}: ${reading.sentence}`}
+              aria-label={`${dimensionNames[dimension]}: ${reading.sentence}`}
+            >
               <span aria-hidden="true">{dimension.toUpperCase()}</span>
-              <strong aria-hidden="true">
-                {!limit
-                  ? "—"
-                  : limit.unlimited
-                    ? "∞"
-                    : limit.unknown
-                      ? `? / ${formatCompact(limit.limit)}`
-                      : `${formatCompact(limit.remaining)} / ${formatCompact(limit.limit)}`}
-              </strong>
+              <strong aria-hidden="true">{reading.compact}</strong>
               <small aria-hidden="true">{dimension === "tpr" ? "max / request" : limit?.unlimited ? "unlimited" : "remaining / total"}</small>
             </div>
           );
@@ -2082,16 +2148,22 @@ function providerDraftFrom(provider: Provider): ProviderDraft {
   };
 }
 
+/** balanceInvalid reports whether a typed balance is unusable. A blank field is
+ * valid and means the balance is not tracked, which is why this cannot simply
+ * check Number.isFinite. */
+function balanceInvalid(value: string) {
+  const trimmed = value.trim();
+  if (trimmed === "") return false;
+  const parsed = Number(trimmed);
+  return !Number.isFinite(parsed) || parsed < 0;
+}
+
 /** providerBalanceError states what is wrong with a typed balance, or an empty
  * string when there is nothing to say. */
 function providerBalanceError(value: string) {
-  const trimmed = value.trim();
-  if (trimmed === "") return "";
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return "Enter the per-key balance as a positive USD amount, or leave it blank to stop tracking it.";
-  }
-  return "";
+  return balanceInvalid(value)
+    ? "Enter the per-key balance as a positive USD amount, or leave it blank to stop tracking it."
+    : "";
 }
 
 const GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/";
@@ -2112,6 +2184,7 @@ function geminiCompatibilitySuggestion(baseURL: string, apiFormat: ProviderDraft
 function ProviderFields({ value, onChange, existingKeys }: { value: ProviderDraft; onChange: (value: ProviderDraft) => void; existingKeys?: number }) {
   const geminiSuggestion = geminiCompatibilitySuggestion(value.base_url, value.api_format);
   const balanceError = providerBalanceError(value.default_key_balance);
+  const balanceErrorID = useId();
   const useOfficialPreset = (kind: "openai" | "anthropic") => onChange({
     ...value,
     name: value.name.trim() || (kind === "openai" ? "OpenAI" : "Anthropic"),
@@ -2171,10 +2244,13 @@ function ProviderFields({ value, onChange, existingKeys }: { value: ProviderDraf
             type="number" min={0} step="0.01" inputMode="decimal" placeholder="Not tracked"
             value={value.default_key_balance}
             aria-invalid={balanceError ? true : undefined}
+            /* aria-invalid alone says a field is wrong without saying why, so the
+               notice below is bound to the input as its description. */
+            aria-describedby={balanceError ? balanceErrorID : undefined}
             onChange={(event) => onChange({ ...value, default_key_balance: event.target.value })}
           />
         </label>
-        {balanceError && <InlineNotice tone="danger">{balanceError}</InlineNotice>}
+        {balanceError && <div id={balanceErrorID}><InlineNotice tone="danger">{balanceError}</InlineNotice></div>}
         {existingKeys !== undefined && existingKeys > 0 && (
           <Toggle
             checked={value.apply_balance_to_existing_keys && value.default_key_balance.trim() !== ""}
@@ -2191,7 +2267,17 @@ function ProviderFields({ value, onChange, existingKeys }: { value: ProviderDraf
 }
 
 function ProviderForm({ provider, onClose, onComplete, notify }: { provider: Provider; onClose: () => void; onComplete: (message: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
-  const saved = providerDraftFrom(provider);
+  // The panel reads its provider out of the list that reloads every ten seconds,
+  // so recomputing the baseline on every render made an unrelated upstream change
+  // — a health check, a request counter — read as unsaved local edits: the discard
+  // prompt fired on a form nobody had typed in, and saving pushed the older
+  // snapshot back over the newer values. The baseline is the provider as it stood
+  // when the panel opened, and it only moves when the panel switches resource.
+  const baseline = useRef<{ id: string; draft: ProviderDraft } | null>(null);
+  if (baseline.current?.id !== provider.id) {
+    baseline.current = { id: provider.id, draft: providerDraftFrom(provider) };
+  }
+  const saved = baseline.current.draft;
   const [draft, setDraft] = useState<ProviderDraft>(saved);
   const [busy, setBusy] = useState(false);
   const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
@@ -2300,7 +2386,7 @@ function ModelForm({ provider, model, onClose, onComplete, notify }: { provider:
       dirty={dirty}
       discardMessage="Close this panel? The route details here are not saved yet."
       actions={model ? <Button variant="danger" disabled={deleting} onClick={() => {
-        if (!confirm(`Delete route ${model.public_alias}? Requests using this alias stop immediately, and the route cannot be restored — you would add it again from scratch.`)) return;
+        if (!confirm(deleteRouteWarning(model.public_alias))) return;
         setDeleting(true);
         void api(`/api/admin/models/${model.id}`, { method: "DELETE" })
           .then(() => onComplete(`Route ${model.public_alias} deleted.`))
@@ -2579,6 +2665,11 @@ function CredentialBalanceFields({ credential, balance, onBalanceChange, resetSp
   const tracked = balance.trim() !== "";
   const parsed = Number(balance.trim());
   const remaining = tracked && Number.isFinite(parsed) ? Math.max(0, parsed - (resetSpend ? 0 : spent)) : null;
+  // Save rejects an unusable figure with a toast, which is gone before the
+  // operator looks back at the field. The field says what is wrong itself, and
+  // the message is bound to the input so it reaches assistive tech too.
+  const invalid = balanceInvalid(balance);
+  const errorID = useId();
 
   return (
     <fieldset>
@@ -2594,6 +2685,8 @@ function CredentialBalanceFields({ credential, balance, onBalanceChange, resetSp
           <input
             type="number" min="0" step="0.01" inputMode="decimal" placeholder="Not tracked"
             value={balance} onChange={(event) => onBalanceChange(event.target.value)}
+            aria-invalid={invalid ? true : undefined}
+            aria-describedby={invalid ? errorID : undefined}
           />
         </label>
         {credential && (
@@ -2605,6 +2698,11 @@ function CredentialBalanceFields({ credential, balance, onBalanceChange, resetSp
           </label>
         )}
       </div>
+      {invalid && (
+        <div id={errorID}>
+          <InlineNotice tone="danger">Enter the balance as a positive USD amount, or leave it blank to stop tracking it.</InlineNotice>
+        </div>
+      )}
       {remaining !== null && (
         <p className="fieldset-note">
           Remaining after this change: <strong>{formatUSD(remaining)}</strong>
@@ -2833,6 +2931,14 @@ function ModelsPage({
   const [providerFilter, setProviderFilter] = useState("");
   const [credentialsOpen, setCredentialsOpen] = useState(false);
   const [modelInspectorOpen, setModelInspectorOpen] = useState(false);
+  // Below 900px the inspector covers the route list, so it takes focus, keeps Tab
+  // inside itself and closes on Escape like any other overlay.
+  const inspectorFloating = useMediaQuery("(max-width: 900px)");
+  const modelDrawer = useDrawerOverlay({
+    open: modelInspectorOpen,
+    active: inspectorFloating,
+    onClose: () => setModelInspectorOpen(false)
+  });
   const [probeResults, setProbeResults] = useState<Record<string, ModelProbeResult>>({});
   const [probeProgress, setProbeProgress] = useState({ completed: 0, total: 0, passed: 0, blocked: 0, failed: 0 });
   const [bulkChecking, setBulkChecking] = useState(false);
@@ -2976,7 +3082,7 @@ function ModelsPage({
       ) : (
         <div className="ide-resource-workbench">
           {error && <InlineNotice tone="danger">{error} Showing the last data that loaded.</InlineNotice>}
-          <section className="ide-resource-list">
+          <section className="ide-resource-list" inert={inspectorFloating && modelInspectorOpen && Boolean(selected)}>
             <div className="ide-filter model-filter">
               <Search size={14} aria-hidden="true" />
               <label><span className="sr-only">Filter model routes</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter aliases or upstream IDs" /></label>
@@ -3023,7 +3129,7 @@ function ModelsPage({
             </div>
           </section>
           {selected && (
-            <aside className={`ide-resource-inspector${modelInspectorOpen ? " is-open" : ""}`}>
+            <aside className={`ide-resource-inspector${modelInspectorOpen ? " is-open" : ""}`} ref={modelDrawer as React.Ref<HTMLElement>} tabIndex={-1}>
               <header className="ide-inspector-titlebar">
                 <div><span>Model route</span><h2 title={selected.public_alias}>{selected.public_alias}</h2><code title={selected.upstream_model}>{selected.upstream_model}</code></div>
                 <div className="button-row"><button className="console-icon resource-inspector-close" onClick={() => setModelInspectorOpen(false)} aria-label="Close model inspector"><X size={15} aria-hidden="true" /></button><Button variant="quiet" disabled={rechecking || deletingRoute} onClick={() => {
@@ -3033,7 +3139,7 @@ function ModelsPage({
                     .catch((caught) => { notify(errorMessage(caught), "danger"); return reload(); })
                     .finally(() => setRechecking(false));
                 }}><Activity size={13} aria-hidden="true" /> {rechecking ? "Checking…" : "Recheck model"}</Button><Button variant="danger" disabled={rechecking || deletingRoute} onClick={() => {
-                  if (confirm(`Delete route ${selected.public_alias}? Requests using this alias stop immediately, and the route cannot be restored — you would add it again from scratch.`)) {
+                  if (confirm(deleteRouteWarning(selected.public_alias))) {
                     setDeletingRoute(true);
                     void api(`/api/admin/models/${selected.id}`, { method: "DELETE" })
                       .then(() => { notify("Model route deleted."); return reload(); })
@@ -3183,6 +3289,14 @@ function LogsPage() {
   const [attemptsOpen, setAttemptsOpen] = useState(false);
   const [bodiesOpen, setBodiesOpen] = useState(false);
   const [logInspectorOpen, setLogInspectorOpen] = useState(false);
+  // Below 900px the inspector covers the log list, so it behaves as an overlay:
+  // focus moves in, Tab stays inside, Escape closes, focus returns to the row.
+  const inspectorFloating = useMediaQuery("(max-width: 900px)");
+  const logDrawer = useDrawerOverlay({
+    open: logInspectorOpen,
+    active: inspectorFloating,
+    onClose: () => setLogInspectorOpen(false)
+  });
   const generation = useRef(0);
   // Typing filters the list server-side, so the request is held back until the
   // operator pauses. Without the delay every keystroke was its own round trip
@@ -3267,7 +3381,7 @@ function LogsPage() {
         </InlineNotice>
       )}
       <div className="ide-resource-workbench log-workbench">
-        <section className="ide-resource-list" aria-label="Request logs">
+        <section className="ide-resource-list" aria-label="Request logs" inert={inspectorFloating && logInspectorOpen && Boolean(selected)}>
           <div className="ide-filter log-filter">
             <Search size={14} aria-hidden="true" />
             <label>
@@ -3303,12 +3417,12 @@ function LogsPage() {
                 key={log.id}
                 className={`${selectedID === log.id ? "is-selected" : ""}${log.running ? " is-running" : ""}`}
                 aria-current={selectedID === log.id}
-                aria-label={`${log.model_alias} via ${log.provider_name}, ${log.running ? "still running" : `HTTP ${log.status_code}`}, ${log.latency_ms} ms, at ${new Date(log.created_at).toLocaleTimeString()}`}
+                aria-label={`${log.model_alias} via ${log.provider_name}, ${log.running ? "still running" : `HTTP ${log.status_code}`}, ${log.latency_ms} ms, at ${formatClockTime(log.created_at)}`}
                 onClick={() => { setSelectedID(log.id); setLogInspectorOpen(true); }}
               >
                 <span aria-hidden="true">
                   <StatusDot state={log.running ? "unknown" : log.status_code >= 500 ? "exhausted" : log.status_code >= 400 ? "partial" : "healthy"} />
-                  <strong>{new Date(log.created_at).toLocaleTimeString()}</strong>
+                  <strong>{formatClockTime(log.created_at)}</strong>
                   <small>{log.request_id}</small>
                 </span>
                 <span aria-hidden="true"><code title={log.model_alias}>{log.model_alias}</code><small title={`${log.provider_name} · ${routingStageLabel(log)}${log.error_code ? ` · ${log.error_code}` : ""}`}>{log.provider_name} · {routingStageLabel(log)}{log.error_code ? ` · ${log.error_code}` : ""}</small></span>
@@ -3320,7 +3434,7 @@ function LogsPage() {
           </div>
         </section>
         {selected ? (
-          <aside className={`ide-resource-inspector log-resource-inspector${logInspectorOpen ? " is-open" : ""}`}>
+          <aside className={`ide-resource-inspector log-resource-inspector${logInspectorOpen ? " is-open" : ""}`} ref={logDrawer as React.Ref<HTMLElement>} tabIndex={-1}>
             <header className="ide-inspector-titlebar">
               <div><span>{selected.endpoint} · {selected.running ? "RUNNING" : `HTTP ${selected.status_code}`}</span><h2 title={selected.request_id}>{selected.request_id}</h2><code title={selected.model_alias}>{selected.model_alias}</code></div>
               <div className="button-row"><strong className={`status-code status-code--${selected.running ? "running" : selected.status_code >= 500 ? "fault" : selected.status_code >= 400 ? "warning" : "healthy"}`}>{selected.running ? "RUNNING" : selected.status_code}</strong><button className="console-icon resource-inspector-close" onClick={() => setLogInspectorOpen(false)} aria-label="Close log inspector"><X size={15} aria-hidden="true" /></button></div>
@@ -3337,7 +3451,7 @@ function LogsPage() {
             {selected.running ? <InlineNotice>Request is running. This inspector will switch to the final status automatically.</InlineNotice> : selected.status_code >= 400 && <LogDiagnosis log={selected} />}
             <section className={`inspector-disclosure log-disclosure${attemptsOpen ? " is-open" : ""}`}>
               <button type="button" onClick={() => setAttemptsOpen((current) => !current)} aria-expanded={attemptsOpen}><ChevronDown size={14} aria-hidden="true" /><span><strong>Routing attempts</strong><small>{selected.attempts.length} recorded</small></span></button>
-              {attemptsOpen && <div className="attempt-list">{selected.attempts.length ? selected.attempts.map((attempt, index) => <div key={`${attempt.credential_id}-${index}`}><span>{index + 1}</span><strong>{attempt.credential_label}</strong><code>{attempt.status_code || attempt.error}{attempt.error ? ` · ${attempt.error}` : ""}{attempt.removed_parameters?.length ? ` · removed ${attempt.removed_parameters.join(", ")}` : ""}{attempt.replaced_parameters ? ` · replaced ${Object.entries(attempt.replaced_parameters).map(([from, to]) => `${from} → ${to}`).join(", ")}` : ""}</code><small>{attempt.duration_ms} ms</small>{attempt.error_message && <p>{attempt.error_message}</p>}</div>) : <p className="console-empty">No upstream attempt was needed.</p>}</div>}
+              {attemptsOpen && <div className="attempt-list">{selected.attempts.length ? selected.attempts.map((attempt, index) => <div key={`${attempt.credential_id}-${index}`}><span>{index + 1}</span><strong>{attempt.credential_label}</strong><code>{attemptSummary(attempt)}</code><small>{attempt.duration_ms} ms</small>{attempt.error_message && <p>{attempt.error_message}</p>}</div>) : <p className="console-empty">No upstream attempt was needed.</p>}</div>}
             </section>
             {!selected.running && selected.body_captured ? (
               <section className={`inspector-disclosure log-disclosure${bodiesOpen ? " is-open" : ""}`}>
@@ -3426,6 +3540,28 @@ function logErrorTitle(log: RequestLog) {
   return "Gateway request failed";
 }
 
+/** The same warning is shown from the edit panel and from the models inspector.
+ *  It was written out twice, so a change to one wording silently disagreed with
+ *  the other about what deleting a route does. */
+function deleteRouteWarning(alias: string) {
+  return `Delete route ${alias}? Requests using this alias stop immediately, and the route cannot be restored — you would add it again from scratch.`;
+}
+
+/** One attempt's outcome as a single line. An attempt that never reached a status
+ *  code carries only an error, and the old expression printed it on both sides of
+ *  the separator — "connection_error · connection_error". replaced_parameters was
+ *  truthy-checked as an object, so an empty map left a dangling "· replaced". */
+function attemptSummary(attempt: RequestLog["attempts"][number]) {
+  const parts: string[] = [];
+  if (attempt.status_code) parts.push(String(attempt.status_code));
+  if (attempt.error) parts.push(attempt.error);
+  if (parts.length === 0) parts.push("no response");
+  if (attempt.removed_parameters?.length) parts.push(`removed ${attempt.removed_parameters.join(", ")}`);
+  const replaced = Object.entries(attempt.replaced_parameters ?? {});
+  if (replaced.length) parts.push(`replaced ${replaced.map(([from, to]) => `${from} → ${to}`).join(", ")}`);
+  return parts.join(" · ");
+}
+
 function routingStageLabel(log: RequestLog) {
   if (log.credential_label) return log.credential_label;
   if (log.provider_name === "gateway") return "Gateway validation";
@@ -3507,7 +3643,7 @@ function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNe
         </div>
       </section>
       <section className="section-block code-example">
-        <div className="section-heading"><div><p className="eyebrow">OpenAI lane</p><h2>Chat Completions and Responses</h2></div><Button variant="quiet" onClick={() => void copyText(openAIURL).then(() => notify("OpenAI base URL copied."))}><Clipboard size={14} aria-hidden="true" /> Copy base URL</Button></div>
+        <div className="section-heading"><div><p className="eyebrow">OpenAI lane</p><h2>Chat Completions and Responses</h2></div><Button variant="quiet" onClick={() => void copyText(openAIURL).then(() => notify("OpenAI base URL copied.")).catch(() => notify("Clipboard access was blocked.", "danger"))}><Clipboard size={14} aria-hidden="true" /> Copy base URL</Button></div>
         <pre>{`curl "${openAIURL}/chat/completions" \\
   -H "Authorization: Bearer $ROTAKEY_KEY" \\
   -H "Content-Type: application/json" \\
@@ -3518,7 +3654,7 @@ function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNe
           <div><p className="eyebrow">Codex CLI &amp; Desktop</p><h2>{codexReady === null ? "Set up Codex" : `${codexReady} model route${codexReady === 1 ? "" : "s"} ready`}</h2></div>
           <div className="button-row">
             <a className="button button--quiet" href="https://github.com/jisunahamed/rotakey/blob/main/docs/CODEX.md" target="_blank" rel="noreferrer"><BookOpen size={14} aria-hidden="true" /> Full guide</a>
-            <Button variant="quiet" onClick={() => void copyText(`rotakey-codex install --url ${rootURL}`).then(() => notify("Codex setup command copied."))}><Clipboard size={14} aria-hidden="true" /> Copy setup</Button>
+            <Button variant="quiet" onClick={() => void copyText(`rotakey-codex install --url ${rootURL}`).then(() => notify("Codex setup command copied.")).catch(() => notify("Clipboard access was blocked.", "danger"))}><Clipboard size={14} aria-hidden="true" /> Copy setup</Button>
           </div>
         </div>
         <pre>{`rotakey-codex install --url ${rootURL}
@@ -3527,7 +3663,7 @@ codex --profile rotakey`}</pre>
         <p>The installer prompts for the gateway key, protects it in the OS credential store, and writes only a managed Rotakey profile. Run <code>rotakey-codex sync</code> after changing model routes.</p>
       </section>
       <section className="section-block code-example">
-        <div className="section-heading"><div><p className="eyebrow">Anthropic lane</p><h2>Messages SDK and Claude Code</h2></div><div className="button-row"><a className="button button--quiet" href="https://github.com/jisunahamed/rotakey/blob/main/docs/CLAUDE-CODE.md" target="_blank" rel="noreferrer"><BookOpen size={14} aria-hidden="true" /> Full guide</a><Button variant="quiet" onClick={() => void copyText(rootURL).then(() => notify("Anthropic base URL copied."))}><Clipboard size={14} aria-hidden="true" /> Copy base URL</Button></div></div>
+        <div className="section-heading"><div><p className="eyebrow">Anthropic lane</p><h2>Messages SDK and Claude Code</h2></div><div className="button-row"><a className="button button--quiet" href="https://github.com/jisunahamed/rotakey/blob/main/docs/CLAUDE-CODE.md" target="_blank" rel="noreferrer"><BookOpen size={14} aria-hidden="true" /> Full guide</a><Button variant="quiet" onClick={() => void copyText(rootURL).then(() => notify("Anthropic base URL copied.")).catch(() => notify("Clipboard access was blocked.", "danger"))}><Clipboard size={14} aria-hidden="true" /> Copy base URL</Button></div></div>
         <pre>{`export ANTHROPIC_BASE_URL="${rootURL}"
 export ANTHROPIC_API_KEY="$ROTAKEY_KEY"
 
@@ -3735,7 +3871,10 @@ function ConfigTransfer({ notify }: { notify: (message: string, tone?: "success"
             <li>API keys: {result.credentials_created} created · {result.credentials_updated} updated{result.credentials_skipped > 0 ? ` · ${result.credentials_skipped} skipped` : ""}</li>
           </ul>
           {result.credentials_unverified > 0 && <InlineNotice tone="danger">{result.credentials_unverified} imported API key{result.credentials_unverified === 1 ? " was" : "s were"} saved without contacting the provider. Use Test on each provider to confirm they work.</InlineNotice>}
-          {result.warnings.map((warning) => <InlineNotice key={warning} tone="danger">{warning}</InlineNotice>)}
+          {/* Two providers can raise the same warning text, and using the text as
+              the key made React drop the duplicate. The index is stable here: the
+              list is rendered whole from one import result and never reordered. */}
+          {result.warnings.map((warning, index) => <InlineNotice key={index} tone="danger">{warning}</InlineNotice>)}
         </div>
       )}
     </section>
@@ -3965,11 +4104,30 @@ function normalizeOverview(overview: Overview): Overview {
     series: overview.series ?? [],
     providers: (overview.providers ?? []).map((provider) => ({
       ...provider,
+      models_total: safeNumber(provider.models_total),
+      models_ready: safeNumber(provider.models_ready),
+      keys_total: safeNumber(provider.keys_total),
+      keys_ready: safeNumber(provider.keys_ready),
+      keys_warning: safeNumber(provider.keys_warning),
+      validation_warnings: safeNumber(provider.validation_warnings),
       capacity: provider.capacity ?? {},
       credit: provider.credit ?? emptyCreditTotals()
     })),
+    // The route rows render these figures straight into text, so a payload that
+    // omits one produced "NaN% err" and "undefined ms" in the table rather than a
+    // zero. Only the arrays used to be defaulted here.
     routes: (overview.routes ?? []).map((route) => ({
       ...route,
+      requests: safeNumber(route.requests),
+      errors: safeNumber(route.errors),
+      tokens: safeNumber(route.tokens),
+      estimated_cost_usd: safeNumber(route.estimated_cost_usd),
+      error_rate: safeNumber(route.error_rate),
+      latency_p95_ms: safeNumber(route.latency_p95_ms),
+      healthy_credentials: safeNumber(route.healthy_credentials),
+      unavailable_credentials: safeNumber(route.unavailable_credentials),
+      total_credentials: safeNumber(route.total_credentials),
+      default_max_output_tokens: safeNumber(route.default_max_output_tokens),
       strip_parameters: route.strip_parameters ?? [],
       segments: route.segments ?? []
     })),
@@ -3999,7 +4157,22 @@ function formatLatency(value: number) {
 
 function formatChartDate(value?: string) {
   if (!value) return "—";
-  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(new Date(value));
+  const parsed = new Date(value);
+  // Intl throws a RangeError on an invalid date rather than returning a string,
+  // and this runs inside the overview's render path, so one malformed timestamp
+  // in the series would take the whole page down.
+  if (Number.isNaN(parsed.getTime())) return "—";
+  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(parsed);
+}
+
+/** The wall-clock time a request landed. Every row in the log list renders one,
+ *  so an unparseable stamp has to degrade to a dash rather than to "Invalid
+ *  Date" in the row and in its accessible name. */
+function formatClockTime(value?: string) {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "—";
+  return parsed.toLocaleTimeString();
 }
 
 async function copyText(value: string) {

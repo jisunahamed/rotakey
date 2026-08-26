@@ -32,7 +32,10 @@ const statusPhrase: Record<string, string> = {
   idle: "Idle",
   failed: "Failed",
   unavailable: "Unavailable",
-  unverified: "Not checked yet"
+  unverified: "Not checked yet",
+  // A segment whose upstream state has not been read yet. Without an entry the
+  // fallback announced the bare enum, and the dot had no colour rule either.
+  unknown: "Unknown"
 };
 
 export function statusLabel(state: string) {
@@ -75,6 +78,65 @@ export function EmptyState({
 const focusableSelector =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
 
+/** Keeps Tab inside `container` by bouncing off either end. Shared by the sheet
+ * and by the inspector drawers, which become the same kind of modal overlay once
+ * the viewport is too narrow to show them beside the list. */
+function trapTab(container: HTMLElement, event: KeyboardEvent) {
+  const focusable = Array.from(
+    container.querySelectorAll<HTMLElement>(focusableSelector)
+  ).filter((element) => element.offsetParent !== null || element === document.activeElement);
+  if (focusable.length === 0) return;
+  const edge = event.shiftKey ? focusable[0] : focusable[focusable.length - 1];
+  if (document.activeElement === edge) {
+    event.preventDefault();
+    (event.shiftKey ? focusable[focusable.length - 1] : focusable[0]).focus();
+  }
+}
+
+/** Gives an inspector drawer the behaviour its appearance already implies. Below
+ * the breakpoint where the inspector stops being a pane beside the list and
+ * becomes a fixed panel over it, it is a modal overlay in every respect except
+ * the ones that matter to a keyboard: focus never moved into it, Tab walked the
+ * covered list behind it, Escape did nothing, and closing it left focus adrift.
+ * `active` is the caller's media query, so nothing changes on a wide screen where
+ * the inspector is genuinely part of the layout.
+ *
+ * Returns the ref to put on the drawer. Give the drawer `tabIndex={-1}` so focus
+ * has somewhere to land when it holds no controls yet, and mark the list behind
+ * it `inert` with the same `open && active` condition. */
+export function useDrawerOverlay({ open, active, onClose }: { open: boolean; active: boolean; onClose: () => void }) {
+  const ref = useRef<HTMLElement | null>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  useEffect(() => {
+    if (!open || !active) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const node = ref.current;
+    const first = node?.querySelector<HTMLElement>(focusableSelector);
+    (first ?? node)?.focus();
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeRef.current();
+        return;
+      }
+      if (event.key === "Tab" && ref.current) trapTab(ref.current, event);
+    }
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      // Restoring focus is what makes the drawer feel like it closed rather than
+      // vanished: the operator lands back on the row they opened.
+      previous?.focus?.();
+    };
+  }, [open, active]);
+
+  return ref;
+}
+
 export function Sheet({
   title,
   eyebrow,
@@ -111,7 +173,14 @@ export function Sheet({
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     const node = panel.current;
-    const first = node?.querySelector<HTMLElement>(focusableSelector);
+    // The header's actions slot comes before the body in DOM order, and on the
+    // credential and model panels its first control is Delete. Opening a form
+    // with focus already on the destructive button means one stray Enter deletes
+    // the resource, so focus starts inside the body and only falls back to the
+    // header when the panel has no body controls at all.
+    const first =
+      node?.querySelector(".sheet__body")?.querySelector<HTMLElement>(focusableSelector) ??
+      node?.querySelector<HTMLElement>(focusableSelector);
     (first ?? node)?.focus();
 
     function onKeyDown(event: KeyboardEvent) {
@@ -122,15 +191,7 @@ export function Sheet({
         return;
       }
       if (event.key !== "Tab" || !panel.current) return;
-      const focusable = Array.from(
-        panel.current.querySelectorAll<HTMLElement>(focusableSelector)
-      ).filter((element) => element.offsetParent !== null || element === document.activeElement);
-      if (focusable.length === 0) return;
-      const edge = event.shiftKey ? focusable[0] : focusable[focusable.length - 1];
-      if (document.activeElement === edge) {
-        event.preventDefault();
-        (event.shiftKey ? focusable[focusable.length - 1] : focusable[0]).focus();
-      }
+      trapTab(panel.current, event);
     }
 
     document.addEventListener("keydown", onKeyDown);
