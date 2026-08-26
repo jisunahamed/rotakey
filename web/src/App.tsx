@@ -42,6 +42,7 @@ import {
   Toggle,
   useDrawerOverlay
 } from "./components";
+import { useConfirm, type ConfirmRequest } from "./ConfirmDialog";
 import {
   emptyCreditTotals,
   emptyPolicy,
@@ -1474,6 +1475,7 @@ function formatRelativeTime(value: string) {
 }
 
 function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" | "danger") => void }) {
+  const ask = useConfirm();
   const [providers, setProviders] = useState<Provider[]>([]);
   const [selectedID, setSelectedID] = useState(() => new URLSearchParams(location.search).get("provider") || "");
   const [loading, setLoading] = useState(true);
@@ -1636,16 +1638,30 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                     disabled={deleting}
                     aria-label={`Delete provider ${selected.name}`}
                     onClick={() => {
-                      // Naming what goes with it: the routes are the aliases callers
-                      // send, and deleting them breaks those callers immediately.
-                      const routes = `${selected.models.length} model route${selected.models.length === 1 ? "" : "s"}`;
-                      const keys = `${selected.credentials.length} API key${selected.credentials.length === 1 ? "" : "s"}`;
-                      if (!confirm(`Delete ${selected.name}? Its ${routes} and ${keys} are removed with it, requests to those aliases start failing at once, and this cannot be undone.`)) return;
-                      setDeleting(true);
-                      void api<void>(`/api/admin/providers/${selected.id}`, { method: "DELETE" })
-                        .then(() => complete(`${selected.name} deleted.`))
-                        .catch((caught) => notify(errorMessage(caught), "danger"))
-                        .finally(() => setDeleting(false));
+                      void (async () => {
+                        // Naming what goes with it: the routes are the aliases callers
+                        // send, and deleting them breaks those callers immediately.
+                        const routes = `${selected.models.length} model route${selected.models.length === 1 ? "" : "s"}`;
+                        const keys = `${selected.credentials.length} API key${selected.credentials.length === 1 ? "" : "s"}`;
+                        const confirmed = await ask({
+                          title: `Delete ${selected.name}?`,
+                          body: `Its ${routes} and ${keys} are removed with it. Requests to those aliases start failing at once, and this cannot be undone.`,
+                          confirmLabel: "Delete provider",
+                          detail: selected.models.length
+                            ? selected.models.map((model) => model.public_alias).join("\n")
+                            : undefined
+                        });
+                        if (!confirmed) return;
+                        setDeleting(true);
+                        try {
+                          await api<void>(`/api/admin/providers/${selected.id}`, { method: "DELETE" });
+                          complete(`${selected.name} deleted.`);
+                        } catch (caught) {
+                          notify(errorMessage(caught), "danger");
+                        } finally {
+                          setDeleting(false);
+                        }
+                      })();
                     }}
                   ><Trash2 size={14} aria-hidden="true" /> {deleting ? "Deleting…" : "Delete"}</Button>
                 </div>
@@ -1871,6 +1887,7 @@ function ProviderPowerButton({
   onDone: (message: string) => void;
   notify: (message: string, tone?: "success" | "danger") => void;
 }) {
+  const ask = useConfirm();
   const [busy, setBusy] = useState(false);
   const turningOff = provider.enabled;
 
@@ -1904,12 +1921,19 @@ function ProviderPowerButton({
       disabled={busy}
       aria-label={`${turningOff ? "Turn off" : "Turn on"} provider ${provider.name}`}
       onClick={() => {
-        // Turning off stops real traffic, so it is confirmed; turning on only
-        // adds capacity and needs no prompt.
-        if (turningOff && !confirm(`Turn off ${provider.name}? Its model routes stop receiving traffic until it is turned back on.`)) {
-          return;
-        }
-        void apply();
+        void (async () => {
+          // Turning off stops real traffic, so it is confirmed; turning on only
+          // adds capacity and needs no prompt.
+          if (turningOff) {
+            const confirmed = await ask({
+              title: `Turn off ${provider.name}?`,
+              body: "Its model routes stop receiving traffic until it is turned back on. Nothing is deleted.",
+              confirmLabel: "Turn off provider"
+            });
+            if (!confirmed) return;
+          }
+          await apply();
+        })();
       }}
     >
       <Power size={14} aria-hidden="true" /> {busy ? "Saving…" : turningOff ? "Turn off" : "Turn on"}
@@ -2372,6 +2396,7 @@ function ModelFields({ value, onChange }: { value: ModelDraft; onChange: (value:
 }
 
 function ModelForm({ provider, model, onClose, onComplete, notify }: { provider: Provider; model?: ModelRoute; onClose: () => void; onComplete: (message: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
+  const ask = useConfirm();
   const routingMode = useRoutingMode();
   const [draft, setDraft] = useState<ModelDraft>(model ? {
     public_alias: model.public_alias, upstream_model: model.upstream_model,
@@ -2415,12 +2440,18 @@ function ModelForm({ provider, model, onClose, onComplete, notify }: { provider:
       dirty={dirty}
       discardMessage="Close this panel? The route details here are not saved yet."
       actions={model ? <Button variant="danger" disabled={deleting} onClick={() => {
-        if (!confirm(deleteRouteWarning(model.public_alias))) return;
-        setDeleting(true);
-        void api(`/api/admin/models/${model.id}`, { method: "DELETE" })
-          .then(() => onComplete(`Route ${model.public_alias} deleted.`))
-          .catch((caught) => notify(errorMessage(caught), "danger"))
-          .finally(() => setDeleting(false));
+        void (async () => {
+          if (!(await ask(deleteRouteQuestion(model.public_alias)))) return;
+          setDeleting(true);
+          try {
+            await api(`/api/admin/models/${model.id}`, { method: "DELETE" });
+            onComplete(`Route ${model.public_alias} deleted.`);
+          } catch (caught) {
+            notify(errorMessage(caught), "danger");
+          } finally {
+            setDeleting(false);
+          }
+        })();
       }}><Trash2 size={14} aria-hidden="true" /> {deleting ? "Deleting…" : "Delete route"}</Button> : undefined}
     >
       <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
@@ -2447,6 +2478,7 @@ type CredentialInspection = {
 };
 
 function CredentialForm({ provider, credential, onClose, onComplete, notify }: { provider: Provider; credential?: Credential; onClose: () => void; onComplete: (message: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
+  const ask = useConfirm();
   const [label, setLabel] = useState(credential?.label ?? "");
   const [secret, setSecret] = useState("");
   const [isPrimary, setIsPrimary] = useState(credential?.is_primary ?? false);
@@ -2464,6 +2496,10 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
   const [selectedModel, setSelectedModel] = useState(provider.models[0]?.id ?? "");
   const [modelLimits, setModelLimits] = useState<RatePolicy>(() => credential?.model_limits[provider.models[0]?.id] ?? emptyPolicy());
   const [busy, setBusy] = useState(false);
+  // Deleting has its own flag rather than sharing `busy` with save: the button used
+  // to grey out with its label unchanged, so on a slow link the operator could not
+  // tell whether the request had gone out.
+  const [deleting, setDeleting] = useState(false);
   const [labelTouched, setLabelTouched] = useState(false);
   const [secretTouched, setSecretTouched] = useState(false);
   const fieldID = useId();
@@ -2570,14 +2606,25 @@ function CredentialForm({ provider, credential, onClose, onComplete, notify }: {
       wide
       dirty={dirty}
       discardMessage="Close this panel? The API key and limits typed here are not saved yet."
-      actions={credential ? <Button variant="danger" disabled={busy} onClick={() => {
-        if (!confirm(`Delete API key ${credential.label}? Requests routed to it move to the provider's other keys, and this cannot be undone.`)) return;
-        setBusy(true);
-        void api(`/api/admin/credentials/${credential.id}`, { method: "DELETE" })
-          .then(() => onComplete(`API key ${credential.label} deleted.`))
-          .catch((caught) => notify(errorMessage(caught), "danger"))
-          .finally(() => setBusy(false));
-      }}><Trash2 size={14} aria-hidden="true" /> Delete key</Button> : undefined}
+      actions={credential ? <Button variant="danger" disabled={busy || deleting} onClick={() => {
+        void (async () => {
+          const confirmed = await ask({
+            title: `Delete API key ${credential.label}?`,
+            body: "Requests routed to it move to the provider's other keys. This cannot be undone.",
+            confirmLabel: "Delete API key"
+          });
+          if (!confirmed) return;
+          setDeleting(true);
+          try {
+            await api(`/api/admin/credentials/${credential.id}`, { method: "DELETE" });
+            onComplete(`API key ${credential.label} deleted.`);
+          } catch (caught) {
+            notify(errorMessage(caught), "danger");
+          } finally {
+            setDeleting(false);
+          }
+        })();
+      }}><Trash2 size={14} aria-hidden="true" /> {deleting ? "Deleting…" : "Delete key"}</Button> : undefined}
     >
       {credential?.validation_error && <InlineNotice tone="danger">{credential.validation_error}</InlineNotice>}
       {/* The sheet body is a form, so the browser's own `required` and `type`
@@ -2953,6 +3000,7 @@ function ModelsPage({
   navigate: (page: Page, query?: Record<string, string>) => void;
   notify: (message: string, tone?: "success" | "danger") => void;
 }) {
+  const ask = useConfirm();
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -3066,9 +3114,16 @@ function ModelsPage({
   const deleteFailedModels = async () => {
     if (deletingFailed || failedProbeIDs.length === 0) return;
     const aliases = models.filter((model) => failedProbeIDs.includes(model.id)).map((model) => model.public_alias);
-    const preview = aliases.slice(0, 12).join("\n");
-    const remainder = aliases.length > 12 ? `\n…and ${aliases.length - 12} more` : "";
-    if (!confirm(`Delete ${aliases.length} failed model route${aliases.length === 1 ? "" : "s"}? Requests using these aliases will stop immediately.\n\n${preview}${remainder}`)) return;
+    // The dialog gets the whole list in a scrolling block rather than the twelve a
+    // window.confirm() could fit: this is the one action that deletes many routes at
+    // once, so the operator has to be able to read what goes.
+    const confirmed = await ask({
+      title: `Delete ${aliases.length} unavailable route${aliases.length === 1 ? "" : "s"}?`,
+      body: "Requests using these aliases stop immediately, and the routes cannot be restored.",
+      confirmLabel: `Delete ${aliases.length} route${aliases.length === 1 ? "" : "s"}`,
+      detail: aliases.join("\n")
+    });
+    if (!confirmed) return;
     setDeletingFailed(true);
     let deleted = 0;
     let deleteErrors = 0;
@@ -3168,13 +3223,19 @@ function ModelsPage({
                     .catch((caught) => { notify(errorMessage(caught), "danger"); return reload(); })
                     .finally(() => setRechecking(false));
                 }}><Activity size={13} aria-hidden="true" /> {rechecking ? "Checking…" : "Check model"}</Button><Button variant="danger" disabled={rechecking || deletingRoute} onClick={() => {
-                  if (confirm(deleteRouteWarning(selected.public_alias))) {
+                  void (async () => {
+                    if (!(await ask(deleteRouteQuestion(selected.public_alias)))) return;
                     setDeletingRoute(true);
-                    void api(`/api/admin/models/${selected.id}`, { method: "DELETE" })
-                      .then(() => { notify(`Route ${selected.public_alias} deleted.`); return reload(); })
-                      .catch((caught) => notify(errorMessage(caught), "danger"))
-                      .finally(() => setDeletingRoute(false));
-                  }
+                    try {
+                      await api(`/api/admin/models/${selected.id}`, { method: "DELETE" });
+                      notify(`Route ${selected.public_alias} deleted.`);
+                      await reload();
+                    } catch (caught) {
+                      notify(errorMessage(caught), "danger");
+                    } finally {
+                      setDeletingRoute(false);
+                    }
+                  })();
                 }}><Trash2 size={13} aria-hidden="true" /> {deletingRoute ? "Deleting…" : "Delete route"}</Button></div>
               </header>
               <div className="inspector-definition">
@@ -3232,6 +3293,7 @@ function ModelLimitEditor({
   notify: (message: string, tone?: "success" | "danger") => void;
   onSaved: () => Promise<void>;
 }) {
+  const ask = useConfirm();
   const [target, setTarget] = useState("all");
   const [draft, setDraft] = useState<RatePolicy>(emptyPolicy());
   const [busy, setBusy] = useState(false);
@@ -3260,10 +3322,15 @@ function ModelLimitEditor({
     : targetCredential?.label ?? "this API key";
   // "All API keys" is the default, so both buttons rewrite the whole pool on one
   // click unless the operator confirms the blast radius first.
-  const confirmFanOut = (question: string) => target !== "all" || confirm(question);
+  const confirmFanOut = async (question: Omit<ConfirmRequest, "tone">) =>
+    target !== "all" || (await ask({ ...question, tone: "primary" }));
   const save = async () => {
     if (targets.length === 0) return;
-    if (!confirmFanOut(`Save this model's limit on ${scope}? Any limit already set for ${model.public_alias} on those keys is replaced.`)) return;
+    if (!(await confirmFanOut({
+      title: `Save this limit on ${scope}?`,
+      body: `Any limit already set for ${model.public_alias} on those keys is replaced. Shared provider limits still apply.`,
+      confirmLabel: "Save model limit"
+    }))) return;
     setBusy(true);
     try {
       await Promise.all(targets.map((credential) => api(`/api/admin/credentials/${credential.id}/model-limits/${model.id}`, { method: "PUT", json: draft })));
@@ -3277,7 +3344,11 @@ function ModelLimitEditor({
   };
   const clear = async () => {
     if (targets.length === 0) return;
-    if (!confirmFanOut(`Use the shared limit on ${scope}? This model's own limit is removed from them.`)) return;
+    if (!(await confirmFanOut({
+      title: `Use the shared limit on ${scope}?`,
+      body: `This model's own limit is removed from them, and ${model.public_alias} falls back to each key's shared limit.`,
+      confirmLabel: "Use shared limit"
+    }))) return;
     setBusy(true);
     try {
       await Promise.all(targets.map((credential) => api(`/api/admin/credentials/${credential.id}/model-limits/${model.id}`, { method: "DELETE" })));
@@ -3569,11 +3640,15 @@ function logErrorTitle(log: RequestLog) {
   return "Gateway request failed";
 }
 
-/** The same warning is shown from the edit panel and from the models inspector.
- *  It was written out twice, so a change to one wording silently disagreed with
- *  the other about what deleting a route does. */
-function deleteRouteWarning(alias: string) {
-  return `Delete route ${alias}? Requests using this alias stop immediately, and the route cannot be restored — you would add it again from scratch.`;
+/** The same question is asked from the edit panel and from the models inspector. It
+ *  was written out twice, so a change to one wording silently disagreed with the
+ *  other about what deleting a route does. */
+function deleteRouteQuestion(alias: string) {
+  return {
+    title: `Delete route ${alias}?`,
+    body: "Requests using this alias stop immediately, and the route cannot be restored — you would add it again from scratch.",
+    confirmLabel: "Delete route"
+  } as const;
 }
 
 /** What the console says when a provider turns a key away. Three call sites showed
@@ -3674,9 +3749,15 @@ function formatDuration(milliseconds: number) {
 }
 
 function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNewKey: (key: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
+  const ask = useConfirm();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [error, setError] = useState("");
   const [codexReady, setCodexReady] = useState<number | null>(null);
+  // A gateway that is down and a fresh install with no routes both used to leave
+  // `codexReady` null, so the heading read "Set up Codex" either way and the
+  // operator had no way to tell which. The failure is now its own state, and it is
+  // retried by the same Try again button as the settings load.
+  const [codexError, setCodexError] = useState(false);
   const [rotating, setRotating] = useState(false);
   const [attempt, setAttempt] = useState(0);
   // Both loads are one-shot and both write state. Navigating away mid-flight, or
@@ -3692,18 +3773,30 @@ function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNe
   useEffect(() => {
     let ignore = false;
     void api<Overview>("/api/admin/overview?range=1h")
-      .then((value) => { if (!ignore) setCodexReady(safeNumber(value.summary?.routes_ready)); })
-      .catch(() => { if (!ignore) setCodexReady(null); });
+      .then((value) => { if (ignore) return; setCodexReady(safeNumber(value.summary?.routes_ready)); setCodexError(false); })
+      .catch(() => { if (!ignore) { setCodexReady(null); setCodexError(true); } });
     return () => { ignore = true; };
-  }, []);
+  }, [attempt]);
   const rotateKey = () => {
     if (rotating) return;
-    if (!confirm("Rotate the gateway key now? The current key stops working immediately, and the new key is shown only once — if you close that panel without saving it, it cannot be recovered.")) return;
-    setRotating(true);
-    void api<{ gateway_key: string }>("/api/admin/access/rotate", { method: "POST" })
-      .then((result) => { onNewKey(result.gateway_key); notify("Gateway key rotated. Save the new key before closing the panel."); })
-      .catch((caught) => notify(errorMessage(caught), "danger"))
-      .finally(() => setRotating(false));
+    void (async () => {
+      const confirmed = await ask({
+        title: "Rotate the gateway key now?",
+        body: "The current key stops working immediately, and every client using it starts failing until you paste the new one. The new key is shown only once — if you close that panel without saving it, it cannot be recovered.",
+        confirmLabel: "Rotate gateway key"
+      });
+      if (!confirmed) return;
+      setRotating(true);
+      try {
+        const result = await api<{ gateway_key: string }>("/api/admin/access/rotate", { method: "POST" });
+        onNewKey(result.gateway_key);
+        notify("Gateway key rotated. Save the new key before closing the panel.");
+      } catch (caught) {
+        notify(errorMessage(caught), "danger");
+      } finally {
+        setRotating(false);
+      }
+    })();
   };
   const rootURL = (settings?.base_url || location.origin).replace(/\/$/, "");
   const openAIURL = `${rootURL}/v1`;
@@ -3732,7 +3825,7 @@ function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNe
       </section>
       <section className="section-block code-example">
         <div className="section-heading">
-          <div><p className="eyebrow">Codex CLI &amp; Desktop</p><h2>{codexReady === null ? "Set up Codex" : `${codexReady} model route${codexReady === 1 ? "" : "s"} ready`}</h2></div>
+          <div><p className="eyebrow">Codex CLI &amp; Desktop</p><h2>{codexError ? "Set up Codex" : codexReady === null ? "Set up Codex" : `${codexReady} model route${codexReady === 1 ? "" : "s"} ready`}</h2>{codexError && <p className="section-note">The route count is unavailable — the gateway did not answer. The setup command below still applies.</p>}</div>
           <div className="button-row">
             <a className="button button--quiet" href="https://github.com/jisunahamed/rotakey/blob/main/docs/CODEX.md" target="_blank" rel="noreferrer"><BookOpen size={14} aria-hidden="true" /> Full guide</a>
             <Button variant="quiet" onClick={() => void copyText(`rotakey-codex install --url ${rootURL}`).then(() => notify("Codex setup command copied.")).catch(() => notify(clipboardBlocked, "danger"))}><Clipboard size={14} aria-hidden="true" /> Copy setup</Button>
@@ -3763,6 +3856,7 @@ curl "${rootURL}/v1/messages" \\
 }
 
 function SettingsPage({ notify }: { notify: (message: string, tone?: "success" | "danger") => void }) {
+  const ask = useConfirm();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [loadedMode, setLoadedMode] = useState<RoutingMode | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -3808,24 +3902,55 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
   }
   const modeChanged = loadedMode !== null && settings.routing_mode !== loadedMode;
   const aliasesAtRisk = providers.reduce((total, provider) => total + provider.models.length, 0);
+  // The number inputs carry min and max, but nothing on this page is a <form>, so
+  // the browser never runs constraint validation on them: clearing the timeout field
+  // made Number("") zero and posted a zero-second timeout that then became the
+  // default for every new provider. Each field is checked here instead, against the
+  // same bounds the inputs advertise.
+  const settingsBounds: Array<[keyof Settings, string, number, number]> = [
+    ["max_wait_ms", "Capacity wait ceiling", 0, 30_000],
+    ["default_provider_timeout_seconds", "Global provider timeout", 1, 900],
+    ["metadata_retention_days", "Metadata retention", 1, 3650],
+    ["body_retention_days", "Captured body retention", 1, 365]
+  ];
+  const outOfBounds = settingsBounds.find(([key, , min, max]) => {
+    const value = settings[key];
+    return typeof value !== "number" || !Number.isFinite(value) || value < min || value > max;
+  });
   const saveSettings = () => {
-    // Switching mode rewrites every public alias in the same transaction, which
-    // changes the name live callers ask for. That deserves a question first.
-    if (modeChanged && !confirm(`Switch to ${settings.routing_mode}-wise routing? Up to ${aliasesAtRisk} model alias${aliasesAtRisk === 1 ? "" : "es"} will be renamed, and clients calling the old names stop working until they are updated.`)) return;
-    setBusy(true);
-    void api<SettingsUpdateResult>("/api/admin/settings", { method: "PUT", json: settings })
-      .then((result) => {
+    if (outOfBounds) {
+      const [, label, min, max] = outOfBounds;
+      notify(`${label} must be between ${formatNumber(min)} and ${formatNumber(max)}.`, "danger");
+      return;
+    }
+    void (async () => {
+      // Switching mode rewrites every public alias in the same transaction, which
+      // changes the name live callers ask for. That deserves a question first.
+      if (modeChanged) {
+        const confirmed = await ask({
+          title: `Switch to ${settings.routing_mode}-wise routing?`,
+          body: `Up to ${aliasesAtRisk} model alias${aliasesAtRisk === 1 ? "" : "es"} will be renamed, and clients calling the old names stop working until they are updated.`,
+          confirmLabel: "Switch routing mode"
+        });
+        if (!confirmed) return;
+      }
+      setBusy(true);
+      try {
+        const result = await api<SettingsUpdateResult>("/api/admin/settings", { method: "PUT", json: settings });
         publishRoutingMode(result.routing_mode);
         setLoadedMode(result.routing_mode);
-        // A mode switch renames aliases in the same transaction, so the
-        // save confirmation reports what changed and what could not.
+        // A mode switch renames aliases in the same transaction, so the save
+        // confirmation reports what changed and what could not.
         const parts = ["Settings saved."];
         if (result.aliases_rewritten > 0) parts.push(`${result.aliases_rewritten} model alias${result.aliases_rewritten === 1 ? "" : "es"} renamed for ${result.routing_mode === "model" ? "model" : "provider"}-wise routing.`);
         if (result.alias_conflicts.length > 0) parts.push(`Kept unchanged to avoid a collision: ${result.alias_conflicts.join(", ")}.`);
         notify(parts.join(" "), result.alias_conflicts.length > 0 ? "danger" : "success");
-      })
-      .catch((caught) => notify(errorMessage(caught), "danger"))
-      .finally(() => setBusy(false));
+      } catch (caught) {
+        notify(errorMessage(caught), "danger");
+      } finally {
+        setBusy(false);
+      }
+    })();
   };
   return (
     <>
@@ -3855,6 +3980,7 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
 // file and replays it. Keys are included by default so an import is a complete
 // setup rather than a shell that still needs every secret pasted back in.
 function ConfigTransfer({ notify }: { notify: (message: string, tone?: "success" | "danger") => void }) {
+  const ask = useConfirm();
   const [busy, setBusy] = useState<"export" | "import" | null>(null);
   const [includeSecrets, setIncludeSecrets] = useState(true);
   const [result, setResult] = useState<ImportResult | null>(null);
@@ -3911,16 +4037,22 @@ function ConfigTransfer({ notify }: { notify: (message: string, tone?: "success"
         routing_mode?: string;
       };
       const counts = [
-        `${bundle.providers?.length ?? 0} provider(s)`,
-        `${bundle.models?.length ?? 0} model route(s)`,
-        `${bundle.credentials?.length ?? 0} API key(s)`
+        `${bundle.providers?.length ?? 0} provider${bundle.providers?.length === 1 ? "" : "s"}`,
+        `${bundle.models?.length ?? 0} model route${bundle.models?.length === 1 ? "" : "s"}`,
+        `${bundle.credentials?.length ?? 0} API key${bundle.credentials?.length === 1 ? "" : "s"}`
       ];
-      summary = `${file.name} contains ${counts.join(", ")}${bundle.routing_mode ? ` and sets ${bundle.routing_mode}-wise routing` : ""}.`;
+      summary = `${counts.join("\n")}${bundle.routing_mode ? `\nSets ${bundle.routing_mode}-wise routing` : ""}`;
     } catch {
       notify("That file is not valid JSON.", "danger");
       return;
     }
-    if (!confirm(`${summary}\n\nImporting replays it in one transaction: matching providers, model routes and API keys are overwritten with the values in the file. Existing items not in the file are left alone. Continue?`)) return;
+    const confirmed = await ask({
+      title: `Import ${file.name}?`,
+      body: "The bundle is replayed in one transaction: matching providers, model routes and API keys are overwritten with the values in the file. Existing items not in the file are left alone.",
+      confirmLabel: "Import configuration",
+      detail: summary
+    });
+    if (!confirmed) return;
     await importConfig(file);
   };
 

@@ -11,6 +11,7 @@ import "./tokens.css";
 import "./styles.css";
 import "./console.css";
 import App from "./App";
+import { ConfirmProvider } from "./ConfirmDialog";
 import { ErrorBoundary } from "./ErrorBoundary";
 
 const root = document.getElementById("root");
@@ -23,7 +24,9 @@ if (!root) {
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <App />
+      <ConfirmProvider>
+        <App />
+      </ConfirmProvider>
     </ErrorBoundary>
   </React.StrictMode>
 );

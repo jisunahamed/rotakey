@@ -537,6 +537,16 @@ h3 {
   font-size: var(--text-mini);
 }
 
+/* A caveat under a section's heading — why a figure in it is missing, most often.
+   It sits below the h2 rather than replacing it, so the heading keeps naming the
+   section while the note says what could not be read. */
+.section-note {
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-mini);
+  line-height: var(--leading-snug);
+}
+
 /* The overview's panels are all .console-panel, which console.css gives the
    surface, the hairline and the radius. These modifiers only say how each panel
    handles its own content, so the two files cannot disagree about the frame. */
@@ -1009,6 +1019,107 @@ h3 {
 @keyframes sheet-in {
   from { transform: translateX(24px); opacity: 0.7; }
   to { transform: translateX(0); opacity: 1; }
+}
+
+/* The confirmation dialog. It sits above the sheet layer because a form panel is
+   what usually asks the question — delete this key, replace this limit — and the
+   answer has to be readable over the panel that raised it. */
+.confirm-layer {
+  position: fixed;
+  z-index: 70;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+}
+
+.confirm-scrim {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  background: rgb(8 14 19 / 0.58);
+  border: 0;
+  cursor: default;
+  backdrop-filter: blur(2px);
+}
+
+.confirm-dialog {
+  position: relative;
+  display: grid;
+  width: min(100%, 460px);
+  max-height: calc(100vh - var(--space-11));
+  gap: var(--space-6);
+  padding: var(--space-8);
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sheet);
+  box-shadow: var(--lift-float);
+  animation: confirm-in var(--dur-state) var(--ease);
+}
+
+/* A destructive question is marked at its top edge rather than by colouring the
+   whole panel: the operator has to read the consequence, and a red field behind it
+   makes the text harder to read at the moment it matters most. */
+.confirm-dialog--danger {
+  border-top: 3px solid var(--fault);
+}
+
+.confirm-dialog__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.confirm-dialog__head h2 {
+  margin-bottom: 0;
+  font: 600 var(--text-md) / var(--leading-snug) var(--font-display);
+  letter-spacing: var(--track-tight);
+}
+
+.confirm-dialog__mark {
+  display: inline-flex;
+  flex: none;
+  color: var(--fault);
+}
+
+.confirm-dialog__body {
+  overflow-y: auto;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.confirm-dialog__body p {
+  margin: 0;
+}
+
+.confirm-dialog__body p + p {
+  margin-top: var(--space-5);
+}
+
+/* What is about to happen, itemised: the aliases being deleted, the counts in an
+   import. Set in the data face because every one of these is a list of names. */
+.confirm-dialog__detail {
+  max-height: 190px;
+  overflow-y: auto;
+  padding: var(--space-5);
+  background: var(--surface-sunken);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-panel);
+  color: var(--text-strong);
+  font: 500 var(--text-mini) / var(--leading-normal) var(--font-data);
+  white-space: pre-wrap;
+}
+
+.confirm-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-4);
+}
+
+@keyframes confirm-in {
+  from { transform: scale(0.98); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
 }
 
 .form-stack {
@@ -2521,6 +2632,23 @@ fieldset legend {
     right: 14px;
     bottom: 14px;
     max-width: calc(100vw - 28px);
+  }
+
+  /* Two buttons side by side on a phone leaves each about 150px, and the confirm
+     label is a full action name — "Delete provider", not "OK". Stacked, each gets
+     the measure, and the destructive one stays at the bottom where the thumb is
+     less likely to be resting. */
+  .confirm-dialog {
+    padding: var(--space-7) var(--space-6);
+  }
+
+  .confirm-dialog__actions {
+    flex-direction: column-reverse;
+  }
+
+  .confirm-dialog__actions .button {
+    justify-content: center;
+    width: 100%;
   }
 }
 

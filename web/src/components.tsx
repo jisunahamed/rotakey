@@ -1,21 +1,10 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
+import { useConfirm, useConfirmOpen } from "./ConfirmDialog";
+import { focusableSelector, trapTab } from "./focus";
 import type { RatePolicy } from "./types";
 
-export function Button({
-  children,
-  variant = "primary",
-  className = "",
-  ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "primary" | "quiet" | "danger";
-}) {
-  return (
-    <button className={`button button--${variant} ${className}`} {...props}>
-      {children}
-    </button>
-  );
-}
+export { Button } from "./Button";
 
 /** The dot is decorative next to the label it sits beside, so it announces the
  * state in words rather than exposing the raw enum as a bare label. */
@@ -75,24 +64,6 @@ export function EmptyState({
   );
 }
 
-const focusableSelector =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
-
-/** Keeps Tab inside `container` by bouncing off either end. Shared by the sheet
- * and by the inspector drawers, which become the same kind of modal overlay once
- * the viewport is too narrow to show them beside the list. */
-function trapTab(container: HTMLElement, event: KeyboardEvent) {
-  const focusable = Array.from(
-    container.querySelectorAll<HTMLElement>(focusableSelector)
-  ).filter((element) => element.offsetParent !== null || element === document.activeElement);
-  if (focusable.length === 0) return;
-  const edge = event.shiftKey ? focusable[0] : focusable[focusable.length - 1];
-  if (document.activeElement === edge) {
-    event.preventDefault();
-    (event.shiftKey ? focusable[focusable.length - 1] : focusable[0]).focus();
-  }
-}
-
 /** Gives an inspector drawer the behaviour its appearance already implies. Below
  * the breakpoint where the inspector stops being a pane beside the list and
  * becomes a fixed panel over it, it is a modal overlay in every respect except
@@ -108,6 +79,12 @@ export function useDrawerOverlay({ open, active, onClose }: { open: boolean; act
   const ref = useRef<HTMLElement | null>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  // A confirmation opened from inside the drawer sits above it. While it is up the
+  // drawer's own Escape and Tab handling has to stand down, or Escape would answer
+  // the question and close the drawer in one keypress.
+  const confirmOpen = useConfirmOpen();
+  const confirmOpenRef = useRef(confirmOpen);
+  confirmOpenRef.current = confirmOpen;
 
   useEffect(() => {
     if (!open || !active) return;
@@ -117,6 +94,7 @@ export function useDrawerOverlay({ open, active, onClose }: { open: boolean; act
     (first ?? node)?.focus();
 
     function onKeyDown(event: KeyboardEvent) {
+      if (confirmOpenRef.current) return;
       if (event.key === "Escape") {
         event.preventDefault();
         closeRef.current();
@@ -158,14 +136,27 @@ export function Sheet({
   dirty?: boolean;
   discardMessage?: string;
 }) {
+  const ask = useConfirm();
   const headingID = useId();
   const panel = useRef<HTMLElement | null>(null);
   const closeRef = useRef(onClose);
   const dirtyRef = useRef(dirty);
   const messageRef = useRef(discardMessage);
+  const askRef = useRef(ask);
+  // Escape fires from a native listener, so the question it asks has to be reachable
+  // without re-subscribing the listener on every render.
+  const requestCloseRef = useRef<() => void>(() => {});
+  // The discard question — and every confirmation opened from a control inside the
+  // panel — renders above the sheet. While one is open the sheet's own Escape and Tab
+  // handling stands down: otherwise Escape would cancel the question and re-ask it in
+  // the same keypress, and Tab would walk back into the form behind the dialog.
+  const confirmOpen = useConfirmOpen();
+  const confirmOpenRef = useRef(confirmOpen);
   closeRef.current = onClose;
   dirtyRef.current = dirty;
   messageRef.current = discardMessage;
+  askRef.current = ask;
+  confirmOpenRef.current = confirmOpen;
 
   // Escape closes, Tab stays inside the panel, and focus lands in the panel on
   // open. Without the trap, tabbing walks the page behind an aria-modal dialog,
@@ -184,10 +175,10 @@ export function Sheet({
     (first ?? node)?.focus();
 
     function onKeyDown(event: KeyboardEvent) {
+      if (confirmOpenRef.current) return;
       if (event.key === "Escape") {
         event.preventDefault();
-        if (dirtyRef.current && !window.confirm(messageRef.current)) return;
-        closeRef.current();
+        requestCloseRef.current();
         return;
       }
       if (event.key !== "Tab" || !panel.current) return;
@@ -202,9 +193,21 @@ export function Sheet({
   }, []);
 
   function requestClose() {
-    if (dirty && !window.confirm(discardMessage)) return;
-    onClose();
+    if (!dirtyRef.current) {
+      closeRef.current();
+      return;
+    }
+    void (async () => {
+      const confirmed = await askRef.current({
+        title: "Close this panel?",
+        body: messageRef.current,
+        confirmLabel: "Discard changes",
+        cancelLabel: "Keep editing"
+      });
+      if (confirmed) closeRef.current();
+    })();
   }
+  requestCloseRef.current = requestClose;
 
   return (
     <div className="sheet-layer" role="presentation">
