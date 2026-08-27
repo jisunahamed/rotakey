@@ -10,6 +10,7 @@ import "@fontsource-variable/martian-mono/wght.css";
 import "./tokens.css";
 import "./styles.css";
 import "./console.css";
+import "./rotor.css";
 import App from "./App";
 import { ConfirmProvider } from "./ConfirmDialog";
 import { ErrorBoundary } from "./ErrorBoundary";

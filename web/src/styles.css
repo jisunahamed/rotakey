@@ -52,11 +52,18 @@ button {
   border-radius: var(--radius-fitting);
 }
 
+/* Every figure in the console is set with tabular figures, and the reason is the
+   overview: it repolls every ten seconds, so a proportional 1 replaced by a 0
+   shifts everything after it sideways and a panel of steady numbers appears to
+   twitch on each refresh. Declaring it on the data face covers the readouts that
+   inherit from it; the rules below that carry figures in the body face state it
+   themselves. */
 code,
 pre,
 .mono-summary {
   font-family: var(--font-data);
   font-variant-ligatures: none;
+  font-variant-numeric: tabular-nums;
 }
 
 h1,
@@ -66,11 +73,15 @@ p {
   margin-top: 0;
 }
 
+/* Archivo carries a display size on tracking rather than on weight: at 2.75rem a
+   620 stem is heavy enough to read as a marketing headline, and the console is an
+   instrument. 600 with the display tracking closed keeps the authority without
+   the bulk. */
 h1 {
   margin-bottom: var(--space-5);
   font-family: var(--font-display);
   font-size: clamp(var(--text-xl), 3vw, var(--text-3xl));
-  font-weight: 620;
+  font-weight: 600;
   line-height: var(--leading-tight);
   letter-spacing: var(--track-display);
 }
@@ -311,10 +322,11 @@ h3 {
 .sidebar__version {
   font-family: var(--font-data);
   font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
 }
 
 .release-notice span { color: var(--iris); text-transform: uppercase; letter-spacing: var(--track-label); }
-.release-notice strong { font-size: var(--text-sm); }
+.release-notice strong { font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 .release-notice small { color: var(--rail-muted); }
 
 .sidebar__version {
@@ -535,6 +547,7 @@ h3 {
   color: var(--text-muted);
   font-family: var(--font-data);
   font-size: var(--text-mini);
+  font-variant-numeric: tabular-nums;
 }
 
 /* A caveat under a section's heading — why a figure in it is missing, most often.
@@ -560,13 +573,24 @@ h3 {
   overflow: hidden;
 }
 
-/* An EmptyState carries its own frame so it can stand alone on a page. Dropped
-   into the debugger it is already inside one, so the frame comes back off. */
+/* An EmptyState carries its own frame so it can stand alone on a page, and the
+   frame includes the lit top edge: on the pages where it replaces a whole list it
+   is the only thing on the canvas, so it has to read as a slab resting on it.
+   Dropped into the debugger it is already inside a panel that carries that edge, so
+   the frame comes back off and the elevation goes with it — a lit edge a few pixels
+   inside another one reads as a seam rather than as depth. */
 .capacity-debugger .empty-state {
   min-height: 200px;
   padding: var(--space-9);
   background: transparent;
   border: 0;
+  box-shadow: none;
+}
+
+/* The log list's empty state keeps its frame — console.css only insets it — but not
+   the elevation, for the same reason: the workbench around it is already a slab. */
+.log-resource-rows > .empty-state {
+  box-shadow: none;
 }
 
 /* The chart and the attention queue sit side by side in .signal-grid. A grid
@@ -633,6 +657,9 @@ h3 {
   box-shadow: inset 0 0 0 2px var(--edge-strong);
 }
 
+/* The empty state is the only thing on the page when it appears — a list that
+   could not load, a page with nothing in it yet — so it takes the lit top edge
+   that says "slab resting on the canvas" rather than reading as a hole cut in it. */
 .empty-state {
   display: grid;
   min-height: 280px;
@@ -642,6 +669,7 @@ h3 {
   text-align: center;
   background: var(--surface-raised);
   border: 1px solid var(--edge);
+  box-shadow: var(--lift-panel);
 }
 
 .empty-state__line {
@@ -720,6 +748,7 @@ h3 {
 .resource-item__count {
   color: var(--text-muted);
   font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -780,6 +809,7 @@ h3 {
   color: var(--text-strong);
   font-family: var(--font-data);
   font-size: var(--text-base);
+  font-variant-numeric: tabular-nums;
 }
 
 .pool-capacity {
@@ -807,6 +837,7 @@ h3 {
   color: var(--text-muted);
   font-family: var(--font-data);
   font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
 }
 
 .pool-capacity__limits {
@@ -844,6 +875,7 @@ h3 {
   overflow: hidden;
   font-family: var(--font-data);
   font-size: var(--text-mini);
+  font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -952,6 +984,7 @@ h3 {
 .dense-row > span:nth-child(3) {
   color: var(--text-muted);
   font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
 }
 
 .mono-summary {
@@ -1098,7 +1131,10 @@ h3 {
 }
 
 /* What is about to happen, itemised: the aliases being deleted, the counts in an
-   import. Set in the data face because every one of these is a list of names. */
+   import. Set in the data face because every one of these is a list of names, and
+   with tabular figures because the counts sit in a stacked column the eye reads
+   down. The font shorthand resets font-variant, so the figures have to be stated
+   after it rather than before. */
 .confirm-dialog__detail {
   max-height: 190px;
   overflow-y: auto;
@@ -1108,6 +1144,7 @@ h3 {
   border-radius: var(--radius-panel);
   color: var(--text-strong);
   font: 500 var(--text-mini) / var(--leading-normal) var(--font-data);
+  font-variant-numeric: tabular-nums;
   white-space: pre-wrap;
 }
 
@@ -1172,6 +1209,14 @@ fieldset legend {
   border: 1px solid var(--edge-strong);
   border-radius: var(--radius-fitting);
   font-size: var(--text-sm);
+}
+
+/* A number field is a readout as much as a control: the rate limits, the retention
+   days and the wait ceiling are all typed over a value the server put there, and a
+   proportional 1 makes the caret jump as the digits change width under it. */
+.field input[type="number"],
+.settings-row input[type="number"] {
+  font-variant-numeric: tabular-nums;
 }
 
 .field textarea {
@@ -1423,6 +1468,7 @@ fieldset legend {
   margin-top: var(--space-1);
   color: var(--text-muted);
   font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
 }
 
 /* The search field draws its own frame here rather than using the .field input
@@ -1466,7 +1512,7 @@ fieldset legend {
 .catalog-select-all strong,
 .catalog-select-all small { display: block; }
 .catalog-select-all strong { font-size: var(--text-mini); }
-.catalog-select-all small { margin-top: var(--space-1); color: var(--text-muted); font-size: var(--text-micro); }
+.catalog-select-all small { margin-top: var(--space-1); color: var(--text-muted); font-size: var(--text-micro); font-variant-numeric: tabular-nums; }
 
 .model-catalog__list {
   display: grid;
@@ -1585,6 +1631,7 @@ fieldset legend {
 .credential-entry > header > strong {
   font-family: var(--font-data);
   font-size: var(--text-mini);
+  font-variant-numeric: tabular-nums;
   font-weight: 500;
 }
 
@@ -1651,6 +1698,7 @@ fieldset legend {
 .review-list small {
   display: block;
   font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .review-list code,
@@ -1726,6 +1774,7 @@ fieldset legend {
 .log-detail-grid code,
 .log-detail-grid strong {
   font-size: var(--text-mini);
+  font-variant-numeric: tabular-nums;
 }
 
 .attempt-list {
@@ -1746,6 +1795,7 @@ fieldset legend {
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--edge);
   font-size: var(--text-mini);
+  font-variant-numeric: tabular-nums;
 }
 
 .attempt-list > div > strong,
@@ -1947,6 +1997,8 @@ fieldset legend {
   font-size: var(--text-sm);
 }
 
+/* The import summary is a column of created-and-updated counts, so the figures line
+   up under each other even though the list is set in the body face. */
 .config-transfer__result ul {
   display: flex;
   flex-direction: column;
@@ -1955,6 +2007,7 @@ fieldset legend {
   padding-left: var(--space-7);
   color: var(--text-muted);
   font-size: var(--text-mini);
+  font-variant-numeric: tabular-nums;
 }
 
 .security-baseline {
@@ -2236,6 +2289,7 @@ fieldset legend {
   color: var(--rail-muted);
   font-family: var(--font-data);
   font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
 }
 
 .setup-rail span::before {

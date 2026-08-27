@@ -1,0 +1,154 @@
+/* The rotor. Loaded last, after console.css.
+ *
+ * This is the one deliberately bold element in the console, and it lives in its
+ * own file because it is the only thing here that is a drawing rather than a
+ * layout — keeping it apart means the rest of the console's rules can stay a flat
+ * list of surfaces and rows.
+ *
+ * What it draws is the product: Rotakey serves each request from the next API key
+ * in a pool, and the question an operator opens the inspector to answer is "which
+ * key is up, and how much of the pool is still able to serve". Every other readout
+ * answers that in words. This answers it in one glance: one segment per key, in
+ * routing order, coloured by the state that decides whether the router will use
+ * it, with the cursor marked at the key that serves the next request.
+ *
+ * It is decorative in the accessibility sense — the key list directly underneath it
+ * carries the same information as labelled, focusable rows — so the track is hidden
+ * from assistive technology and the caption above it is the accessible reading.
+ */
+
+.rotor {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-6) var(--space-5);
+  border-top: 1px solid var(--edge);
+}
+
+.rotor__caption {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+
+.rotor__caption > span {
+  color: var(--text-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
+/* The pool tally is a figure, so it is set in the data face and in tabular
+   figures: the inspector repolls with the rest of the overview and a proportional
+   "11/14" jumps sideways as the counts change. */
+.rotor__tally {
+  color: var(--text-strong);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The track is inset into the panel rather than raised off it: it is a gauge cut
+   into the instrument's face, which is the opposite reading from the slabs that
+   sit on the canvas. Hence a sunken surface and no lit top edge. */
+.rotor__track {
+  display: flex;
+  min-height: 34px;
+  align-items: stretch;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--surface-inset);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-fitting);
+}
+
+/* A segment is a key. It takes an equal share of the track and shrinks without a
+   floor, because the pool is not bounded: a provider with forty keys draws forty
+   hairlines, which still reads correctly as a dense pool with a marked cursor,
+   whereas a minimum width would push the track into a horizontal scroll and hide
+   the very segment the operator is looking for. */
+.rotor__segment {
+  position: relative;
+  min-width: 0;
+  flex: 1 1 0;
+  background: var(--idle-wash);
+  border-radius: 1px;
+}
+
+/* Each state gets the hue it has everywhere else in the console, so the band is
+   readable with the same vocabulary as the status dots beside the rows below. */
+.rotor__segment--healthy { background: var(--live); }
+.rotor__segment--cooldown { background: var(--hold); }
+.rotor__segment--throttled { background: var(--hold); }
+.rotor__segment--quarantined { background: var(--fault); }
+.rotor__segment--exhausted { background: var(--fault); }
+.rotor__segment--failed { background: var(--fault); }
+.rotor__segment--disabled { background: var(--idle-wash); }
+
+/* A key whose upstream state has not been read yet is not a state — it is the
+   absence of a reading — so it draws as an empty slot with an edge rather than a
+   filled bar in some fourth colour. */
+.rotor__segment--unknown {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--edge-strong);
+}
+
+/* An off key is struck through: the pool still contains it, and the operator needs
+   to see the gap it leaves rather than a pool that silently got shorter. */
+.rotor__segment--disabled::after {
+  position: absolute;
+  inset: 50% 0 auto;
+  height: 1px;
+  background: var(--edge-strong);
+  content: "";
+}
+
+/* The cursor is the whole point of the drawing, so it is the one place in the
+   console that stacks two markers on one element: the segment keeps its state hue
+   so "the next key is in cooldown" is still legible, and the iris ring names it as
+   the one the router will reach for. The ring is drawn with an outline rather than
+   a border so it does not take part in the flex sizing — a border would make the
+   cursor segment two pixels narrower than its neighbours. */
+.rotor__segment--cursor {
+  outline: 2px solid var(--iris);
+  outline-offset: 1px;
+}
+
+/* The cursor also carries a tick above the track, which is what survives when the
+   pool is large enough that the segments themselves are hairlines. It is
+   positioned rather than laid out so it can overhang the track's padding. */
+.rotor__segment--cursor::before {
+  position: absolute;
+  top: -7px;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-top: 4px solid var(--iris);
+  border-right: 3px solid transparent;
+  border-left: 3px solid transparent;
+  transform: translateX(-50%);
+  content: "";
+}
+
+/* No key can serve the next request. The track has nothing to point at, so it says
+   so along its whole length rather than leaving the operator to notice a missing
+   tick. */
+.rotor--stalled .rotor__track {
+  border-color: color-mix(in srgb, var(--fault) 45%, var(--edge));
+}
+
+.rotor__stalled-note {
+  margin: 0;
+  color: var(--fault);
+  font-size: var(--text-micro);
+  line-height: var(--leading-snug);
+}
+
+/* On a phone the inspector is a full-width drawer, so the track has more room than
+   it does in the desktop pane and can afford to be tall enough to tap-target the
+   segments — except they are not interactive, so it only gains legibility. */
+@media (max-width: 650px) {
+  .rotor__track { min-height: 40px; }
+}

@@ -1366,6 +1366,11 @@ function OverviewInspector({
           </div>
           <HeadroomReadout label="Next request bucket" headroom={route.next_request_headroom} />
           <HeadroomReadout label="Next token bucket" headroom={route.next_token_headroom} />
+          <Rotor
+            keys={route.segments}
+            stalled={!route.next_credential_id}
+            stalledNote="No key in this pool can serve the next request. Check the keys below."
+          />
           <div className="inspector-key-list">
             <span>Key order</span>
             {route.segments.map((segment) => (
@@ -1393,6 +1398,53 @@ function OverviewInspector({
         {route && <Button variant="quiet" onClick={() => navigate("logs", { q: route.alias })}>View route logs</Button>}
       </div>
     </aside>
+  );
+}
+
+/** The rotor: one segment per API key in the pool, in the order the router walks
+ *  them, coloured by the state that decides whether it will be used, with the key
+ *  serving the next request marked. It answers the question the inspector is opened
+ *  for — which key is up, and how much of the pool can still serve — in a single
+ *  glance, where the list below it answers the same question one row at a time.
+ *
+ *  It earns its place at forty keys rather than at four: a pool that size is a long
+ *  scroll, and the band is the only reading that fits the whole of it on screen.
+ *
+ *  The track is decorative: every segment's information is already in the list
+ *  underneath it as a labelled, focusable row, or on the Providers page in the key
+ *  rows below. So the track is hidden from assistive technology and the caption
+ *  above it carries the reading in words. */
+function Rotor({
+  keys,
+  stalled = false,
+  stalledNote
+}: {
+  keys: Array<{ id: string; status: string; cursor?: boolean; unknown?: boolean }>;
+  /** True when nothing in the pool can serve the next request. The track has no
+   *  cursor to point at, which has to be said in words as well as drawn. */
+  stalled?: boolean;
+  stalledNote?: string;
+}) {
+  if (keys.length === 0) return null;
+  const servable = keys.filter((key) => key.status === "healthy").length;
+  return (
+    <div className={`rotor${stalled ? " rotor--stalled" : ""}`}>
+      <div className="rotor__caption">
+        <span>Key rotation</span>
+        <span className="rotor__tally">
+          {servable}/{keys.length} can serve
+        </span>
+      </div>
+      <div className="rotor__track" aria-hidden="true">
+        {keys.map((key) => (
+          <span
+            key={key.id}
+            className={`rotor__segment rotor__segment--${key.unknown ? "unknown" : key.status}${key.cursor ? " rotor__segment--cursor" : ""}`}
+          />
+        ))}
+      </div>
+      {stalled && stalledNote && <p className="rotor__stalled-note">{stalledNote}</p>}
+    </div>
   );
 }
 
@@ -1671,7 +1723,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
               nav drawer makes the page behind it inert. */}
           <section className="resource-list" aria-label="Providers" inert={inspectorFloating && providerInspectorOpen && Boolean(selected)}>
             {providers.map((provider) => {
-              const healthy = provider.credentials.filter((credential) => credential.enabled && credential.status === "healthy").length;
+              const healthy = provider.credentials.filter((credential) => credentialPoolState(credential) === "healthy").length;
               return (
                 <button
                   key={provider.id}
@@ -1762,6 +1814,14 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                 <ProviderCreditStat provider={selected} />
               </div>
               <ProviderCapacityStrip provider={selected} />
+              <Rotor
+                keys={selected.credentials.map((credential) => ({
+                  id: credential.id,
+                  status: credentialPoolState(credential)
+                }))}
+                stalled={selected.credentials.length > 0 && !selected.credentials.some((credential) => credentialPoolState(credential) === "healthy")}
+                stalledNote="No key on this provider can serve a request. Open the marked keys below."
+              />
               <ResourceDisclosure
                 title="Model routes"
                 description="Load the provider model catalog, select routes, or add one manually."
@@ -1802,7 +1862,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
               <ResourceDisclosure
                 title="API keys"
                 description="A primary key is tried first. Without one, healthy keys use balanced round-robin."
-                summary={`${selected.credentials.filter((item) => item.enabled && item.status === "healthy").length}/${selected.credentials.length} keys ready`}
+                summary={`${selected.credentials.filter((item) => credentialPoolState(item) === "healthy").length}/${selected.credentials.length} keys ready`}
                 open={openSection === "credentials"}
                 onToggle={() => setOpenSection((current) => current === "credentials" ? null : "credentials")}
                 action={<Button variant="quiet" onClick={() => setPanel({ type: "credential", providerID: selected.id })}><Plus size={14} aria-hidden="true" /> Add API key</Button>}
@@ -1815,10 +1875,10 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                       <button
                         key={credential.id}
                         className={`dense-row ${credential.validation_error ? "has-warning" : ""}`}
-                        aria-label={`Edit API key ${credential.label}, ${credential.validation_error || statusLabel(credential.status)}`}
+                        aria-label={`Edit API key ${credential.label}, ${credential.validation_error || statusLabel(credentialPoolState(credential))}`}
                         onClick={() => setPanel({ type: "credential", providerID: selected.id, credentialID: credential.id })}
                       >
-                        <StatusDot state={credential.status} />
+                        <StatusDot state={credentialPoolState(credential)} />
                         <span>
                           <strong title={credential.label}>{credential.label}</strong>
                           <small title={credential.validation_error ? credential.validation_error : `${credential.is_primary ? "Primary · " : ""}•••• ${credential.secret_suffix}${credentialBalanceNote(credential)}`}>
@@ -1895,6 +1955,17 @@ function credentialBalanceNote(credential: Credential) {
   if (credential.balance_usd === null || credential.balance_usd === undefined) return "";
   const remaining = Math.max(0, credential.balance_usd - credential.balance_spent_usd);
   return remaining <= 0 ? " · out of balance" : ` · ${formatUSD(remaining)} left`;
+}
+
+/** The one state name that describes whether the router will reach for this key,
+ *  folding together the three separate reasons it might not: the operator turned it
+ *  off, its balance is spent, or the upstream put it in cooldown or quarantine.
+ *  The rotor and the status dot both need that single answer — a key that is
+ *  `healthy` but out of balance is skipped, and drawing it green would be a lie. */
+function credentialPoolState(credential: Credential) {
+  if (!credential.enabled) return "disabled";
+  if (credential.balance_usd != null && credential.balance_usd - credential.balance_spent_usd <= 0) return "exhausted";
+  return credential.status;
 }
 
 /** ProviderCreditStat reports what is left across the account rather than what was
@@ -3276,7 +3347,7 @@ function ModelsPage({
   });
   const selected = models.find((model) => model.id === selectedID);
   const poolSizes = poolSizeByAlias(providers);
-  const healthyKeyCount = (model: (typeof models)[number]) => model.credentials.filter((item) => item.enabled && item.status === "healthy").length;
+  const healthyKeyCount = (model: (typeof models)[number]) => model.credentials.filter((item) => credentialPoolState(item) === "healthy").length;
   const failedProbeIDs = models.filter((model) => healthyKeyCount(model) > 0 && (probeResults[model.id]?.state === "failed" || (!probeResults[model.id] && model.capability_status === "failed"))).map((model) => model.id);
 
   const checkAllModels = async () => {
@@ -3494,15 +3565,23 @@ function ModelsPage({
               </div>
               {selected.strip_parameters.length > 0 && <InlineNotice>Removes unsupported fields: <code>{selected.strip_parameters.join(", ")}</code></InlineNotice>}
               <ModelLimitEditor model={selected} credentials={selected.credentials} notify={notify} onSaved={reload} />
+              <Rotor
+                keys={selected.credentials.map((credential) => ({
+                  id: credential.id,
+                  status: credentialPoolState(credential)
+                }))}
+                stalled={selected.credentials.length > 0 && !selected.credentials.some((credential) => credentialPoolState(credential) === "healthy")}
+                stalledNote="No key can serve this route. Open its provider to check the keys."
+              />
               <section className={`ide-inspector-section inspector-disclosure${credentialsOpen ? " is-open" : ""}`}>
                 <button type="button" onClick={() => setCredentialsOpen((current) => !current)} aria-expanded={credentialsOpen}>
                   <ChevronDown size={14} aria-hidden="true" /><span><strong>Key order</strong><small>{selected.credentials.length} API key{selected.credentials.length === 1 ? "" : "s"}</small></span>
                 </button>
                 {credentialsOpen && <div className="inspector-disclosure__body">{selected.credentials.map((credential) => (
                   <div key={credential.id} className={credential.validation_error ? "has-warning" : ""}>
-                    <StatusDot state={credential.status} />
+                    <StatusDot state={credentialPoolState(credential)} />
                     <strong title={credential.label}>{credential.label}</strong>
-                    <small>{credential.is_primary ? "Primary" : statusLabel(credential.status)}</small>
+                    <small>{credential.is_primary ? "Primary" : statusLabel(credentialPoolState(credential))}</small>
                     <span>
                       <small>{credential.model_limits[selected.id] ? "model override" : "shared provider limit"}</small>
                       <LimitSummary policy={credential.model_limits[selected.id] || credential.limits} />

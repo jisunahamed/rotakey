@@ -24,6 +24,12 @@
   --edge: #d2d7df;
   --edge-strong: #b4bcc8;
 
+  /* The top inner edge of a raised surface. A panel that only has a hairline all
+     the way round sits *in* the canvas; one lit along its top edge sits *on* it.
+     This is the whole of the console's depth model — there is no gradient and no
+     second shadow anywhere. */
+  --edge-highlight: #ffffff;
+
   /* Iris is the only interactive colour: links, primary actions, focus, the
      rotor's live tally. Reserving one hue for "you can act here" means every
      other colour is free to mean a state instead. */
@@ -103,8 +109,15 @@
   --radius-pill: 999px;
 
   /* Elevation is used sparingly: hairlines separate things inside the page, and
-     shadow is reserved for what genuinely floats above it. */
-  --lift-panel: 0 1px 2px rgb(21 26 34 / 0.04);
+     shadow is reserved for what genuinely floats above it.
+
+     --lift-panel is not really a shadow. Its first layer is the console's whole
+     depth model: a one-pixel lit inner edge along the top of a raised surface. A
+     panel with only a hairline all the way round reads as a hole cut into the
+     canvas; one lit along its top edge reads as a slab resting on it. The second
+     layer is the faintest possible drop, enough to seat the slab. Anything that
+     genuinely floats over the page takes --lift-float instead. */
+  --lift-panel: inset 0 1px 0 var(--edge-highlight), 0 1px 2px rgb(21 26 34 / 0.04);
   --lift-float: 0 18px 44px -12px rgb(21 26 34 / 0.24), 0 2px 8px rgb(21 26 34 / 0.06);
   --lift-rail: 0 24px 60px -20px rgb(0 0 0 / 0.5);
 
@@ -127,6 +140,9 @@
 
   --edge: #252e39;
   --edge-strong: #3a4553;
+  /* A white lit edge would read as a seam on a dark surface, so the highlight
+     drops to a barely-there lift of the surface itself. */
+  --edge-highlight: #232b35;
 
   --iris: #8b7bff;
   --iris-hover: #a094ff;
@@ -146,7 +162,7 @@
   --rail-raised: #151b24;
   --rail-edge: #212934;
 
-  --lift-panel: 0 1px 2px rgb(0 0 0 / 0.4);
+  --lift-panel: inset 0 1px 0 var(--edge-highlight), 0 1px 2px rgb(0 0 0 / 0.4);
   --lift-float: 0 24px 60px -16px rgb(0 0 0 / 0.66), 0 2px 8px rgb(0 0 0 / 0.4);
 }
 
@@ -164,6 +180,7 @@
 
     --edge: #252e39;
     --edge-strong: #3a4553;
+    --edge-highlight: #232b35;
 
     --iris: #8b7bff;
     --iris-hover: #a094ff;
@@ -183,7 +200,7 @@
     --rail-raised: #151b24;
     --rail-edge: #212934;
 
-    --lift-panel: 0 1px 2px rgb(0 0 0 / 0.4);
+    --lift-panel: inset 0 1px 0 var(--edge-highlight), 0 1px 2px rgb(0 0 0 / 0.4);
     --lift-float: 0 24px 60px -16px rgb(0 0 0 / 0.66), 0 2px 8px rgb(0 0 0 / 0.4);
   }
 }
