@@ -2793,6 +2793,7 @@ function CredentialForm({ provider, credential, onClose, onComplete, onRefresh, 
   const [secret, setSecret] = useState("");
   const [isPrimary, setIsPrimary] = useState(credential?.is_primary ?? false);
   const [enabled, setEnabled] = useState(credential?.enabled ?? true);
+  const [checkProtocol, setCheckProtocol] = useState(true);
   const [limits, setLimits] = useState<RatePolicy>(credential?.limits ?? emptyPolicy());
   // The balance is held as the raw text so an empty field stays distinguishable
   // from a zero balance: empty means "do not track", 0 means "nothing left".
@@ -2831,11 +2832,12 @@ function CredentialForm({ provider, credential, onClose, onComplete, onRefresh, 
     || label !== (credential?.label ?? "")
     || isPrimary !== (credential?.is_primary ?? false)
     || enabled !== (credential?.enabled ?? true)
+    || !checkProtocol
     || resetSpend
     || Object.keys(selectedModels).length > 0
   );
 
-  const checkKey = async () => {
+  const checkKey = async (): Promise<CredentialInspection | null> => {
     setBusy(true);
     setInspection(null);
     setSelectedModels({});
@@ -2844,16 +2846,16 @@ function CredentialForm({ provider, credential, onClose, onComplete, onRefresh, 
       if (credential && !secret.trim()) {
         result = await api<CredentialInspection>(`/api/admin/providers/${provider.id}/models/discover`, {
           method: "POST",
-          json: { credential_id: credential.id }
+          json: { credential_id: credential.id, skip_protocol_check: !checkProtocol }
         });
       } else {
         if (secret.trim().length < 8) {
           notify("Enter a complete API key before checking it.", "danger");
-          return;
+          return null;
         }
         result = await api<CredentialInspection>(`/api/admin/providers/${provider.id}/credentials/inspect`, {
           method: "POST",
-          json: { secret }
+          json: { secret, skip_protocol_check: !checkProtocol }
         });
       }
       setInspection(result);
@@ -2861,18 +2863,21 @@ function CredentialForm({ provider, credential, onClose, onComplete, onRefresh, 
       if (!result.valid) {
         notify(result.warning || "The provider rejected this API key.", "danger");
       }
+      return result;
     } catch (caught) {
       notify(errorMessage(caught), "danger");
+      return null;
     } finally {
       setBusy(false);
     }
   };
 
   const save = async () => {
-    const canContinueWithSavedKey = Boolean(credential && inspection && !inspection.valid && !secret.trim());
-    if ((!inspection?.valid && !canContinueWithSavedKey) || (secret.trim() && checkedSecret !== secret.trim())) {
-      await checkKey();
-      return;
+    let checked = inspection;
+    const canContinueWithSavedKey = Boolean(credential && checked && !checked.valid && !secret.trim());
+    if ((!checked?.valid && !canContinueWithSavedKey) || (secret.trim() && checkedSecret !== secret.trim())) {
+      checked = await checkKey();
+      if (!checked?.valid) return;
     }
     const trimmedBalance = balance.trim();
     const parsedBalance = trimmedBalance === "" ? null : Number(trimmedBalance);
@@ -2882,15 +2887,15 @@ function CredentialForm({ provider, credential, onClose, onComplete, onRefresh, 
     }
     setBusy(true);
     try {
-      let discovered: DiscoveredModel[] = inspection?.models ?? [];
+      let discovered: DiscoveredModel[] = checked?.models ?? [];
       if (credential) {
         const result = await api<{ models: DiscoveredModel[] }>(`/api/admin/credentials/${credential.id}`, {
           method: "PUT",
-          json: { label, secret, is_primary: isPrimary, enabled, limits, balance_usd: parsedBalance, reset_spend: resetSpend }
+          json: { label, secret, is_primary: isPrimary, enabled, limits, balance_usd: parsedBalance, reset_spend: resetSpend, skip_protocol_check: !checkProtocol }
         });
         discovered = result.models ?? discovered;
       } else {
-        const credentials = [{ label, secret, is_primary: isPrimary, enabled, limits, balance_usd: parsedBalance }];
+        const credentials = [{ label, secret, is_primary: isPrimary, enabled, limits, balance_usd: parsedBalance, skip_protocol_check: !checkProtocol }];
         const result = await api<{ models: DiscoveredModel[] }>(`/api/admin/providers/${provider.id}/credentials`, {
           method: "POST",
           json: { credentials }
@@ -2993,19 +2998,31 @@ function CredentialForm({ provider, credential, onClose, onComplete, onRefresh, 
       </div>
       <Toggle checked={isPrimary} onChange={setIsPrimary} label="Use as primary" description="Optional. This key is tried first while it has capacity; other keys remain fallbacks." />
       <Toggle checked={enabled} onChange={setEnabled} label="Enable API key" description="Re-enabling also clears quarantine and circuit-breaker state." />
+      <Toggle
+        checked={checkProtocol}
+        onChange={(checked) => {
+          setCheckProtocol(checked);
+          setInspection(null);
+          setSelectedModels({});
+        }}
+        label="Check inference protocol"
+        description="Turn this off when the model catalog works but the provider blocks protocol probes. The key can still be saved and used."
+      />
       <div className="validation-action">
         <div>
-          <strong>Check the key and load models</strong>
-          <small>Rotakey calls the provider’s `/models` endpoint now and checks again when saving.</small>
+          <strong>{checkProtocol ? "Check the key and load models" : "Verify key and load models"}</strong>
+          <small>{checkProtocol ? "Rotakey loads `/models` and verifies the configured inference protocol." : "Rotakey verifies the key through `/models` without sending an inference probe."}</small>
         </div>
         <Button type="button" variant="quiet" disabled={busy} onClick={() => void checkKey()}>
-          <RefreshCw size={14} aria-hidden="true" /> {busy ? "Checking…" : "Check key"}
+          <RefreshCw size={14} aria-hidden="true" /> {busy ? "Checking…" : checkProtocol ? "Check key" : "Load models"}
         </Button>
       </div>
       {inspection && (
         <InlineNotice tone={inspection.valid ? "success" : "danger"}>
           {inspection.valid
-            ? `API key and ${inspection.protocol} base URL verified · ${inspection.models.length} models loaded · ${inspection.latency_ms} ms`
+            ? inspection.protocol_verified
+              ? `API key and ${inspection.protocol} base URL verified · ${inspection.models.length} models loaded · ${inspection.latency_ms} ms`
+              : `API key and model catalog verified · protocol check skipped · ${inspection.models.length} models loaded · ${inspection.latency_ms} ms`
             : inspection.warning || keyCheckFailed}
         </InlineNotice>
       )}
@@ -3077,7 +3094,7 @@ function CredentialForm({ provider, credential, onClose, onComplete, onRefresh, 
       )}
       <div className="sheet-actions">
         <span />
-        <Button type="submit" disabled={busy || (!inspection?.valid && !(credential && inspection && !secret.trim()))}>{busy ? "Working…" : inspection?.valid ? credential ? "Save API key & routes" : "Add API key & routes" : "Continue with saved key"}</Button>
+        <Button type="submit" disabled={busy}>{busy ? "Working…" : inspection?.valid ? credential ? "Save API key & routes" : "Add API key & routes" : checkProtocol ? "Check and save" : "Load models and save"}</Button>
       </div>
       </form>
     </Sheet>

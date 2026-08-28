@@ -38,6 +38,10 @@ type providerModelCatalog struct {
 }
 
 func inspectProviderSecret(ctx context.Context, provider Provider, secret []byte) credentialInspection {
+	return inspectProviderSecretWithProtocol(ctx, provider, secret, true)
+}
+
+func inspectProviderSecretWithProtocol(ctx context.Context, provider Provider, secret []byte, checkProtocol bool) credentialInspection {
 	protocol := provider.APIFormat
 	if protocol == "" {
 		protocol = "openai"
@@ -143,6 +147,11 @@ func inspectProviderSecret(ctx context.Context, provider Provider, secret []byte
 	result.CatalogAvailable = true
 	if len(result.Models) == 0 {
 		result.Warning = "The provider returned an empty model catalog. Check that the base URL includes the provider's API prefix (usually /v1)."
+		return result
+	}
+	if !checkProtocol {
+		result.Valid = true
+		result.Warning = "API key and model catalog verified. Inference protocol check was skipped."
 		return result
 	}
 	// A provider-wide inference probe uses an arbitrary catalog entry. Some
@@ -352,7 +361,8 @@ func (s *Server) handleInspectUnsavedProvider(w http.ResponseWriter, r *http.Req
 
 func (s *Server) handleInspectProviderCredential(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Secret string `json:"secret"`
+		Secret            string `json:"secret"`
+		SkipProtocolCheck bool   `json:"skip_protocol_check,omitempty"`
 	}
 	if decodeJSON(w, r, 32<<10, &input) != nil {
 		return
@@ -369,12 +379,15 @@ func (s *Server) handleInspectProviderCredential(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusNotFound, "provider_not_found", "Provider was not found.")
 		return
 	}
-	writeJSON(w, http.StatusOK, inspectProviderSecret(r.Context(), provider, []byte(input.Secret)))
+	writeJSON(w, http.StatusOK, inspectProviderSecretWithProtocol(
+		r.Context(), provider, []byte(input.Secret), !input.SkipProtocolCheck,
+	))
 }
 
 func (s *Server) handleDiscoverModels(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		CredentialID string `json:"credential_id"`
+		CredentialID      string `json:"credential_id"`
+		SkipProtocolCheck bool   `json:"skip_protocol_check,omitempty"`
 	}
 	if decodeJSON(w, r, 16<<10, &input) != nil {
 		return
@@ -406,7 +419,7 @@ func (s *Server) handleDiscoverModels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "credential_unavailable", "API key could not be decrypted.")
 		return
 	}
-	inspection := inspectProviderSecret(r.Context(), provider, secret)
+	inspection := inspectProviderSecretWithProtocol(r.Context(), provider, secret, !input.SkipProtocolCheck)
 	s.recordCredentialInspection(r.Context(), credentialID, inspection)
 	writeJSON(w, http.StatusOK, inspection)
 }

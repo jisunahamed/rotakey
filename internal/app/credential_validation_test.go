@@ -46,6 +46,34 @@ func TestInspectProviderSecretLoadsModels(t *testing.T) {
 	}
 }
 
+func TestInspectProviderSecretCanSkipProtocolCheck(t *testing.T) {
+	protocolCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1/models" {
+			_, _ = w.Write([]byte(`{"data":[{"id":"provider/model"}]}`))
+			return
+		}
+		protocolCalls++
+		http.Error(w, "protocol endpoint unavailable", http.StatusBadGateway)
+	}))
+	defer upstream.Close()
+
+	result := inspectProviderSecretWithProtocol(context.Background(), Provider{
+		BaseURL: upstream.URL + "/v1", APIFormat: "openai", AuthHeader: "Authorization",
+		AuthScheme: "Bearer", TimeoutSeconds: 5, AllowPrivateNetwork: true,
+	}, []byte("valid-key"), false)
+	if !result.Valid || result.ProtocolVerified || !result.CatalogAvailable {
+		t.Fatalf("inspection = %#v", result)
+	}
+	if protocolCalls != 0 {
+		t.Fatalf("protocol endpoint was called %d times", protocolCalls)
+	}
+	if !strings.Contains(result.Warning, "skipped") {
+		t.Fatalf("warning = %q", result.Warning)
+	}
+}
+
 func TestInspectProviderSecretRejectsProtocolMismatch(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

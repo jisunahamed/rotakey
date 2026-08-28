@@ -791,12 +791,13 @@ func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 }
 
 type credentialInput struct {
-	Label           string     `json:"label"`
-	Secret          string     `json:"secret"`
-	IsPrimary       bool       `json:"is_primary"`
-	Enabled         *bool      `json:"enabled,omitempty"`
-	AllowUnverified bool       `json:"allow_unverified,omitempty"`
-	Limits          RatePolicy `json:"limits"`
+	Label             string     `json:"label"`
+	Secret            string     `json:"secret"`
+	IsPrimary         bool       `json:"is_primary"`
+	Enabled           *bool      `json:"enabled,omitempty"`
+	AllowUnverified   bool       `json:"allow_unverified,omitempty"`
+	SkipProtocolCheck bool       `json:"skip_protocol_check,omitempty"`
+	Limits            RatePolicy `json:"limits"`
 	// BalanceUSD is the credit loaded onto this key. Omitted or null means the
 	// balance is not tracked, which is why it is a pointer rather than a zero
 	// value: 0 has to mean "this key is spent", not "no balance given".
@@ -863,7 +864,9 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 	}
 	inspections := make([]credentialInspection, 0, len(input.Credentials))
 	for _, credential := range input.Credentials {
-		inspection := inspectProviderSecret(r.Context(), provider, []byte(credential.Secret))
+		inspection := inspectProviderSecretWithProtocol(
+			r.Context(), provider, []byte(credential.Secret), !credential.SkipProtocolCheck,
+		)
 		if !inspection.Valid && !credential.AllowUnverified {
 			writeError(
 				w, http.StatusUnprocessableEntity, "invalid_credential",
@@ -992,7 +995,7 @@ func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 		}
-		inspection = inspectProviderSecret(r.Context(), provider, secret)
+		inspection = inspectProviderSecretWithProtocol(r.Context(), provider, secret, !input.SkipProtocolCheck)
 		if !inspection.Valid {
 			// A replacement key that does not check out is refused: verifying it is
 			// the whole point of pasting a new one. But when the operator is only
