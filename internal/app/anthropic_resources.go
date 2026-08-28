@@ -182,8 +182,23 @@ func (s *Server) handleAnthropicBatchCreate(w http.ResponseWriter, r *http.Reque
 		credentials = filterCredentials(credentials, forcedCredential)
 	}
 	if err != nil || len(credentials) == 0 {
-		writeAnthropicError(w, r, http.StatusServiceUnavailable, "api_error", "No healthy API key can create this batch.")
+		writeAnthropicError(w, r, http.StatusServiceUnavailable, "api_error", "This provider has no enabled API key.")
 		return
+	}
+	// selectBatchCredential skips unusable keys without recording why, so a pool
+	// that is wholly rejected or spent is named here instead of being reported as
+	// "no capacity", which would invite a retry that cannot succeed.
+	if blocked := credentialBlockDecisions(credentials); blocked != nil {
+		reason := soleBlockingReason(blocked)
+		if message, terminal := unavailablePoolMessage(reason, provider.Name); terminal {
+			writeAnthropicError(w, r, http.StatusServiceUnavailable, "api_error", message)
+			return
+		}
+		if reason == "balance_exhausted" {
+			writeAnthropicError(w, r, http.StatusServiceUnavailable, "api_error",
+				"Every API key on "+provider.Name+" has spent its balance. Add balance to one of them to resume.")
+			return
+		}
 	}
 	settings, _, err := s.settings(r.Context())
 	if err != nil {
@@ -280,7 +295,20 @@ func (s *Server) defaultAnthropicProvider(ctx context.Context) (Provider, []cred
 	}
 	credentials, err := s.loadCredentials(ctx, provider.ID, "")
 	if err != nil || len(credentials) == 0 {
-		return Provider{}, nil, fmt.Errorf("the default Anthropic provider has no healthy API key")
+		return Provider{}, nil, fmt.Errorf("the default Anthropic provider has no enabled API key")
+	}
+	// The pool now carries rejected and spent keys so the reason can be named. The
+	// callers of this turn the error text into their own message, so saying which
+	// of the two it is here is the whole benefit.
+	if blocked := credentialBlockDecisions(credentials); blocked != nil {
+		switch soleBlockingReason(blocked) {
+		case "quarantined":
+			return Provider{}, nil, fmt.Errorf("every API key on the default Anthropic provider was rejected by the provider")
+		case "disabled":
+			return Provider{}, nil, fmt.Errorf("every API key on the default Anthropic provider is turned off")
+		case "balance_exhausted":
+			return Provider{}, nil, fmt.Errorf("every API key on the default Anthropic provider has spent its balance")
+		}
 	}
 	return provider, credentials, nil
 }
@@ -476,6 +504,10 @@ func (s *Server) loadAnthropicResource(ctx context.Context, id, kind string) (An
 	if len(filtered) == 0 {
 		return resource, Provider{}, credentialRuntime{}, nil, fmt.Errorf("pinned credential unavailable")
 	}
+	// A pinned key is used even when it is quarantined or spent. It is the only key
+	// the upstream will accept for this file or batch, so no other key is a
+	// substitute: trying it and passing the provider's own answer back tells the
+	// caller more than refusing before the request is sent.
 	aliases := map[string]string{}
 	_ = json.Unmarshal(aliasesRaw, &aliases)
 	resource.State, resource.ModelAliases = state, aliasesRaw

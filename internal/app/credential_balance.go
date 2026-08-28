@@ -178,8 +178,21 @@ const lowBalanceRatio = 0.20
 // returns nil when there is nothing to say.
 func balanceAlert(providerName string, credential CredentialView) *overviewAlert {
 	credit := credentialCredit(credential)
-	if credit == nil || credit.BalanceUSD <= 0 {
+	if credit == nil {
 		return nil
+	}
+	// A tracked balance of zero is the state that most needs saying: the key is
+	// switched off by its own accounting and no request will reach it, yet nothing
+	// about the key itself looks wrong. It is usually the mark of a per-key balance
+	// applied across a provider before an amount was set.
+	if credit.BalanceUSD <= 0 {
+		return &overviewAlert{
+			ID: "balance:" + credential.ID, Severity: "critical",
+			ResourceType: "credential", ResourceID: credential.ID,
+			Title: credential.Label + " has no balance",
+			Detail: fmt.Sprintf("%s · %s is tracked with a balance of $0.00, so it receives no traffic. Set a balance, or stop tracking one on this key.",
+				providerName, credential.Label),
+		}
 	}
 	if credit.Exhausted {
 		return &overviewAlert{
@@ -216,13 +229,77 @@ func formatUSDAmount(amount float64) string {
 // capacity" answer into one the operator can act on, because waiting will not
 // help: only a top-up will.
 func balanceBlockedEveryCandidate(decisions []RoutingDecision) bool {
+	return soleBlockingReason(decisions) == "balance_exhausted"
+}
+
+// soleBlockingReason names the one reason every candidate was passed over, or ""
+// when the pool was blocked for more than one reason or for none.
+//
+// It exists because "no key could serve" has several very different causes and
+// only some of them are worth waiting out. A rate limit resolves itself, so it is
+// backpressure and answers 429. A quarantined, spent or switched-off pool does
+// not: retrying forever is the wrong advice, and the caller needs to be told
+// which of the three it was. Anything mixed stays backpressure, because at least
+// one candidate could come back on its own.
+func soleBlockingReason(decisions []RoutingDecision) string {
 	if len(decisions) == 0 {
-		return false
+		return ""
 	}
-	for _, decision := range decisions {
-		if decision.Reason != "balance_exhausted" {
-			return false
+	reason := decisions[0].Reason
+	for _, decision := range decisions[1:] {
+		if decision.Reason != reason {
+			return ""
 		}
 	}
-	return true
+	return reason
+}
+
+// unavailablePoolMessage turns a terminal blocking reason into the sentence the
+// caller receives, or returns ok=false when the reason is one that time will
+// clear and the request should be reported as backpressure instead.
+func unavailablePoolMessage(reason, providerName string) (string, bool) {
+	where := "for this model"
+	if providerName != "" {
+		where = "on " + providerName
+	}
+	switch reason {
+	case "quarantined":
+		return "Every API key " + where + " was rejected by the provider. Replace one, or check it again from the console.", true
+	case "disabled":
+		return "Every API key " + where + " is turned off.", true
+	}
+	return "", false
+}
+
+// credentialBlockDecisions describes why each key in a list cannot be reached for
+// a reason that will not clear on its own. A key that could serve, or that is only
+// held for a cooldown or a limit, contributes nothing — so a full-length result
+// means the whole list is terminally blocked and soleBlockingReason can name it.
+//
+// The batch and resource paths need this because their selectors skip unusable
+// keys silently rather than recording a routing decision: without it, a pool of
+// rejected keys answers "no capacity for this batch", which reads as a rate limit
+// and invites a retry that cannot succeed.
+func credentialBlockDecisions(credentials []credentialRuntime) []RoutingDecision {
+	decisions := make([]RoutingDecision, 0, len(credentials))
+	for _, credential := range credentials {
+		reason := ""
+		switch {
+		case !credential.Enabled:
+			reason = "disabled"
+		case credential.Status == "quarantined":
+			reason = "quarantined"
+		case credential.BalanceExhausted():
+			reason = "balance_exhausted"
+		default:
+			continue
+		}
+		decisions = append(decisions, RoutingDecision{
+			CredentialID: credential.ID, CredentialLabel: credential.Label, Reason: reason,
+		})
+	}
+	if len(decisions) != len(credentials) {
+		return nil
+	}
+	return decisions
 }

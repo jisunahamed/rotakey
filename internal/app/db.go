@@ -159,15 +159,20 @@ const routeColumns = `
 `
 
 // routeFilter keeps the eligibility rules identical between single-route and
-// pooled lookups: enabled on both sides, verified capabilities, and at least
-// one credential that is not quarantined.
+// pooled lookups: the route and its provider are switched on, and the route's
+// capabilities have been verified.
+//
+// Key health is deliberately not part of this. It used to require a credential
+// that was not quarantined, which meant one upstream 401 took every alias on the
+// provider out of /v1/models and turned its requests into 404 model_not_found —
+// a client asking "which models do you have" was told the model did not exist.
+// Whether a key can serve is decided at selection time instead, where the reason
+// is known and can be reported: see selectPoolCandidate and the 503 in
+// servePooled. A 404 from here now means only what it says, that no such route is
+// configured.
 const routeFilter = `
 		m.enabled = TRUE AND p.enabled = TRUE
 		  AND m.capability_status IN ('catalog_verified', 'probe_verified')
-		  AND EXISTS (
-		    SELECT 1 FROM credentials c
-		    WHERE c.provider_id = p.id AND c.enabled = TRUE AND c.status <> 'quarantined'
-		  )
 `
 
 func scanRoute(row pgx.Row) (routeRuntime, error) {
@@ -273,6 +278,14 @@ func (s *Server) loadCredentials(ctx context.Context, providerID, modelID string
 	return s.loadCredentialsForModels(ctx, providerID, []string{modelID})
 }
 
+// loadCredentialsForModels loads the provider's usable keys with their limits.
+//
+// Quarantined keys are loaded rather than filtered out in SQL, because the
+// selection ladder is what decides usability and it is the only place that can
+// say why a key was passed over. Filtering here made a quarantine invisible in
+// the request log's routing decisions — unlike a spent balance, which was always
+// reported — and left the caller with nothing to act on. A disabled key is still
+// excluded: that is an operator's own decision, not a fault to explain.
 func (s *Server) loadCredentialsForModels(ctx context.Context, providerID string, modelIDs []string) ([]credentialRuntime, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT
@@ -284,7 +297,7 @@ func (s *Server) loadCredentialsForModels(ctx context.Context, providerID string
 		FROM credentials c
 		LEFT JOIN rate_policies r
 			ON r.credential_id = c.id AND (r.scope_key = '*' OR r.scope_key = ANY($2::text[]))
-		WHERE c.provider_id = $1 AND c.enabled = TRUE AND c.status <> 'quarantined'
+		WHERE c.provider_id = $1 AND c.enabled = TRUE
 		ORDER BY c.is_primary DESC, c.created_at, c.id, r.scope_key
 	`, providerID, modelIDs)
 	if err != nil {

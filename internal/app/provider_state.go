@@ -70,6 +70,11 @@ func (s *Server) handleSetProviderEnabled(w http.ResponseWriter, r *http.Request
 // serve. The NOT EXISTS clause repeats routeFilter's eligibility rules against
 // the other providers, so the answer matches what the gateway would actually
 // find after this provider stops being a candidate.
+//
+// Like routeFilter, it asks about configuration rather than today's key health.
+// Counting a quarantined key as "cannot serve" made the warning flicker with
+// upstream state: the same provider was reported as stranding six aliases one
+// minute and none the next, when nothing about the routing had changed.
 func (s *Server) strandedAliases(ctx context.Context, providerID string) ([]string, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT m.public_alias
@@ -82,10 +87,6 @@ func (s *Server) strandedAliases(ctx context.Context, providerID string) ([]stri
 		    WHERE o.public_alias = m.public_alias AND o.provider_id <> $1
 		      AND o.enabled = TRUE AND p.enabled = TRUE
 		      AND o.capability_status IN ('catalog_verified', 'probe_verified')
-		      AND EXISTS (
-		        SELECT 1 FROM credentials c
-		        WHERE c.provider_id = p.id AND c.enabled = TRUE AND c.status <> 'quarantined'
-		      )
 		  )
 		ORDER BY m.public_alias
 	`, providerID)

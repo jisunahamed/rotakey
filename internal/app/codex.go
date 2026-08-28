@@ -20,11 +20,14 @@ func (s *Server) handleCodexManifest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "settings_unavailable", "Gateway settings are unavailable.")
 		return
 	}
+	// Key health is not part of this, for the same reason it left routeFilter: a
+	// quarantined key must not make the alias disappear from the manifest. A local
+	// bridge that caches this would otherwise drop the model until the cache
+	// expired, long after the key recovered.
 	const codexFilter = `
 		m.enabled=TRUE AND p.enabled=TRUE
 		  AND (m.supports_responses=TRUE OR m.supports_chat=TRUE)
 		  AND m.capability_status IN ('catalog_verified', 'probe_verified')
-		  AND EXISTS (SELECT 1 FROM credentials c WHERE c.provider_id=p.id AND c.enabled=TRUE AND c.status <> 'quarantined')
 	`
 	query := `
 		SELECT m.public_alias, p.name, m.supports_responses, m.supports_chat,

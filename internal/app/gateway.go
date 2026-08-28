@@ -66,14 +66,14 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	// Model-wise routing publishes one entry per public alias even when several
 	// providers carry it, so callers never see the same model twice.
 	query := `
-		SELECT m.public_alias, m.created_at, m.supports_messages
+		SELECT m.public_alias, m.created_at
 		FROM model_routes m JOIN providers p ON p.id=m.provider_id
 		WHERE ` + routeFilter + `
 		ORDER BY m.public_alias
 	`
 	if normalizeRoutingMode(settings.RoutingMode) == routingModeModel {
 		query = `
-			SELECT m.public_alias, MIN(m.created_at), BOOL_OR(m.supports_messages)
+			SELECT m.public_alias, MIN(m.created_at)
 			FROM model_routes m JOIN providers p ON p.id=m.provider_id
 			WHERE ` + routeFilter + `
 			GROUP BY m.public_alias
@@ -90,11 +90,10 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var alias string
 		var created time.Time
-		var supportsMessages bool
-		if rows.Scan(&alias, &created, &supportsMessages) == nil {
-			if isAnthropicRequest(r) && !supportsMessages {
-				continue
-			}
+		if rows.Scan(&alias, &created) == nil {
+			// The dispatcher translates every eligible OpenAI and Anthropic route
+			// into the caller's protocol. Hiding chat-only routes from Anthropic
+			// discovery made Claude Code conclude that this gateway had no models.
 			if isAnthropicRequest(r) {
 				data = append(data, map[string]any{
 					"id": alias, "type": "model", "display_name": alias,
@@ -121,7 +120,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
 	route, err := s.loadRoute(r.Context(), r.PathValue("id"))
-	if err != nil || (isAnthropicRequest(r) && !route.Model.SupportsMessages) {
+	if err != nil {
 		writeProtocolError(w, r, http.StatusNotFound, "not_found_error", "The requested model alias is not enabled.")
 		return
 	}
@@ -909,15 +908,38 @@ func credentialSelectionOrder(credentials []credentialRuntime, cursor int64) []i
 	return order
 }
 
+// markCredentialFailure records what one upstream rejection means for a key.
+//
+// Only 401 quarantines on sight: the provider said the key itself is not valid.
+// A 403 is treated as a hold that escalates, because in practice it is far more
+// often "this key may not use that one model", a region block, or an edge/WAF
+// page than a dead key — and quarantining on the first one took every alias on
+// the provider out of service for a per-model entitlement problem.
 func (s *Server) markCredentialFailure(ctx context.Context, credentialID string, status int, retryAfter time.Duration) {
-	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		if _, err := s.db.Exec(ctx, `
-			UPDATE credentials SET status='quarantined', cooldown_until=NULL,
-			    validation_error=$2, last_validated_at=NOW(),
+	if status == http.StatusUnauthorized {
+		s.quarantineCredential(ctx, credentialID, status)
+		return
+	}
+	if status == http.StatusForbidden {
+		// A key that really has been revoked must still stop being retried, so the
+		// third consecutive 403 escalates. consecutive_failures is reset by any
+		// success, so a key that works between rejections never reaches the count.
+		var failures int
+		if err := s.db.QueryRow(ctx, `
+			UPDATE credentials SET status='cooldown', cooldown_until=$2,
+			    validation_error=$3, last_validated_at=NOW(),
 			    consecutive_failures=consecutive_failures+1, updated_at=NOW()
 			WHERE id=$1
-		`, credentialID, fmt.Sprintf("Provider rejected this API key during a request (HTTP %d).", status)); err != nil {
-			s.logger.Warn("credential quarantine state write failed", "credential_id", credentialID, "error", err)
+			RETURNING consecutive_failures
+		`, credentialID, time.Now().Add(forbiddenHold),
+			fmt.Sprintf("Provider refused this API key for a request (HTTP %d). It may not be allowed to use that model.", status),
+		).Scan(&failures); err != nil {
+			s.logger.Warn("credential refusal state write failed", "credential_id", credentialID, "error", err)
+			return
+		}
+		_ = s.redis.Set(ctx, "cooldown:"+credentialID, "403", forbiddenHold).Err()
+		if failures >= 3 {
+			s.quarantineCredential(ctx, credentialID, status)
 		}
 		return
 	}
@@ -935,6 +957,25 @@ func (s *Server) markCredentialFailure(ctx context.Context, credentialID string,
 		`, credentialID, time.Now().Add(30*time.Second)); err != nil {
 			s.logger.Warn("credential circuit state write failed", "credential_id", credentialID, "error", err)
 		}
+	}
+}
+
+// forbiddenHold is how long a refused key is parked before it is tried again. It
+// is short because the common cause — one model the key may not use — clears as
+// soon as the request goes to a different model.
+const forbiddenHold = 2 * time.Minute
+
+// quarantineCredential takes a key out of rotation until an operator or a later
+// success brings it back. The routes it served stay published: the request is
+// answered 503 naming this, rather than 404 claiming the model does not exist.
+func (s *Server) quarantineCredential(ctx context.Context, credentialID string, status int) {
+	if _, err := s.db.Exec(ctx, `
+		UPDATE credentials SET status='quarantined', cooldown_until=NULL,
+		    validation_error=$2, last_validated_at=NOW(),
+		    consecutive_failures=consecutive_failures+1, updated_at=NOW()
+		WHERE id=$1
+	`, credentialID, fmt.Sprintf("Provider rejected this API key during a request (HTTP %d).", status)); err != nil {
+		s.logger.Warn("credential quarantine state write failed", "credential_id", credentialID, "error", err)
 	}
 }
 
@@ -1037,13 +1078,18 @@ func bodySignalsRateLimit(body []byte) bool {
 	return false
 }
 
+// markCredentialSuccess clears every fault the key was carrying, quarantine
+// included. A 200 from the upstream is the strongest evidence available that the
+// key works, and it must outweigh an older rejection: the fence that used to
+// exclude quarantined rows here meant a key that started working again never
+// healed, so one stale 401 kept a provider dark until an operator noticed.
 func (s *Server) markCredentialSuccess(ctx context.Context, credentialID string) {
 	_ = s.redis.Del(ctx, "failures:"+credentialID, "cooldown:"+credentialID).Err()
 	_, _ = s.db.Exec(ctx, `
 		UPDATE credentials SET status='healthy', cooldown_until=NULL,
 		    validation_error='', last_validated_at=NOW(),
 		    consecutive_failures=0, updated_at=NOW()
-		WHERE id=$1 AND status <> 'quarantined'
+		WHERE id=$1
 	`, credentialID)
 }
 

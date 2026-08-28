@@ -1746,16 +1746,11 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                   This provider is turned off. Its routes are excluded from every request until it is turned back on.
                 </InlineNotice>
               )}
-              {selected.credentials.some((credential) => credential.validation_error) && (
-                <InlineNotice tone="danger">
-                  {(() => {
-                    const flagged = selected.credentials.filter((credential) => credential.validation_error).length;
-                    return flagged === 1
-                      ? "1 API key needs attention. Open the marked key to replace it or check it again."
-                      : `${flagged} API keys need attention. Open each marked key to replace it or check it again.`;
-                  })()}
-                </InlineNotice>
-              )}
+              <UnusableKeysNotice
+                provider={selected}
+                notify={notify}
+                onDone={() => void load()}
+              />
               <div className="inspector-header">
                 <div>
                   <p className="eyebrow">{selected.api_format === "anthropic" ? "Anthropic-compatible upstream" : "OpenAI-compatible upstream"}</p>
@@ -1968,6 +1963,26 @@ function credentialPoolState(credential: Credential) {
   return credential.status;
 }
 
+/** A key that cannot serve and will not recover on its own, which is the exact set
+ *  the delete button acts on. It reads `credentialPoolState` rather than the raw
+ *  fields so the banner's count, the rotor and the status dot can never disagree.
+ *
+ *  Deliberately not included: a key whose only signal is `validation_error`, which
+ *  is also written for a key saved without a successful check or imported from a
+ *  config bundle and still routes; and a key in cooldown, which clears itself. */
+function isUnusableKey(credential: Credential) {
+  const state = credentialPoolState(credential);
+  return state === "quarantined" || state === "exhausted";
+}
+
+/** unusableKeyReason is the one-line "why" shown beside each key in the confirm
+ *  dialog, so the operator reads what is going before agreeing to it. */
+function unusableKeyReason(credential: Credential) {
+  return credentialPoolState(credential) === "quarantined"
+    ? "rejected by the provider"
+    : "out of balance";
+}
+
 /** ProviderCreditStat reports what is left across the account rather than what was
  * loaded, and stays silent when no key on the provider tracks a balance. Spend the
  * gateway could not pin on one key still comes off the figure, because the operator
@@ -2101,6 +2116,106 @@ function ProviderPowerButton({
     >
       <Power size={14} aria-hidden="true" /> {busy ? "Saving…" : turningOff ? "Turn off" : "Turn on"}
     </Button>
+  );
+}
+
+/** UnusableKeysNotice is the provider inspector's account of keys that cannot
+ *  serve, and the one place they can be cleared.
+ *
+ *  It splits two things the old banner ran together. A quarantined or spent key is
+ *  not carrying traffic and there is an action to take, so it is stated plainly and
+ *  offered a delete. A key that merely carries a validation note still routes, so it
+ *  gets a quieter line: wording that as failure taught the operator to ignore both. */
+function UnusableKeysNotice({
+  provider,
+  notify,
+  onDone
+}: {
+  provider: Provider;
+  notify: (message: string, tone?: "success" | "danger") => void;
+  onDone: () => void;
+}) {
+  const ask = useConfirm();
+  // Its own flag, not the inspector's provider-level `deleting`: the two buttons
+  // sit side by side and sharing one would disable the wrong control.
+  const [deletingUnusable, setDeletingUnusable] = useState(false);
+  const unusable = provider.credentials.filter(isUnusableKey);
+  // A key that is both quarantined and merely noted is already counted above, so
+  // this line only speaks for keys whose sole signal is the note.
+  const noted = provider.credentials.filter(
+    (credential) => credential.validation_error && !isUnusableKey(credential)
+  );
+  if (unusable.length === 0 && noted.length === 0) return null;
+  const many = unusable.length !== 1;
+
+  const remove = async () => {
+    const confirmed = await ask({
+      title: `Delete ${unusable.length} unusable API key${many ? "s" : ""}?`,
+      body: `${many ? "They are" : "It is"} removed from ${provider.name} permanently. `
+        + `${many ? "Their" : "Its"} spend history stays in the request log, and this cannot be undone.`,
+      confirmLabel: `Delete ${unusable.length} key${many ? "s" : ""}`,
+      detail: unusable.map((credential) => `${credential.label} · ${unusableKeyReason(credential)}`).join("\n")
+    });
+    if (!confirmed) return;
+    setDeletingUnusable(true);
+    try {
+      const result = await api<{
+        deleted: { id: string; label: string }[];
+        skipped: { id: string; label: string; reason: string }[];
+        remaining: number;
+      }>(`/api/admin/providers/${provider.id}/credentials/delete-unusable`, {
+        method: "POST",
+        json: { credential_ids: unusable.map((credential) => credential.id) }
+      });
+      // Partial outcomes are the normal case here — a key pinned to an Anthropic
+      // file cannot be deleted — so the toast reports what was kept and why.
+      const kept = result.skipped.length
+        ? ` · ${result.skipped.length} kept: ${result.skipped.map((entry) => entry.reason).join("; ")}.`
+        : "";
+      const empty = result.remaining === 0
+        ? " This provider now has no API key, so its routes answer 503 until you add one."
+        : "";
+      notify(
+        `${result.deleted.length} API key${result.deleted.length === 1 ? "" : "s"} deleted.${kept}${empty}`,
+        result.skipped.length || result.remaining === 0 ? "danger" : "success"
+      );
+      onDone();
+    } catch (caught) {
+      notify(errorMessage(caught), "danger");
+    } finally {
+      setDeletingUnusable(false);
+    }
+  };
+
+  return (
+    <>
+      {unusable.length > 0 && (
+        <InlineNotice tone="danger">
+          <span className="notice-line">
+            <span>
+              {unusable.length} API key{many ? "s" : ""} cannot serve requests.
+              {" "}Replace {many ? "them" : "it"}, or delete {many ? "them" : "it"} here.
+            </span>
+            <Button
+              variant="danger"
+              disabled={deletingUnusable}
+              aria-label={`Delete ${unusable.length} unusable API key${many ? "s" : ""} on ${provider.name}`}
+              onClick={() => void remove()}
+            >
+              <Trash2 size={14} aria-hidden="true" />
+              {deletingUnusable ? "Deleting…" : `Delete ${unusable.length} unusable key${many ? "s" : ""}`}
+            </Button>
+          </span>
+        </InlineNotice>
+      )}
+      {noted.length > 0 && (
+        <InlineNotice tone="warning">
+          {noted.length === 1
+            ? `1 API key was saved without a successful check. It still receives traffic — open it to check it again.`
+            : `${noted.length} API keys were saved without a successful check. They still receive traffic — open each one to check it again.`}
+        </InlineNotice>
+      )}
+    </>
   );
 }
 
@@ -2825,7 +2940,12 @@ function CredentialForm({ provider, credential, onClose, onComplete, onRefresh, 
         })();
       }}><Trash2 size={14} aria-hidden="true" /> {deleting ? "Deleting…" : "Delete key"}</Button> : undefined}
     >
-      {credential?.validation_error && <InlineNotice tone="danger">{credential.validation_error}</InlineNotice>}
+      {/* A key that cannot serve is a failure; a note on a key that still routes is
+          only something to check. The two are told apart here the same way the
+          provider banner and the dashboard alerts tell them apart. */}
+      {credential?.validation_error && (isUnusableKey(credential)
+        ? <InlineNotice tone="danger">{credential.validation_error}</InlineNotice>
+        : <InlineNotice tone="warning">{credential.validation_error} This key still receives traffic.</InlineNotice>)}
       {/* The sheet body is a form, so the browser's own `required` and `type`
           validation runs and Enter submits from any field. */}
       <form

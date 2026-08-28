@@ -1722,9 +1722,30 @@ fieldset legend {
   border-color: var(--fault);
 }
 
+/* A warning is a lower rung than a fault, not a second fault: something to look
+   at, on a key that is still carrying traffic. */
+.notice--warning {
+  background: var(--hold-wash);
+  border-color: var(--hold);
+}
+
 .notice--success {
   background: var(--live-wash);
   border-color: var(--live);
+}
+
+/* A notice that carries its own action puts the sentence and the button on one
+   line, and stacks them when the inspector is too narrow to hold both. */
+.notice-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+}
+
+.notice-line > .button {
+  flex: 0 0 auto;
 }
 
 .wizard-validation-notice {

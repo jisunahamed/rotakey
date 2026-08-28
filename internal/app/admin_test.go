@@ -163,3 +163,81 @@ func TestStripTopLevelParameters(t *testing.T) {
 		t.Fatal("messages parameter was removed")
 	}
 }
+
+// TestApplyBalanceRequiresAnAmount covers the setting that took a whole
+// provider offline: a balance of zero means "spent", so applying a blank one to
+// every existing key stopped them all from routing while they still looked fine.
+func TestApplyBalanceRequiresAnAmount(t *testing.T) {
+	base := providerInput{
+		Name: "Test provider", BaseURL: "http://127.0.0.1:9000/v1",
+		APIFormat: "openai", AuthHeader: "Authorization", AuthScheme: "Bearer",
+		TimeoutSeconds: 5, AllowPrivateNetwork: true,
+	}
+	blank := base
+	blank.ApplyBalanceToExistingKeys = true
+	if err := validateProviderInput(&blank); err == nil {
+		t.Fatal("applying a balance with no amount was accepted")
+	}
+
+	zero := base
+	zero.ApplyBalanceToExistingKeys = true
+	zero.DefaultKeyBalanceUSD = usd(0)
+	if err := validateProviderInput(&zero); err == nil {
+		t.Fatal("applying a zero balance was accepted, which stops every key routing")
+	}
+
+	funded := base
+	funded.ApplyBalanceToExistingKeys = true
+	funded.DefaultKeyBalanceUSD = usd(25)
+	if err := validateProviderInput(&funded); err != nil {
+		t.Fatalf("a real top-up was refused: %v", err)
+	}
+
+	// Setting a per-key default without applying it is untouched: the zero there
+	// only means "new keys start untracked", which is the shipped default.
+	unapplied := base
+	unapplied.DefaultKeyBalanceUSD = usd(0)
+	if err := validateProviderInput(&unapplied); err != nil {
+		t.Fatalf("a zero default that is not applied was refused: %v", err)
+	}
+}
+
+// TestUnusableCredentialPredicateStaysNarrow pins the definition the delete
+// button acts on. Widening it is how an operator ends up deleting keys that
+// work: a saved validation note is also written for a key stored without a
+// successful check or imported from a bundle, and cooldown clears itself.
+func TestUnusableCredentialPredicateStaysNarrow(t *testing.T) {
+	for _, fragment := range []string{"c.status = 'quarantined'", "c.balance_usd IS NOT NULL", "c.balance_usd - c.balance_spent_usd <= 0"} {
+		if !strings.Contains(unusableCredentialPredicate, fragment) {
+			t.Fatalf("the predicate no longer tests %q", fragment)
+		}
+	}
+	for _, forbidden := range []string{"validation_error", "cooldown", "enabled"} {
+		if strings.Contains(unusableCredentialPredicate, forbidden) {
+			t.Fatalf("the predicate widened to include %q, which does not mean a key cannot serve", forbidden)
+		}
+	}
+	// The SQL must agree with BalanceExhausted, which is what the router itself
+	// uses, so the console, the router and the delete button count one pool.
+	tracked := []struct {
+		balance   *float64
+		spent     float64
+		exhausted bool
+	}{
+		{balance: nil, spent: 999, exhausted: false},
+		{balance: usd(10), spent: 0, exhausted: false},
+		{balance: usd(10), spent: 10, exhausted: true},
+		{balance: usd(10), spent: 12, exhausted: true},
+		{balance: usd(0), spent: 0, exhausted: true},
+	}
+	for _, test := range tracked {
+		credential := balanceCredential(test.balance, test.spent)
+		// This mirrors the SQL by hand: NULL is "not tracked", otherwise the
+		// remaining figure decides.
+		sqlSays := test.balance != nil && *test.balance-test.spent <= 0
+		if sqlSays != test.exhausted || credential.BalanceExhausted() != test.exhausted {
+			t.Fatalf("balance %v spent %v: sql = %v, router = %v, want %v",
+				test.balance, test.spent, sqlSays, credential.BalanceExhausted(), test.exhausted)
+		}
+	}
+}

@@ -143,7 +143,7 @@ func (s *Server) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Reque
 	payload["model"] = route.Model.UpstreamModel
 	credentials, err := s.loadCredentials(r.Context(), route.Provider.ID, route.Model.ID)
 	if err != nil || len(credentials) == 0 {
-		writeAnthropicError(w, r, http.StatusServiceUnavailable, "api_error", "No healthy credential is available.")
+		writeAnthropicError(w, r, http.StatusServiceUnavailable, "api_error", "This provider has no enabled API key.")
 		return
 	}
 	settings, _, err := s.settings(r.Context())
@@ -151,12 +151,22 @@ func (s *Server) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Reque
 		writeAnthropicError(w, r, http.StatusServiceUnavailable, "api_error", "Gateway settings are unavailable.")
 		return
 	}
-	selected, _, retry, _, err := s.selectCredentialWithDiagnostics(r.Context(), route.Model.ID, credentials, 0, map[string]bool{}, time.Duration(settings.MaxWaitMS)*time.Millisecond)
+	selected, _, retry, decisions, err := s.selectCredentialWithDiagnostics(r.Context(), route.Model.ID, credentials, 0, map[string]bool{}, time.Duration(settings.MaxWaitMS)*time.Millisecond)
 	if err != nil {
 		writeAnthropicError(w, r, http.StatusServiceUnavailable, "api_error", "Rate limiter is unavailable.")
 		return
 	}
 	if selected == nil {
+		// The pool now carries quarantined keys so the reason can be named. Only a
+		// cause the caller could wait out stays a rate-limit answer.
+		if message, terminal := unavailablePoolMessage(soleBlockingReason(decisions), route.Provider.Name); terminal {
+			writeAnthropicError(w, r, http.StatusServiceUnavailable, "api_error", message)
+			return
+		}
+		if balanceBlockedEveryCandidate(decisions) {
+			writeAnthropicError(w, r, http.StatusServiceUnavailable, "api_error", "Every API key for this model has spent its balance. Add balance to one of them to resume.")
+			return
+		}
 		w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(retry.Seconds())))))
 		writeAnthropicError(w, r, http.StatusTooManyRequests, "rate_limit_error", "Every credential is at capacity.")
 		return

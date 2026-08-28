@@ -136,6 +136,27 @@ func TestUpstreamRateLimitHoldClassification(t *testing.T) {
 			ok:     false,
 		},
 		{
+			// A 403 whose body says "quota" is a quota problem, and holding it is
+			// right: quarantining the key for it took every alias on the provider
+			// out of service over one model's entitlement.
+			name:   "403 that says quota is held rather than quarantined",
+			status: http.StatusForbidden,
+			header: http.Header{"Retry-After": []string{"120"}},
+			body:   `{"error":{"message":"Quota exceeded for this model"}}`,
+			want:   120 * time.Second,
+			ok:     true,
+		},
+		{
+			// A bare 403 is not a rate limit, so it falls through to
+			// markCredentialFailure — which now parks it and only quarantines on the
+			// third consecutive refusal.
+			name:   "bare 403 is not a rate limit",
+			status: http.StatusForbidden,
+			header: http.Header{},
+			body:   `{"error":{"message":"Permission denied for model gpt-5"}}`,
+			ok:     false,
+		},
+		{
 			name:   "plain bad request is not a rate limit",
 			status: http.StatusBadRequest,
 			header: http.Header{},

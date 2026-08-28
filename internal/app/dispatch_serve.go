@@ -117,6 +117,23 @@ func routeModelIDs(routes []routeRuntime) []string {
 	return ids
 }
 
+// sharedProviderName is the provider to name in an error when the whole pool
+// belongs to one, and "" when several providers publish the alias. Naming a
+// single provider tells the operator where to look; naming one of many would be
+// misleading, so the message falls back to "for this model".
+func sharedProviderName(routes []routeRuntime) string {
+	if len(routes) == 0 {
+		return ""
+	}
+	name := routes[0].Provider.Name
+	for _, route := range routes[1:] {
+		if route.Provider.Name != name {
+			return ""
+		}
+	}
+	return name
+}
+
 // poolRetryTimeout takes the most generous deadline in the pool so a slow but
 // permitted provider is not cut short by a stricter sibling's timeout.
 func poolRetryTimeout(routes []routeRuntime, isStream bool) time.Duration {
@@ -196,7 +213,10 @@ func (s *Server) servePooled(
 	}
 	candidates = filterForcedCredential(candidates, forcedCredential)
 	if len(candidates) == 0 {
-		s.rejectPool(w, r, req, primary, http.StatusServiceUnavailable, "no_credentials", "No healthy credential is configured for this model.")
+		// Quarantined keys now reach the selection ladder, so this fires only when
+		// the pool genuinely holds no enabled key at all. Saying so is more useful
+		// than "no healthy credential", which read like a transient fault.
+		s.rejectPool(w, r, req, primary, http.StatusServiceUnavailable, "no_credentials", "This provider has no enabled API key.")
 		return
 	}
 
@@ -262,6 +282,16 @@ func (s *Server) servePooled(
 			// is reported as a configuration problem rather than as backpressure.
 			if balanceBlockedEveryCandidate(decisions) {
 				result.Status, result.ErrorCode, result.ErrorMessage = http.StatusServiceUnavailable, "balance_exhausted", "Every API key for this model has spent its balance. Add balance to one of them to resume."
+				s.writePoolError(w, r, req.PublicMode, result.Status, result.ErrorCode, result.ErrorMessage)
+				s.storePoolLog(r.Context(), req, result, attempts, decisions)
+				return
+			}
+			// A pool that was rejected by the provider or switched off is the same
+			// kind of answer: the alias exists and is configured, but no key behind
+			// it can serve, and only the operator can change that. This is what the
+			// alias disappearing from /v1/models used to hide behind a 404.
+			if message, terminal := unavailablePoolMessage(soleBlockingReason(decisions), sharedProviderName(routes)); terminal {
+				result.Status, result.ErrorCode, result.ErrorMessage = http.StatusServiceUnavailable, "no_healthy_credential", message
 				s.writePoolError(w, r, req.PublicMode, result.Status, result.ErrorCode, result.ErrorMessage)
 				s.storePoolLog(r.Context(), req, result, attempts, decisions)
 				return

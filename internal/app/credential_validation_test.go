@@ -261,7 +261,7 @@ func TestModelProbeTimeoutHonorsProviderLimit(t *testing.T) {
 	for _, test := range []struct {
 		seconds int
 		want    time.Duration
-	}{{0, 15 * time.Second}, {60, time.Minute}, {120, 2 * time.Minute}, {600, 2 * time.Minute}} {
+	}{{0, 2 * time.Minute}, {60, time.Minute}, {120, 2 * time.Minute}, {600, 10 * time.Minute}} {
 		if got := modelProbeTimeout(Provider{TimeoutSeconds: test.seconds}); got != test.want {
 			t.Fatalf("timeout(%d) = %s, want %s", test.seconds, got, test.want)
 		}

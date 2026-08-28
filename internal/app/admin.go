@@ -49,6 +49,7 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/admin/models/{id}", admin(s.handleDeleteModel))
 	mux.Handle("POST /api/admin/providers/{id}/credentials", admin(s.handleCreateCredentials))
 	mux.Handle("POST /api/admin/providers/{id}/credentials/inspect", admin(s.handleInspectProviderCredential))
+	mux.Handle("POST /api/admin/providers/{id}/credentials/delete-unusable", admin(s.handleDeleteUnusableCredentials))
 	mux.Handle("PUT /api/admin/credentials/{id}", admin(s.handleUpdateCredential))
 	mux.Handle("DELETE /api/admin/credentials/{id}", admin(s.handleDeleteCredential))
 	mux.Handle("PUT /api/admin/credentials/{id}/model-limits/{model_id}", admin(s.handleModelLimits))
@@ -293,6 +294,14 @@ func validateProviderInput(input *providerInput) error {
 		(*input.DefaultKeyBalanceUSD < 0 || *input.DefaultKeyBalanceUSD > maxCredentialBalanceUSD) {
 		return fmt.Errorf("the per-key balance must be a positive USD amount")
 	}
+	// Applying a blank or zero balance to existing keys is never what the operator
+	// meant: a balance of zero means "spent", so it stops every key on the
+	// provider from routing while the routes stay listed. Refusing the
+	// combination is the only reading that cannot silently take a fleet offline.
+	if input.ApplyBalanceToExistingKeys &&
+		(input.DefaultKeyBalanceUSD == nil || *input.DefaultKeyBalanceUSD <= 0) {
+		return fmt.Errorf("set a per-key balance above zero before applying it to existing keys")
+	}
 	for key, value := range input.ExtraHeaders {
 		canonical := http.CanonicalHeaderKey(key)
 		if canonical == "" || !headerNamePattern.MatchString(key) || strings.ContainsAny(key+value, "\r\n") ||
@@ -455,7 +464,16 @@ func (s *Server) handleUpdateProvider(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	headers, _ := json.Marshal(input.ExtraHeaders)
-	tag, err := s.db.Exec(r.Context(), `
+	// The provider row and the balance it hands down to its keys are written in one
+	// transaction: a failure halfway through used to leave the provider saved while
+	// its keys kept the old balance, or worse, half-rewritten.
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Provider could not be updated.")
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
+	tag, err := tx.Exec(r.Context(), `
 		UPDATE providers SET name=$2, slug=$3, base_url=$4, auth_header=$5,
 		    auth_scheme=$6, extra_headers=$7, timeout_seconds=$8, enabled=$9,
 		    allow_private_network=$10, api_format=$11, anthropic_version=$12,
@@ -473,20 +491,28 @@ func (s *Server) handleUpdateProvider(w http.ResponseWriter, r *http.Request) {
 	// that already exist, which also clears their spend so the new balance is what
 	// is actually left rather than what was left before the top-up.
 	if input.ApplyBalanceToExistingKeys {
-		if _, err := s.db.Exec(r.Context(), `
+		// Disabled keys are left alone. Parking a key is a deliberate decision, and
+		// quietly re-funding it would undo that without the operator asking.
+		if _, err := tx.Exec(r.Context(), `
 			UPDATE credentials
 			SET balance_usd=$2, balance_spent_usd=0, updated_at=NOW()
-			WHERE provider_id=$1
+			WHERE provider_id=$1 AND enabled = TRUE
 		`, r.PathValue("id"), input.DefaultKeyBalanceUSD); err != nil {
 			writeError(w, http.StatusInternalServerError, "credential_update_failed",
-				"The provider was saved, but the balance could not be applied to its API keys.")
+				"The balance could not be applied to this provider's API keys, so nothing was changed.")
 			return
 		}
-		if _, err := s.db.Exec(r.Context(), `
+		if _, err := tx.Exec(r.Context(), `
 			UPDATE providers SET balance_spent_usd=0, updated_at=NOW() WHERE id=$1
 		`, r.PathValue("id")); err != nil {
-			s.logger.Warn("provider pooled spend reset failed", "provider_id", r.PathValue("id"), "error", err)
+			writeError(w, http.StatusInternalServerError, "credential_update_failed",
+				"The pooled spend could not be reset, so nothing was changed.")
+			return
 		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "provider_update_failed", "Provider could not be updated.")
+		return
 	}
 	s.audit(r.Context(), adminIDFromContext(r.Context()), "provider.update", "provider", r.PathValue("id"), map[string]any{"name": input.Name})
 	w.WriteHeader(http.StatusNoContent)
@@ -920,6 +946,9 @@ func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) 
 	}
 	shouldInspect := enabled || replacement != ""
 	var inspection credentialInspection
+	// inspectionWarning is the text saved on the record when the check could not
+	// confirm the key. It stays empty when the check passed or was not run.
+	inspectionWarning := ""
 	if shouldInspect {
 		secret := []byte(replacement)
 		if replacement == "" {
@@ -931,11 +960,20 @@ func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) 
 		}
 		inspection = inspectProviderSecret(r.Context(), provider, secret)
 		if !inspection.Valid {
-			writeError(
-				w, http.StatusUnprocessableEntity, "invalid_credential",
-				inspection.Warning+" Changes were not saved.",
-			)
-			return
+			// A replacement key that does not check out is refused: verifying it is
+			// the whole point of pasting a new one. But when the operator is only
+			// relabelling or re-enabling the key they already have, refusing to save
+			// locks them out of their own record whenever the provider is
+			// unreachable — exactly when they most need to edit it. That case is
+			// recorded as a warning on the key instead.
+			if replacement != "" {
+				writeError(
+					w, http.StatusUnprocessableEntity, "invalid_credential",
+					inspection.Warning+" Changes were not saved.",
+				)
+				return
+			}
+			inspectionWarning = inspection.Warning
 		}
 	}
 
@@ -987,10 +1025,14 @@ func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) 
 			UPDATE credentials SET label=$2, is_primary=$3, enabled=$4, status=$5,
 			    balance_usd=$6, cooldown_until=NULL, consecutive_failures=0, updated_at=NOW()` + spendReset
 		if shouldInspect {
-			query += `, validation_error='', last_validated_at=NOW()`
+			query += `, validation_error=$7, last_validated_at=NOW()`
 		}
 		query += ` WHERE id=$1`
-		commandTag, err := tx.Exec(r.Context(), query, r.PathValue("id"), input.Label, input.IsPrimary, enabled, status, input.BalanceUSD)
+		arguments := []any{r.PathValue("id"), input.Label, input.IsPrimary, enabled, status, input.BalanceUSD}
+		if shouldInspect {
+			arguments = append(arguments, inspectionWarning)
+		}
+		commandTag, err := tx.Exec(r.Context(), query, arguments...)
 		if err != nil {
 			writeError(w, http.StatusConflict, "credential_update_failed", "Credential could not be updated.")
 			return
@@ -1011,21 +1053,34 @@ func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) 
 	}
 	_ = s.redis.Del(r.Context(), "cooldown:"+r.PathValue("id")).Err()
 	s.audit(r.Context(), adminIDFromContext(r.Context()), "credential.update", "credential", r.PathValue("id"), map[string]any{"label": input.Label})
-	writeJSON(w, http.StatusOK, map[string]any{"models": inspection.Models})
+	// The warning is returned so the console can say the record was saved but the
+	// key could not be confirmed, which is a different outcome from a clean save.
+	writeJSON(w, http.StatusOK, map[string]any{"models": inspection.Models, "warning": inspectionWarning})
 }
 
 func (s *Server) handleDeleteCredential(w http.ResponseWriter, r *http.Request) {
+	var label string
+	if err := s.db.QueryRow(r.Context(), `SELECT label FROM credentials WHERE id=$1`, r.PathValue("id")).Scan(&label); err != nil {
+		writeError(w, http.StatusNotFound, "credential_not_found", "Credential was not found.")
+		return
+	}
 	var resources int
 	if err := s.db.QueryRow(r.Context(), `SELECT COUNT(*) FROM anthropic_resources WHERE credential_id=$1`, r.PathValue("id")).Scan(&resources); err == nil && resources > 0 {
 		writeError(w, http.StatusConflict, "credential_has_resources", "Delete the Anthropic files or batches pinned to this API key first.")
 		return
 	}
 	tag, err := s.db.Exec(r.Context(), `DELETE FROM credentials WHERE id=$1`, r.PathValue("id"))
-	if err != nil || tag.RowsAffected() == 0 {
+	// A database failure and a missing row are different answers: reporting a
+	// failed delete as "not found" told the operator the key was already gone.
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "credential_delete_failed", "The API key could not be deleted.")
+		return
+	}
+	if tag.RowsAffected() == 0 {
 		writeError(w, http.StatusNotFound, "credential_not_found", "Credential was not found.")
 		return
 	}
-	s.audit(r.Context(), adminIDFromContext(r.Context()), "credential.delete", "credential", r.PathValue("id"), map[string]any{})
+	s.audit(r.Context(), adminIDFromContext(r.Context()), "credential.delete", "credential", r.PathValue("id"), map[string]any{"label": label})
 	w.WriteHeader(http.StatusNoContent)
 }
 

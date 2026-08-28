@@ -279,15 +279,31 @@ func (s *Server) buildAdminOverview(ctx context.Context, rawRange string) (admin
 			if alert := balanceAlert(provider.Name, credential); alert != nil {
 				result.Alerts = append(result.Alerts, *alert)
 			}
-			if credential.ValidationError != "" || credential.Status == "quarantined" {
+			// Quarantine and a saved validation note are different facts and must not
+			// share a severity. A quarantined key is not serving traffic, which is
+			// critical. A validation note is also written when a key is saved without
+			// a successful check or imported from a config bundle, and those keys
+			// route perfectly well — calling that critical trained the operator to
+			// ignore the colour that matters.
+			if credential.Status == "quarantined" {
 				providerView.KeysWarning++
 				providerView.ValidationBad++
 				summary.KeysWarning++
 				result.Alerts = append(result.Alerts, overviewAlert{
 					ID: "credential:" + credential.ID, Severity: "critical",
 					ResourceType: "credential", ResourceID: credential.ID,
-					Title:  credential.Label + " needs attention",
-					Detail: firstNonEmpty(credential.ValidationError, "The provider quarantined this API key."),
+					Title:  credential.Label + " was rejected by the provider",
+					Detail: firstNonEmpty(credential.ValidationError, "The provider quarantined this API key.") + " Its routes stay published and answer 503 until a key can serve.",
+				})
+			} else if credential.ValidationError != "" {
+				providerView.KeysWarning++
+				providerView.ValidationBad++
+				summary.KeysWarning++
+				result.Alerts = append(result.Alerts, overviewAlert{
+					ID: "credential:" + credential.ID, Severity: "warning",
+					ResourceType: "credential", ResourceID: credential.ID,
+					Title:  "Check " + credential.Label,
+					Detail: credential.ValidationError + " This key still receives traffic.",
 				})
 			}
 		}

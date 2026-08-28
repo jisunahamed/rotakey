@@ -129,8 +129,15 @@ func TestBalanceAlertEscalatesWhenTheKeyIsSpent(t *testing.T) {
 	if alert := balanceAlert("Azure", balanceCredential(nil, 0)); alert != nil {
 		t.Fatalf("an untracked key raised an alert: %#v", alert)
 	}
-	if alert := balanceAlert("Azure", balanceCredential(usd(0), 0)); alert != nil {
-		t.Fatalf("a zero-balance key raised an alert instead of being ignored: %#v", alert)
+	// A tracked balance of zero is the state a provider-wide "apply this balance"
+	// with no amount leaves behind: nothing looks wrong with the key, but it
+	// serves nothing. Staying silent here was how a whole fleet went quiet.
+	zero := balanceAlert("Azure", balanceCredential(usd(0), 0))
+	if zero == nil || zero.Severity != "critical" {
+		t.Fatalf("a tracked zero-balance key did not raise a critical alert: %#v", zero)
+	}
+	if !strings.Contains(zero.Detail, "balance of $0.00") {
+		t.Fatalf("the alert does not say the balance is zero: %q", zero.Detail)
 	}
 	if alert := balanceAlert("Azure", balanceCredential(usd(10), 1)); alert != nil {
 		t.Fatalf("a key with 90%% left raised an alert: %#v", alert)
@@ -332,4 +339,109 @@ func TestApplyCredentialUsageIsANoOpForUntrackedKeys(t *testing.T) {
 		t.Fatalf("credit = %#v, want nil", credit)
 	}
 	applyCredentialUsage(credit, credentialUsage{Requests: 7})
+}
+
+// TestSoleBlockingReasonOnlyNamesAUnanimousCause guards the distinction the 503
+// rests on: a pool blocked for one terminal reason can be explained, and a pool
+// blocked for several reasons still has a candidate that may come back, so it
+// must stay backpressure.
+func TestSoleBlockingReasonOnlyNamesAUnanimousCause(t *testing.T) {
+	decisions := func(reasons ...string) []RoutingDecision {
+		result := make([]RoutingDecision, 0, len(reasons))
+		for index, reason := range reasons {
+			result = append(result, RoutingDecision{
+				CredentialID: "cred-" + string(rune('a'+index)), Reason: reason,
+			})
+		}
+		return result
+	}
+	cases := []struct {
+		name    string
+		reasons []string
+		want    string
+	}{
+		{name: "no candidates were even considered", reasons: nil, want: ""},
+		{name: "every key is quarantined", reasons: []string{"quarantined", "quarantined"}, want: "quarantined"},
+		{name: "every key is switched off", reasons: []string{"disabled"}, want: "disabled"},
+		{name: "every key is spent", reasons: []string{"balance_exhausted", "balance_exhausted"}, want: "balance_exhausted"},
+		{name: "a mixed pool names nothing", reasons: []string{"quarantined", "limit_exhausted"}, want: ""},
+		{name: "one key on cooldown among rejected keys names nothing", reasons: []string{"quarantined", "cooldown"}, want: ""},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if got := soleBlockingReason(decisions(test.reasons...)); got != test.want {
+				t.Fatalf("sole reason = %q, want %q", got, test.want)
+			}
+		})
+	}
+	// balanceBlockedEveryCandidate is the older, narrower question and must keep
+	// answering exactly as it did, because it selects a different message.
+	if !balanceBlockedEveryCandidate(decisions("balance_exhausted", "balance_exhausted")) {
+		t.Fatalf("a wholly spent pool was not recognised")
+	}
+	if balanceBlockedEveryCandidate(decisions("balance_exhausted", "quarantined")) {
+		t.Fatalf("a mixed pool was reported as spent")
+	}
+	if balanceBlockedEveryCandidate(nil) {
+		t.Fatalf("an empty decision list was reported as spent")
+	}
+}
+
+// TestCredentialBlockDecisionsRequireEveryKeyToBeBlocked covers the batch and
+// resource paths, whose selectors skip unusable keys without recording why. One
+// key that could still serve must produce no verdict at all.
+func TestCredentialBlockDecisionsRequireEveryKeyToBeBlocked(t *testing.T) {
+	runtime := func(status string, enabled bool, balance *float64, spent float64) credentialRuntime {
+		return credentialRuntime{CredentialView: CredentialView{
+			ID: "cred-" + status, Label: status, Enabled: enabled, Status: status,
+			BalanceUSD: balance, BalanceSpentUSD: spent,
+		}}
+	}
+	rejected := []credentialRuntime{
+		runtime("quarantined", true, nil, 0),
+		runtime("quarantined", true, usd(10), 1),
+	}
+	if reason := soleBlockingReason(credentialBlockDecisions(rejected)); reason != "quarantined" {
+		t.Fatalf("a wholly rejected pool reported %q", reason)
+	}
+	spent := []credentialRuntime{runtime("healthy", true, usd(5), 5)}
+	if reason := soleBlockingReason(credentialBlockDecisions(spent)); reason != "balance_exhausted" {
+		t.Fatalf("a spent pool reported %q", reason)
+	}
+	// One usable key means the pool is not blocked, whatever the others look like.
+	mixed := []credentialRuntime{runtime("quarantined", true, nil, 0), runtime("healthy", true, nil, 0)}
+	if decisions := credentialBlockDecisions(mixed); decisions != nil {
+		t.Fatalf("a pool with a usable key reported %#v", decisions)
+	}
+	// A key held on cooldown may serve in a moment, so it is not counted as
+	// blocked and the pool keeps answering as backpressure.
+	held := []credentialRuntime{runtime("cooldown", true, nil, 0)}
+	if decisions := credentialBlockDecisions(held); decisions != nil {
+		t.Fatalf("a cooling pool was reported as terminally blocked: %#v", decisions)
+	}
+	if decisions := credentialBlockDecisions(nil); len(decisions) != 0 {
+		t.Fatalf("an empty pool produced decisions: %#v", decisions)
+	}
+}
+
+// TestUnavailablePoolMessageOnlyClaimsTerminalCauses keeps a cause that time
+// clears out of the 503: answering "no key can serve" for a rate limit would
+// tell the caller to stop retrying when retrying is exactly what works.
+func TestUnavailablePoolMessageOnlyClaimsTerminalCauses(t *testing.T) {
+	message, terminal := unavailablePoolMessage("quarantined", "Azure")
+	if !terminal || !strings.Contains(message, "on Azure") {
+		t.Fatalf("quarantine message = %q, terminal = %v", message, terminal)
+	}
+	if !strings.Contains(message, "rejected by the provider") {
+		t.Fatalf("the message does not say what happened: %q", message)
+	}
+	offMessage, terminal := unavailablePoolMessage("disabled", "")
+	if !terminal || !strings.Contains(offMessage, "for this model") {
+		t.Fatalf("a pool spanning providers must not name one: %q", offMessage)
+	}
+	for _, reason := range []string{"", "cooldown", "limit_exhausted", "balance_exhausted"} {
+		if _, terminal := unavailablePoolMessage(reason, "Azure"); terminal {
+			t.Fatalf("%q was reported as terminal", reason)
+		}
+	}
 }

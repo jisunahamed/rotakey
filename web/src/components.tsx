@@ -322,10 +322,12 @@ export function InlineNotice({
   tone = "info",
   children
 }: {
-  tone?: "info" | "danger" | "success";
+  tone?: "info" | "danger" | "warning" | "success";
   children: ReactNode;
 }) {
   // A failure has to interrupt a screen reader; an informational note must not.
+  // A warning is the middle case — something to look at, not something that has
+  // stopped working — so it is announced politely like the rest.
   return (
     <div
       className={`notice notice--${tone}`}

@@ -544,7 +544,13 @@ func (s *Server) recordCredentialInspection(ctx context.Context, credentialID st
 		_ = s.redis.Del(ctx, "cooldown:"+credentialID, "failures:"+credentialID).Err()
 		return
 	}
-	if inspection.StatusCode == http.StatusUnauthorized || inspection.StatusCode == http.StatusForbidden {
+	// Only 401 quarantines from a check. The check is a GET on the provider's model
+	// list, and a 403 there routinely means "this key may not list models" on
+	// upstreams that still serve inference with it perfectly well — quarantining on
+	// that took a whole provider off the air whenever "Check every key" was
+	// pressed. A 403 is recorded as a note instead, so the operator sees it and the
+	// key keeps routing until a real request proves otherwise.
+	if inspection.StatusCode == http.StatusUnauthorized {
 		_, _ = s.db.Exec(ctx, `
 			UPDATE credentials SET
 			    status=CASE WHEN enabled THEN 'quarantined' ELSE 'disabled' END,
@@ -786,9 +792,6 @@ func probeNativeResponses(ctx context.Context, provider Provider, input *modelIn
 func modelProbeTimeout(provider Provider) time.Duration {
 	seconds := provider.TimeoutSeconds
 	if seconds <= 0 {
-		seconds = 15
-	}
-	if seconds > 120 {
 		seconds = 120
 	}
 	return time.Duration(seconds) * time.Second
