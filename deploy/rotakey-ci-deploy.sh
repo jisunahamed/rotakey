@@ -5,6 +5,7 @@ readonly APP_DIR="/opt/rotakey"
 readonly COMPOSE_FILE="compose.vps.yml"
 readonly HEALTH_URL="http://127.0.0.1:8787/health/ready"
 readonly LOCK_FILE="/var/lock/rotakey-ci-deploy.lock"
+readonly BACKUP_RETENTION=7
 
 if [[ ! ${SSH_ORIGINAL_COMMAND:-} =~ ^deploy[[:space:]]([0-9a-f]{40})$ ]]; then
   echo "Only a tested Rotakey commit can be deployed." >&2
@@ -32,11 +33,29 @@ if [[ "$remote_sha" != "$expected_sha" ]]; then
 fi
 
 mkdir -p backups
+
+# Build cache is disposable, and stale partial backups should never be allowed
+# to block a verified deployment on a small VPS disk.
+docker builder prune --all --force >/dev/null
+docker image prune --force >/dev/null
+find backups -maxdepth 1 -type f -name 'rotakey-*.dump.tmp' -delete
+mapfile -t expired_backups < <(
+  find backups -maxdepth 1 -type f -name 'rotakey-*.dump' -printf '%f\n' \
+    | sort -r \
+    | tail -n "+${BACKUP_RETENTION}"
+)
+for expired_backup in "${expired_backups[@]}"; do
+  rm -f -- "backups/$expired_backup"
+done
+
 umask 077
 readonly backup="backups/rotakey-$(date -u +%Y%m%dT%H%M%SZ).dump"
+readonly backup_tmp="${backup}.tmp"
+trap 'rm -f -- "$backup_tmp"' EXIT
 docker compose -f "$COMPOSE_FILE" exec -T postgres \
-  sh -c 'pg_dump -Fc -U "$POSTGRES_USER" -d "$POSTGRES_DB"' </dev/null >"$backup"
-test -s "$backup"
+  sh -c 'pg_dump -Fc -U "$POSTGRES_USER" -d "$POSTGRES_DB"' </dev/null >"$backup_tmp"
+test -s "$backup_tmp"
+mv -- "$backup_tmp" "$backup"
 
 readonly app_container="$(docker compose -f "$COMPOSE_FILE" ps -q app)"
 if [[ -z "$app_container" ]]; then
@@ -69,4 +88,7 @@ if [[ "$ready" != true ]]; then
   exit 1
 fi
 
+docker image rm rotakey-app:predeploy >/dev/null 2>&1 || true
+docker image prune --force >/dev/null
+trap - EXIT
 printf 'Deployed Rotakey %s; backup %s\n' "$expected_sha" "$backup"
