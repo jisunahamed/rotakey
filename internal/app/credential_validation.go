@@ -240,7 +240,7 @@ func verifyProviderProtocol(ctx context.Context, client *http.Client, provider P
 	payload := map[string]any{
 		"model":      upstreamModelForProvider(provider, model),
 		"messages":   []any{map[string]any{"role": "user", "content": "Reply with one character."}},
-		"max_tokens": 1,
+		"max_tokens": 16,
 	}
 	if protocol == "anthropic" {
 		path = "/messages"
@@ -645,13 +645,12 @@ func (s *Server) probeProviderModel(ctx context.Context, providerID string, inpu
 		WHERE provider_id=$1 AND enabled=TRUE
 		  AND (status='healthy' OR (status='cooldown' AND cooldown_until <= NOW()))
 		ORDER BY is_primary DESC, created_at, id
-		LIMIT 3
 	`, providerID)
 	if err != nil {
 		return "failed", nil, nil, fmt.Errorf("healthy API keys could not be loaded")
 	}
 	defer rows.Close()
-	ciphertexts := make([][]byte, 0, 3)
+	ciphertexts := make([][]byte, 0)
 	for rows.Next() {
 		var ciphertext []byte
 		if err := rows.Scan(&ciphertext); err != nil {
@@ -695,13 +694,13 @@ func probeProviderModelWithSecret(ctx context.Context, provider Provider, input 
 	payload := map[string]any{
 		"model":      upstreamModel,
 		"messages":   []any{map[string]any{"role": "user", "content": "Reply with one character."}},
-		"max_tokens": 1,
+		"max_tokens": 16,
 	}
 	if provider.APIFormat == "anthropic" {
 		path = "/messages"
 	} else if !input.SupportsChat && input.SupportsResponses {
 		path = "/responses"
-		payload = map[string]any{"model": upstreamModel, "input": "Reply with one character.", "max_output_tokens": 1}
+		payload = map[string]any{"model": upstreamModel, "input": "Reply with one character.", "max_output_tokens": 16}
 	}
 	body, _ := json.Marshal(payload)
 	request, _ := http.NewRequestWithContext(probeContext, http.MethodPost, strings.TrimRight(provider.BaseURL, "/")+path, strings.NewReader(string(body)))
@@ -766,7 +765,7 @@ func probeNativeResponses(ctx context.Context, provider Provider, input *modelIn
 	payload, _ := json.Marshal(map[string]any{
 		"model":             upstreamModelForProvider(provider, input.UpstreamModel),
 		"input":             "Reply with one character.",
-		"max_output_tokens": 1,
+		"max_output_tokens": 16,
 	})
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		strings.TrimRight(provider.BaseURL, "/")+"/responses", strings.NewReader(string(payload)))
@@ -799,6 +798,7 @@ func modelProbeTimeout(provider Provider) time.Duration {
 
 func retryModelProbeWithAnotherCredential(statusCode int) bool {
 	return statusCode == 0 || statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden ||
+		statusCode == http.StatusPaymentRequired || statusCode == http.StatusNotFound ||
 		statusCode == http.StatusTooManyRequests || statusCode >= http.StatusInternalServerError
 }
 

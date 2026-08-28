@@ -6,6 +6,22 @@ import (
 	"testing"
 )
 
+func TestKeepCatalogRouteAvailable(t *testing.T) {
+	profile, err := json.Marshal(map[string]string{"verification": "catalog", "availability": "catalog_visible"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !keepCatalogRouteAvailable("catalog_verified", nil) {
+		t.Fatal("catalog-verified route was not retained")
+	}
+	if !keepCatalogRouteAvailable("failed", profile) {
+		t.Fatal("failed route with catalog origin was not retained")
+	}
+	if keepCatalogRouteAvailable("failed", []byte(`{"verification":"probe"}`)) {
+		t.Fatal("probe-only failed route was retained")
+	}
+}
+
 func TestProviderSlugFromName(t *testing.T) {
 	tests := map[string]string{
 		"NVIDIA":              "nvidia",

@@ -239,7 +239,7 @@ func TestProbeProviderModelWithSecretBoundsOpenAIOutput(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatal(err)
 		}
-		if payload["max_tokens"] != float64(1) {
+		if payload["max_tokens"] != float64(16) {
 			t.Fatalf("max_tokens = %#v", payload["max_tokens"])
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -269,12 +269,12 @@ func TestModelProbeTimeoutHonorsProviderLimit(t *testing.T) {
 }
 
 func TestRetryModelProbeWithAnotherCredential(t *testing.T) {
-	for _, status := range []int{0, http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusBadGateway} {
+	for _, status := range []int{0, http.StatusUnauthorized, http.StatusForbidden, http.StatusPaymentRequired, http.StatusNotFound, http.StatusTooManyRequests, http.StatusBadGateway} {
 		if !retryModelProbeWithAnotherCredential(status) {
 			t.Fatalf("status %d should try another credential", status)
 		}
 	}
-	for _, status := range []int{-1, http.StatusBadRequest, http.StatusNotFound, http.StatusPaymentRequired} {
+	for _, status := range []int{-1, http.StatusBadRequest} {
 		if retryModelProbeWithAnotherCredential(status) {
 			t.Fatalf("status %d should preserve the model-specific failure", status)
 		}

@@ -2869,7 +2869,8 @@ function CredentialForm({ provider, credential, onClose, onComplete, onRefresh, 
   };
 
   const save = async () => {
-    if (!inspection?.valid || (secret.trim() && checkedSecret !== secret.trim())) {
+    const canContinueWithSavedKey = Boolean(credential && inspection && !inspection.valid && !secret.trim());
+    if ((!inspection?.valid && !canContinueWithSavedKey) || (secret.trim() && checkedSecret !== secret.trim())) {
       await checkKey();
       return;
     }
@@ -2881,7 +2882,7 @@ function CredentialForm({ provider, credential, onClose, onComplete, onRefresh, 
     }
     setBusy(true);
     try {
-      let discovered: DiscoveredModel[] = inspection.models;
+      let discovered: DiscoveredModel[] = inspection?.models ?? [];
       if (credential) {
         const result = await api<{ models: DiscoveredModel[] }>(`/api/admin/credentials/${credential.id}`, {
           method: "PUT",
@@ -3008,7 +3009,7 @@ function CredentialForm({ provider, credential, onClose, onComplete, onRefresh, 
             : inspection.warning || keyCheckFailed}
         </InlineNotice>
       )}
-      {inspection?.valid && (
+      {inspection && (
         <ModelCatalog
           provider={provider}
           models={inspection.models}
@@ -3076,7 +3077,7 @@ function CredentialForm({ provider, credential, onClose, onComplete, onRefresh, 
       )}
       <div className="sheet-actions">
         <span />
-        <Button type="submit" disabled={busy}>{busy ? "Working…" : inspection?.valid ? credential ? "Save API key & routes" : "Add API key & routes" : "Check API key first"}</Button>
+        <Button type="submit" disabled={busy || (!inspection?.valid && !(credential && inspection && !secret.trim()))}>{busy ? "Working…" : inspection?.valid ? credential ? "Save API key & routes" : "Add API key & routes" : "Continue with saved key"}</Button>
       </div>
       </form>
     </Sheet>
@@ -3368,7 +3369,7 @@ function ModelCatalog({
 }
 
 type ModelProbeResult = {
-  state: "checking" | "passed" | "blocked" | "failed";
+  state: "checking" | "passed" | "warning" | "blocked" | "failed";
   error?: string;
 };
 
@@ -3396,7 +3397,7 @@ function ModelsPage({
     onClose: () => setModelInspectorOpen(false)
   });
   const [probeResults, setProbeResults] = useState<Record<string, ModelProbeResult>>({});
-  const [probeProgress, setProbeProgress] = useState({ completed: 0, total: 0, passed: 0, blocked: 0, failed: 0 });
+  const [probeProgress, setProbeProgress] = useState({ completed: 0, total: 0, passed: 0, listed: 0, blocked: 0, failed: 0 });
   const [bulkChecking, setBulkChecking] = useState(false);
   // What the live region says, as opposed to the counter the eye reads. A sweep of
   // two hundred routes announced every single one; this speaks at quarters.
@@ -3477,13 +3478,14 @@ function ModelsPage({
     setProbeResults(Object.fromEntries(models.map((model) => [model.id, healthyKeyCount(model) > 0
       ? { state: "checking" as const }
       : { state: "blocked" as const, error: "waiting for a healthy API key" }])));
-    setProbeProgress({ completed: blockedModels.length, total: models.length, passed: 0, blocked: blockedModels.length, failed: 0 });
+    setProbeProgress({ completed: blockedModels.length, total: models.length, passed: 0, listed: 0, blocked: blockedModels.length, failed: 0 });
     setBulkChecking(true);
     stopSweep.current = false;
     setSweepNote(`Checking ${targets.length} model route${targets.length === 1 ? "" : "s"}.`);
     let cursor = 0;
     let completed = 0;
     let passed = 0;
+    let listed = 0;
     let blocked = blockedModels.length;
     let failed = 0;
     // One announcement per probed model is 200 announcements on a real install,
@@ -3495,9 +3497,14 @@ function ModelsPage({
         if (stopSweep.current || !mounted.current) return;
         const model = targets[cursor++];
         try {
-          await api(`/api/admin/models/${model.id}/probe`, { method: "POST" });
-          passed++;
-          if (mounted.current) setProbeResults((current) => ({ ...current, [model.id]: { state: "passed" } }));
+          const result = await api<{ warning?: string }>(`/api/admin/models/${model.id}/probe`, { method: "POST" });
+          if (result.warning) {
+            listed++;
+            if (mounted.current) setProbeResults((current) => ({ ...current, [model.id]: { state: "warning", error: result.warning } }));
+          } else {
+            passed++;
+            if (mounted.current) setProbeResults((current) => ({ ...current, [model.id]: { state: "passed" } }));
+          }
         } catch (caught) {
           if (caught instanceof APIError && caught.code === "model_probe_blocked") {
             blocked++;
@@ -3509,7 +3516,7 @@ function ModelsPage({
         } finally {
           completed++;
           if (mounted.current) {
-            setProbeProgress({ completed: completed + blockedModels.length, total: models.length, passed, blocked, failed });
+            setProbeProgress({ completed: completed + blockedModels.length, total: models.length, passed, listed, blocked, failed });
             if (completed % milestone === 0 && completed < targets.length) {
               setSweepNote(`${completed} of ${targets.length} checked.`);
             }
@@ -3523,7 +3530,7 @@ function ModelsPage({
     if (!mounted.current) return;
     setBulkChecking(false);
     const stopped = stopSweep.current;
-    const summary = `${passed} model${passed === 1 ? "" : "s"} live · ${blocked} waiting for keys${failed ? ` · ${failed} unavailable` : ""}.`;
+    const summary = `${passed} model${passed === 1 ? "" : "s"} live${listed ? ` · ${listed} provider-listed` : ""} · ${blocked} waiting for keys${failed ? ` · ${failed} unavailable` : ""}.`;
     setSweepNote(stopped ? `Stopped after ${completed} of ${targets.length}. ${summary}` : summary);
     notify(
       stopped ? `Check stopped after ${completed} of ${targets.length} routes. ${summary}` : summary,
@@ -3599,7 +3606,7 @@ function ModelsPage({
                   sentence instead. */}
               <div className="model-sweep__readout" aria-hidden="true">
                 <span>Live model sweep</span>
-                <strong>{bulkChecking ? `${probeProgress.completed}/${probeProgress.total} checked` : probeProgress.total ? `${probeProgress.passed} live · ${probeProgress.blocked} waiting${probeProgress.failed ? ` · ${probeProgress.failed} unavailable` : ""}` : `${models.filter((model) => healthyKeyCount(model) > 0).length} routes ready · ${models.filter((model) => healthyKeyCount(model) === 0).length} waiting for keys`}</strong>
+                <strong>{bulkChecking ? `${probeProgress.completed}/${probeProgress.total} checked` : probeProgress.total ? `${probeProgress.passed} live${probeProgress.listed ? ` · ${probeProgress.listed} listed` : ""} · ${probeProgress.blocked} waiting${probeProgress.failed ? ` · ${probeProgress.failed} unavailable` : ""}` : `${models.filter((model) => healthyKeyCount(model) > 0).length} routes ready · ${models.filter((model) => healthyKeyCount(model) === 0).length} waiting for keys`}</strong>
               </div>
               <p className="sr-only" role="status" aria-live="polite">{sweepNote}</p>
               <div className="model-sweep__track" role="progressbar" aria-label="Model check progress" aria-valuemin={0} aria-valuemax={probeProgress.total || models.length} aria-valuenow={probeProgress.completed}>
@@ -3624,7 +3631,7 @@ function ModelsPage({
               {filtered.map((model) => {
                 const ready = model.credentials.filter((item) => item.enabled && item.status === "healthy").length;
                 const probe = probeResults[model.id];
-                const capabilityLabel = ready === 0 ? "waiting for a healthy API key" : probe?.state === "checking" ? "checking now" : probe?.state === "passed" ? "live" : probe?.state === "blocked" ? `waiting · ${probe.error || "healthy API key required"}` : probe?.state === "failed" ? `unavailable · ${probe.error || "probe failed"}` : model.capability_status === "probe_verified" ? "probe verified" : model.capability_status === "catalog_verified" ? "catalog verified" : model.capability_status === "failed" ? `unavailable · ${model.capability_error || "probe failed"}` : "unverified";
+                const capabilityLabel = ready === 0 ? "waiting for a healthy API key" : probe?.state === "checking" ? "checking now" : probe?.state === "passed" ? "live" : probe?.state === "warning" ? `listed by provider · check inconclusive: ${probe.error || "try a request to use another key"}` : probe?.state === "blocked" ? `waiting · ${probe.error || "healthy API key required"}` : probe?.state === "failed" ? `unavailable · ${probe.error || "probe failed"}` : model.capability_status === "probe_verified" ? "probe verified" : model.capability_status === "catalog_verified" ? "catalog verified" : model.capability_status === "failed" ? `unavailable · ${model.capability_error || "probe failed"}` : "unverified";
                 const pooled = routingMode === "model" && poolSizes[model.public_alias] > 1;
                 return (
                   <button
@@ -3634,7 +3641,7 @@ function ModelsPage({
                     aria-current={selectedID === model.id}
                     aria-label={`${model.public_alias}, ${capabilityLabel}, on ${model.provider.name}${pooled ? ` in a pool of ${poolSizes[model.public_alias]} providers` : ""}, ${ready} of ${model.credentials.length} key${model.credentials.length === 1 ? "" : "s"} ready`}
                   >
-                    <span aria-hidden="true"><StatusDot state={probe?.state === "passed" ? "healthy" : !model.enabled || ready === 0 || probe?.state === "blocked" ? "disabled" : probe?.state === "failed" || model.capability_status === "failed" ? "exhausted" : "healthy"} /><code title={model.public_alias}>{model.public_alias}</code><small title={`${model.upstream_model === model.public_alias ? (model.supports_responses ? "Chat + Responses" : "Chat Completions") : model.upstream_model} · ${capabilityLabel}`}>{model.upstream_model === model.public_alias ? (model.supports_responses ? "Chat + Responses" : "Chat Completions") : model.upstream_model} · {capabilityLabel}</small></span>
+                    <span aria-hidden="true"><StatusDot state={probe?.state === "passed" || probe?.state === "warning" ? "healthy" : !model.enabled || ready === 0 || probe?.state === "blocked" ? "disabled" : probe?.state === "failed" || model.capability_status === "failed" ? "exhausted" : "healthy"} /><code title={model.public_alias}>{model.public_alias}</code><small title={`${model.upstream_model === model.public_alias ? (model.supports_responses ? "Chat + Responses" : "Chat Completions") : model.upstream_model} · ${capabilityLabel}`}>{model.upstream_model === model.public_alias ? (model.supports_responses ? "Chat + Responses" : "Chat Completions") : model.upstream_model} · {capabilityLabel}</small></span>
                     <span aria-hidden="true" title={pooled ? `${model.provider.name} · pool of ${poolSizes[model.public_alias]}` : model.provider.name}>{pooled ? `${model.provider.name} · pool of ${poolSizes[model.public_alias]}` : model.provider.name}</span>
                     <span aria-hidden="true">{ready}/{model.credentials.length}</span>
                     <ChevronRight size={13} aria-hidden="true" />
@@ -3649,8 +3656,13 @@ function ModelsPage({
                 <div><span>Model route</span><h2 title={selected.public_alias}>{selected.public_alias}</h2><code title={selected.upstream_model}>{selected.upstream_model}</code></div>
                 <div className="button-row"><button className="console-icon resource-inspector-close" onClick={() => setModelInspectorOpen(false)} aria-label="Close model inspector"><X size={15} aria-hidden="true" /></button><Button variant="quiet" disabled={rechecking || deletingRoute} onClick={() => {
                   setRechecking(true);
-                  void api(`/api/admin/models/${selected.id}/probe`, { method: "POST" })
-                    .then(() => { notify("Model check passed."); return reload(); })
+                  void api<{ warning?: string }>(`/api/admin/models/${selected.id}/probe`, { method: "POST" })
+                    .then((result) => {
+                      notify(result.warning
+                        ? "The model is listed by the provider. Its live check was inconclusive, so the route remains available."
+                        : "Model check passed.");
+                      return reload();
+                    })
                     .catch((caught) => { notify(errorMessage(caught), "danger"); return reload(); })
                     .finally(() => setRechecking(false));
                 }}><Activity size={13} aria-hidden="true" /> {rechecking ? "Checking…" : "Check model"}</Button><Button variant="danger" disabled={rechecking || deletingRoute} onClick={() => {

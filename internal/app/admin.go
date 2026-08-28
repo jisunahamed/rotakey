@@ -687,23 +687,46 @@ func (s *Server) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProbeModel(w http.ResponseWriter, r *http.Request) {
-	var providerID string
+	var providerID, capabilityStatus string
+	var capabilityProfile []byte
 	var input modelInput
 	if err := s.db.QueryRow(r.Context(), `
 		SELECT provider_id, public_alias, upstream_model, supports_chat, supports_responses,
 		       supports_messages, default_max_output_tokens, tokenizer, capture_bodies,
-		       strip_parameters, enabled
+		       strip_parameters, enabled, capability_status, capability_profile
 		FROM model_routes WHERE id=$1
 	`, r.PathValue("id")).Scan(
 		&providerID, &input.PublicAlias, &input.UpstreamModel, &input.SupportsChat,
 		&input.SupportsResponses, &input.SupportsMessages, &input.DefaultMaxOutputTokens,
 		&input.Tokenizer, &input.CaptureBodies, &input.StripParameters, &input.Enabled,
+		&capabilityStatus, &capabilityProfile,
 	); err != nil {
 		writeError(w, http.StatusNotFound, "model_not_found", "Model was not found.")
 		return
 	}
 	status, profile, checkedAt, err := s.probeProviderModel(r.Context(), providerID, &input)
 	if err != nil {
+		// A catalog-listed model has already proved that the provider knows its ID.
+		// A small inference probe may still fail for one key, a model
+		// entitlement, temporary capacity, or a provider-specific parameter rule.
+		// That diagnostic must not unpublish a route that another key can serve.
+		if keepCatalogRouteAvailable(capabilityStatus, capabilityProfile) {
+			_, _ = s.db.Exec(r.Context(), `
+				UPDATE model_routes
+				SET capability_status='catalog_verified', capability_error=$2,
+				    capabilities_checked_at=NOW(), updated_at=NOW()
+				WHERE id=$1
+			`, r.PathValue("id"), err.Error())
+			if errors.Is(err, errModelProbeCredentialUnavailable) {
+				writeError(w, http.StatusConflict, "model_probe_blocked", err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"capability_status": "catalog_verified",
+				"warning":           err.Error(),
+			})
+			return
+		}
 		if errors.Is(err, errModelProbeCredentialUnavailable) {
 			_, _ = s.db.Exec(r.Context(), `UPDATE model_routes SET capability_status='unverified', capability_error=$2, capabilities_checked_at=NOW(), updated_at=NOW() WHERE id=$1`, r.PathValue("id"), err.Error())
 			writeError(w, http.StatusConflict, "model_probe_blocked", err.Error())
@@ -730,6 +753,17 @@ func (s *Server) handleProbeModel(w http.ResponseWriter, r *http.Request) {
 	s.forgetResponsesEndpointMissing(r.Context(), r.PathValue("id"))
 	s.audit(r.Context(), adminIDFromContext(r.Context()), "model.probe", "model", r.PathValue("id"), map[string]any{"status": status})
 	writeJSON(w, http.StatusOK, map[string]any{"capability_status": status, "capability_profile": profile, "checked_at": checkedAt})
+}
+
+func keepCatalogRouteAvailable(status string, profileJSON []byte) bool {
+	if status == "catalog_verified" {
+		return true
+	}
+	var profile map[string]string
+	if json.Unmarshal(profileJSON, &profile) != nil {
+		return false
+	}
+	return profile["verification"] == "catalog" || profile["availability"] == "catalog_visible"
 }
 
 func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
