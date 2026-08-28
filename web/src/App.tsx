@@ -1860,7 +1860,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                 summary={`${selected.credentials.filter((item) => credentialPoolState(item) === "healthy").length}/${selected.credentials.length} keys ready`}
                 open={openSection === "credentials"}
                 onToggle={() => setOpenSection((current) => current === "credentials" ? null : "credentials")}
-                action={<Button variant="quiet" onClick={() => setPanel({ type: "credential", providerID: selected.id })}><Plus size={14} aria-hidden="true" /> Add API key</Button>}
+                action={<Button variant="quiet" onClick={() => setPanel({ type: "credential", providerID: selected.id })}><Plus size={14} aria-hidden="true" /> Add API keys</Button>}
               >
                 {selected.credentials.length === 0 ? (
                   <p className="inline-empty">No API keys yet. Add one to start routing traffic here.</p>
@@ -1900,7 +1900,9 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
       {panelProvider && !missingRecord && panel?.type === "provider" && <ProviderForm provider={panelProvider} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
       {panelProvider && !missingRecord && panel?.type === "model" && <ModelForm provider={panelProvider} model={panelProvider.models.find((model) => model.id === panel.modelID)} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
       {panelProvider && !missingRecord && panel?.type === "import" && <ModelImportForm provider={panelProvider} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
-      {panelProvider && !missingRecord && panel?.type === "credential" && <CredentialForm provider={panelProvider} credential={panelProvider.credentials.find((credential) => credential.id === panel.credentialID)} onClose={() => setPanel(null)} onComplete={complete} onRefresh={() => void load()} notify={notify} />}
+      {panelProvider && !missingRecord && panel?.type === "credential" && (panel.credentialID
+        ? <CredentialForm provider={panelProvider} credential={panelProvider.credentials.find((credential) => credential.id === panel.credentialID)} onClose={() => setPanel(null)} onComplete={complete} onRefresh={() => void load()} notify={notify} />
+        : <CredentialBatchForm provider={panelProvider} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />)}
     </div>
   );
 }
@@ -2786,6 +2788,211 @@ type CredentialInspection = {
   models: DiscoveredModel[];
   warning?: string;
 };
+
+function CredentialBatchForm({ provider, onClose, onComplete, notify }: {
+  provider: Provider;
+  onClose: () => void;
+  onComplete: (message: string) => void;
+  notify: (message: string, tone?: "success" | "danger") => void;
+}) {
+  const [drafts, setDrafts] = useState<CredentialDraft[]>(() => [newCredentialDraft()]);
+  const [checkProtocol, setCheckProtocol] = useState(true);
+  const [limits, setLimits] = useState<RatePolicy>(emptyPolicy);
+  const [balance, setBalance] = useState(
+    provider.default_key_balance_usd === null || provider.default_key_balance_usd === undefined
+      ? ""
+      : String(provider.default_key_balance_usd)
+  );
+  const [inspections, setInspections] = useState<{ label: string; result: CredentialInspection }[]>([]);
+  const [checkedSignature, setCheckedSignature] = useState("");
+  const [selectedModels, setSelectedModels] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const completeDrafts = credentialInputs(drafts, limits);
+  const signature = JSON.stringify({
+    checkProtocol,
+    keys: completeDrafts.map((credential) => [credential.label, credential.secret])
+  });
+  const discoveredModels = mergeModelCatalogs(inspections.map((inspection) => inspection.result.models));
+  const checked = inspections.length === completeDrafts.length
+    && inspections.length > 0
+    && checkedSignature === signature
+    && inspections.every((inspection) => inspection.result.valid);
+  const dirty = drafts.some((draft) => draft.label.trim() || draft.secret.trim())
+    || !checkProtocol
+    || balance !== (provider.default_key_balance_usd === null || provider.default_key_balance_usd === undefined
+      ? ""
+      : String(provider.default_key_balance_usd));
+
+  const resetInspection = () => {
+    setInspections([]);
+    setCheckedSignature("");
+    setSelectedModels({});
+    setError("");
+  };
+
+  const validateDrafts = () => {
+    const incomplete = drafts.some((draft) => Boolean(draft.label.trim()) !== Boolean(draft.secret.trim()));
+    if (incomplete || completeDrafts.length === 0) {
+      setError("Add at least one complete API key entry.");
+      return false;
+    }
+    if (completeDrafts.some((credential) => credential.secret.length < 8)) {
+      setError("Every API key must contain at least 8 characters.");
+      return false;
+    }
+    const labels = completeDrafts.map((credential) => credential.label.toLocaleLowerCase());
+    if (new Set(labels).size !== labels.length) {
+      setError("Each API key needs a unique label inside this provider.");
+      return false;
+    }
+    const existingLabels = new Set(provider.credentials.map((credential) => credential.label.toLocaleLowerCase()));
+    const repeated = completeDrafts.find((credential) => existingLabels.has(credential.label.toLocaleLowerCase()));
+    if (repeated) {
+      setError(`${repeated.label} is already used by an API key on this provider.`);
+      return false;
+    }
+    if (completeDrafts.length > 100) {
+      setError("Add no more than 100 API keys at once.");
+      return false;
+    }
+    if (balanceInvalid(balance)) {
+      setError("Enter a valid non-negative USD balance for each key, or leave it blank.");
+      return false;
+    }
+    return true;
+  };
+
+  const inspectKeys = async () => {
+    if (!validateDrafts()) return null;
+    setBusy(true);
+    setError("");
+    try {
+      const results = await Promise.all(completeDrafts.map(async (credential) => ({
+        label: credential.label,
+        result: await api<CredentialInspection>(`/api/admin/providers/${provider.id}/credentials/inspect`, {
+          method: "POST",
+          json: { secret: credential.secret, skip_protocol_check: !checkProtocol }
+        })
+      })));
+      setInspections(results);
+      setCheckedSignature(signature);
+      setSelectedModels({});
+      const failed = results.find((inspection) => !inspection.result.valid);
+      if (failed) {
+        setError(`${failed.label}: ${failed.result.warning || keyCheckFailed}`);
+        return null;
+      }
+      return results;
+    } catch (caught) {
+      setError(errorMessage(caught));
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const save = async () => {
+    if (!validateDrafts()) return;
+    let verified = inspections;
+    if (!checked) {
+      const results = await inspectKeys();
+      if (!results) return;
+      verified = results;
+    }
+    if (!verified.every((inspection) => inspection.result.valid)) return;
+
+    const trimmedBalance = balance.trim();
+    const parsedBalance = trimmedBalance === "" ? null : Number(trimmedBalance);
+    setBusy(true);
+    setError("");
+    try {
+      const credentials = completeDrafts.map((credential) => ({
+        ...credential,
+        balance_usd: parsedBalance,
+        skip_protocol_check: !checkProtocol
+      }));
+      const result = await api<{ models: DiscoveredModel[] }>(`/api/admin/providers/${provider.id}/credentials`, {
+        method: "POST",
+        json: { credentials }
+      });
+      const catalog = result.models?.length ? result.models : mergeModelCatalogs(verified.map((inspection) => inspection.result.models));
+      const routes = routeInputsFromSelection(selectedModels, new Set(catalog.map((model) => model.id)));
+      if (routes.length > 0) {
+        await api(`/api/admin/providers/${provider.id}/models/bulk`, {
+          method: "POST",
+          json: { models: routes }
+        });
+      }
+      onComplete(`${credentials.length} API key${credentials.length === 1 ? "" : "s"} added and ${routes.length} model route${routes.length === 1 ? "" : "s"} enabled.`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Sheet
+      title="Add API keys"
+      eyebrow={provider.name}
+      onClose={onClose}
+      wide
+      dirty={dirty}
+      discardMessage="Close this panel? The API keys and limits typed here are not saved yet."
+    >
+      <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
+        {error && <InlineNotice tone="danger">{error}</InlineNotice>}
+        <CredentialEntries value={drafts} onChange={(next) => { setDrafts(next); resetInspection(); }} />
+        <Toggle
+          checked={checkProtocol}
+          onChange={(value) => { setCheckProtocol(value); resetInspection(); }}
+          label="Check inference protocol"
+          description="Turn this off when the model catalog works but the provider blocks protocol probes. Every key can still be verified and saved through the catalog."
+        />
+        <div className="validation-action">
+          <div>
+            <strong>{checkProtocol ? "Check all keys and load models" : "Verify all keys and load models"}</strong>
+            <small>{checkProtocol ? "Each key is checked against the catalog and inference protocol." : "Each key is verified through `/models` without an inference probe."}</small>
+          </div>
+          <Button type="button" variant="quiet" disabled={busy} onClick={() => void inspectKeys()}>
+            <RefreshCw size={14} aria-hidden="true" /> {busy ? "Checking…" : `Check ${Math.max(1, completeDrafts.length)} key${Math.max(1, completeDrafts.length) === 1 ? "" : "s"}`}
+          </Button>
+        </div>
+        {inspections.length > 0 && (
+          <InlineNotice tone={checked ? "success" : "danger"}>
+            {checked
+              ? `${inspections.length}/${inspections.length} API keys verified${checkProtocol ? " with protocol checks" : " through the model catalog"}.`
+              : `${inspections.filter((inspection) => inspection.result.valid).length}/${inspections.length} API keys verified.`}
+          </InlineNotice>
+        )}
+        {discoveredModels.length > 0 && (
+          <ModelCatalog
+            provider={provider}
+            models={discoveredModels}
+            existing={provider.models}
+            selected={selectedModels}
+            onChange={setSelectedModels}
+          />
+        )}
+        <fieldset><legend>Shared limits for these API keys</legend><p className="fieldset-note">The same limits are applied separately to every new key. Blank means no limit.</p><RateFields value={limits} onChange={setLimits} /></fieldset>
+        <fieldset>
+          <legend>Balance for each new API key</legend>
+          <p className="fieldset-note">Optional. This amount is assigned to every key in this batch. Leave it blank to keep their balances untracked.</p>
+          <label className="field">
+            <span>Balance <small>USD per API key</small></span>
+            <input type="number" min="0" step="0.000001" placeholder="Not tracked" value={balance} onChange={(event) => setBalance(event.target.value)} />
+          </label>
+        </fieldset>
+        <div className="sheet-actions">
+          <span />
+          <Button type="submit" disabled={busy}>{busy ? "Working…" : checked ? `Add ${completeDrafts.length} API key${completeDrafts.length === 1 ? "" : "s"}` : `Check and add ${Math.max(1, completeDrafts.length)} key${Math.max(1, completeDrafts.length) === 1 ? "" : "s"}`}</Button>
+        </div>
+      </form>
+    </Sheet>
+  );
+}
 
 function CredentialForm({ provider, credential, onClose, onComplete, onRefresh, notify }: { provider: Provider; credential?: Credential; onClose: () => void; onComplete: (message: string) => void; onRefresh: () => void; notify: (message: string, tone?: "success" | "danger") => void }) {
   const ask = useConfirm();
@@ -4654,7 +4861,7 @@ function CredentialEntries({ value, onChange }: { value: CredentialDraft[]; onCh
     <div className="credential-entry-list">
       <div className="credential-entry-list__intro">
         <div><strong>API keys</strong><small>Add each key separately. Choosing a primary is optional.</small></div>
-        <Button type="button" variant="quiet" onClick={() => onChange([...value, newCredentialDraft()])}><Plus size={14} aria-hidden="true" /> Add another API key</Button>
+        <Button type="button" variant="quiet" disabled={value.length >= 100} onClick={() => onChange([...value, newCredentialDraft()])}><Plus size={14} aria-hidden="true" /> Add another API key</Button>
       </div>
       {value.map((credential, index) => (
         // Every entry repeats the same three field labels, so the group is named
