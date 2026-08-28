@@ -39,6 +39,8 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		s.rejectAnthropic(w, r, http.StatusBadRequest, "invalid_request_error", "A public model alias is required.", logInput{RequestID: requestID, Endpoint: "messages", Started: started, RequestBody: raw, PublicProtocol: "anthropic"})
 		return
 	}
+	alias = resolveAnthropicDiscoveryModelID(alias)
+	payload["model"] = alias
 	settings, _, err := s.settings(r.Context())
 	if err != nil {
 		s.rejectAnthropic(w, r, http.StatusServiceUnavailable, "api_error", "Gateway settings are unavailable.", logInput{RequestID: requestID, Route: routeRuntime{Model: ModelRoute{PublicAlias: alias}}, Endpoint: "messages", Started: started, RequestBody: raw, PublicProtocol: "anthropic"})
@@ -131,13 +133,17 @@ func (s *Server) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	alias, _ := payload["model"].(string)
+	alias = resolveAnthropicDiscoveryModelID(alias)
+	payload["model"] = alias
 	route, err := s.loadRoute(r.Context(), alias)
 	if err != nil {
 		writeAnthropicError(w, r, http.StatusNotFound, "not_found_error", "The requested model alias is not enabled.")
 		return
 	}
 	if route.Provider.APIFormat != "anthropic" {
-		writeAnthropicError(w, r, http.StatusBadRequest, "unsupported_feature", "Exact token counting requires a native Anthropic provider route.")
+		writeJSON(w, http.StatusOK, map[string]any{
+			"input_tokens": estimateInputTokens(mustJSON(payload), route.Model.Tokenizer),
+		})
 		return
 	}
 	payload["model"] = route.Model.UpstreamModel

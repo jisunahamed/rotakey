@@ -95,8 +95,9 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			// into the caller's protocol. Hiding chat-only routes from Anthropic
 			// discovery made Claude Code conclude that this gateway had no models.
 			if isAnthropicRequest(r) {
+				discoveryID := anthropicDiscoveryModelID(alias)
 				data = append(data, map[string]any{
-					"id": alias, "type": "model", "display_name": alias,
+					"id": discoveryID, "type": "model", "display_name": alias,
 					"created_at": created.UTC().Format(time.RFC3339),
 				})
 				continue
@@ -119,14 +120,19 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
-	route, err := s.loadRoute(r.Context(), r.PathValue("id"))
+	requestedID := r.PathValue("id")
+	alias := requestedID
+	if isAnthropicRequest(r) {
+		alias = resolveAnthropicDiscoveryModelID(alias)
+	}
+	route, err := s.loadRoute(r.Context(), alias)
 	if err != nil {
 		writeProtocolError(w, r, http.StatusNotFound, "not_found_error", "The requested model alias is not enabled.")
 		return
 	}
 	if isAnthropicRequest(r) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"id": route.Model.PublicAlias, "type": "model", "display_name": route.Model.PublicAlias,
+			"id": anthropicDiscoveryModelID(route.Model.PublicAlias), "type": "model", "display_name": route.Model.PublicAlias,
 			"created_at": route.Model.CreatedAt.UTC().Format(time.RFC3339),
 		})
 		return

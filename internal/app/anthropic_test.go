@@ -439,6 +439,27 @@ func TestAnthropicResponseHeadersKeepGatewayRequestID(t *testing.T) {
 	}
 }
 
+func TestAnthropicDiscoveryModelIDsExposeEveryPublicAlias(t *testing.T) {
+	for _, alias := range []string{"claude-opus", "anthropic/sonnet"} {
+		if got := anthropicDiscoveryModelID(alias); got != alias {
+			t.Fatalf("native-looking alias %q changed to %q", alias, got)
+		}
+	}
+
+	alias := "nvidia/minimaxai/minimax-m3"
+	discoveryID := anthropicDiscoveryModelID(alias)
+	if !strings.HasPrefix(discoveryID, "claude") {
+		t.Fatalf("discovery ID %q will be hidden by Claude Code", discoveryID)
+	}
+	if got := resolveAnthropicDiscoveryModelID(discoveryID); got != alias {
+		t.Fatalf("resolved discovery ID = %q, want %q", got, alias)
+	}
+	invalid := "claude-rotakey-v1-not-valid!"
+	if got := resolveAnthropicDiscoveryModelID(invalid); got != invalid {
+		t.Fatalf("invalid bridge ID changed to %q", got)
+	}
+}
+
 func TestGatewayHeaderParsingIsStrictAndCaseInsensitive(t *testing.T) {
 	bearer, anthropicKey, err := gatewayKeysFromHeaders(http.Header{
 		"Authorization": []string{"bearer gateway-key"},

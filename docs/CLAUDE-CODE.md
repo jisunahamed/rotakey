@@ -87,7 +87,7 @@ Set:
 export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
 ```
 
-Claude Code then queries Rotakey's authenticated `/v1/models` endpoint at startup. Current Claude Code releases only add discovered IDs beginning with `claude` or `anthropic` to the picker. Other valid Rotakey aliases still work with `--model`, `ANTHROPIC_MODEL`, or `/model <alias>`.
+Claude Code then queries Rotakey's authenticated `/v1/models` endpoint at startup. Claude Code only adds discovered IDs beginning with `claude` or `anthropic` to the picker, so Rotakey publishes a reversible Claude-compatible discovery ID for every other public alias. The original alias remains its display name and routing target.
 
 For one non-standard alias that must appear in the picker, use:
 
@@ -160,7 +160,7 @@ Open **Admin → Request logs** to confirm the public protocol, translated/nativ
 | --- | --- |
 | `401 authentication_error` | Use the current Rotakey gateway key. Remove a stale `ANTHROPIC_API_KEY` if `ANTHROPIC_AUTH_TOKEN` is configured. |
 | Claude Code calls `api.anthropic.com` | `ANTHROPIC_BASE_URL` was not exported in the shell that launched Claude Code. It must be the Rotakey host root. |
-| Alias not visible in `/model` | Enable discovery and update Claude Code. IDs not beginning with `claude` or `anthropic` must be selected explicitly or added with `ANTHROPIC_CUSTOM_MODEL_OPTION`. |
+| Alias not visible in `/model` | Enable discovery, update Claude Code, and restart it so the gateway-model cache refreshes. Rotakey bridges non-Claude aliases automatically. |
 | `404` model not found | Use the Rotakey public alias exactly as returned by `/v1/models`, including case and `/`. Confirm the route is enabled. |
 | A reply omits a feature you asked for | The route crosses protocols, so the field had no equivalent upstream and was dropped rather than failed. Request logs list it under removed parameters, and the response carries the same list in `X-Rotakey-Removed-Parameters`. Use a native Anthropic route to keep the feature. |
 | Blank response with HTTP `200` | Current Rotakey repairs a provider that returns a normal JSON Message despite `stream:true`. If the body is empty or malformed, Request logs show `502 upstream_stream_invalid` rather than a false success. |

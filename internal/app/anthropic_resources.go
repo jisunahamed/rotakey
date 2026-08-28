@@ -131,6 +131,8 @@ func (s *Server) handleAnthropicBatchCreate(w http.ResponseWriter, r *http.Reque
 		item, _ := rawRequest.(map[string]any)
 		params, _ := item["params"].(map[string]any)
 		alias, _ := params["model"].(string)
+		alias = resolveAnthropicDiscoveryModelID(alias)
+		params["model"] = alias
 		route, routeErr := s.loadRoute(r.Context(), alias)
 		if routeErr != nil || !route.Model.SupportsMessages {
 			writeAnthropicError(w, r, http.StatusBadRequest, "invalid_request_error", "Every batch item must use an enabled Messages model alias.")

@@ -145,6 +145,39 @@ func TestCredentialSelectionOrder(t *testing.T) {
 	assertOrder([]int{1, 2, 0}, 2)
 }
 
+func TestDuplicateCredentialInputsChecksSavedAndPastedSecrets(t *testing.T) {
+	existing := []credentialSecretIdentity{
+		{ID: "key_saved", Label: "Production", Secret: []byte("secret-existing")},
+	}
+	inputs := []credentialInput{
+		{Label: "Key 2", Secret: "secret-existing"},
+		{Label: "Key 3", Secret: "secret-new"},
+		{Label: "Key 4", Secret: "secret-new"},
+	}
+
+	duplicates := duplicateCredentialInputs(inputs, existing, "")
+	if duplicates[0] != "Production" {
+		t.Fatalf("saved duplicate owner = %q, want Production", duplicates[0])
+	}
+	if _, duplicate := duplicates[1]; duplicate {
+		t.Fatal("first new secret was marked duplicate")
+	}
+	if duplicates[2] != "Key 3" {
+		t.Fatalf("pasted duplicate owner = %q, want Key 3", duplicates[2])
+	}
+}
+
+func TestDuplicateCredentialInputsCanExcludeEditedCredential(t *testing.T) {
+	existing := []credentialSecretIdentity{
+		{ID: "key_current", Label: "Current", Secret: []byte("secret-current")},
+		{ID: "key_other", Label: "Other", Secret: []byte("secret-other")},
+	}
+	inputs := []credentialInput{{Label: "Current", Secret: "secret-current"}}
+	if duplicates := duplicateCredentialInputs(inputs, existing, "key_current"); len(duplicates) != 0 {
+		t.Fatalf("unchanged edited key was marked duplicate: %#v", duplicates)
+	}
+}
+
 func TestValidateModelCompatibilityParameters(t *testing.T) {
 	input := modelInput{
 		PublicAlias:     "nvidia/deepseek",

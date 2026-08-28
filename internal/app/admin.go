@@ -864,6 +864,20 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusNotFound, "provider_not_found", "Provider was not found.")
 		return
 	}
+	existingIdentities, err := s.loadCredentialSecretIdentities(r.Context(), s.db, provider.ID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "credentials_unavailable", "Existing API keys could not be checked for duplicates.")
+		return
+	}
+	duplicateInputs := duplicateCredentialInputs(input.Credentials, existingIdentities, "")
+	if !input.SaveValidOnly {
+		for index := range input.Credentials {
+			if label, duplicate := duplicateInputs[index]; duplicate {
+				writeError(w, http.StatusConflict, "duplicate_credential", fmt.Sprintf("This API key is already saved as %q.", label))
+				return
+			}
+		}
+	}
 	checked := make([]credentialInspection, len(input.Credentials))
 	if input.SaveValidOnly {
 		// Bulk paste should not turn 30 independent catalog checks into a long
@@ -871,6 +885,9 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 		semaphore := make(chan struct{}, 8)
 		var group sync.WaitGroup
 		for index, credential := range input.Credentials {
+			if _, duplicate := duplicateInputs[index]; duplicate {
+				continue
+			}
 			group.Add(1)
 			go func() {
 				defer group.Done()
@@ -894,6 +911,14 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 	inspections := make([]credentialInspection, 0, len(input.Credentials))
 	failed := make([]map[string]any, 0)
 	for index, credential := range input.Credentials {
+		if label, duplicate := duplicateInputs[index]; duplicate {
+			failed = append(failed, map[string]any{
+				"label":       credential.Label,
+				"error":       fmt.Sprintf("This API key is already saved as %q.", label),
+				"status_code": http.StatusConflict,
+			})
+			continue
+		}
 		inspection := checked[index]
 		if !inspection.Valid && !credential.AllowUnverified {
 			if input.SaveValidOnly {
@@ -926,6 +951,51 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer func() { _ = tx.Rollback(r.Context()) }()
+	// Serialise secret identity checks for this provider. Without this lock, two
+	// simultaneous bulk pastes could both pass the first read and insert the same
+	// key under different labels.
+	if _, err := tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, provider.ID); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "API keys could not be checked for duplicates.")
+		return
+	}
+	lockedIdentities, err := s.loadCredentialSecretIdentities(r.Context(), tx, provider.ID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "credentials_unavailable", "Existing API keys could not be checked for duplicates.")
+		return
+	}
+	lockedDuplicates := duplicateCredentialInputs(credentials, lockedIdentities, "")
+	if len(lockedDuplicates) > 0 {
+		if !input.SaveValidOnly {
+			for index := range credentials {
+				if label, duplicate := lockedDuplicates[index]; duplicate {
+					writeError(w, http.StatusConflict, "duplicate_credential", fmt.Sprintf("This API key is already saved as %q.", label))
+					return
+				}
+			}
+		}
+		keptCredentials := make([]credentialInput, 0, len(credentials)-len(lockedDuplicates))
+		keptInspections := make([]credentialInspection, 0, len(credentials)-len(lockedDuplicates))
+		for index, credential := range credentials {
+			if label, duplicate := lockedDuplicates[index]; duplicate {
+				failed = append(failed, map[string]any{
+					"label":       credential.Label,
+					"error":       fmt.Sprintf("This API key is already saved as %q.", label),
+					"status_code": http.StatusConflict,
+				})
+				continue
+			}
+			keptCredentials = append(keptCredentials, credential)
+			keptInspections = append(keptInspections, inspections[index])
+		}
+		credentials, inspections = keptCredentials, keptInspections
+	}
+	if len(credentials) == 0 {
+		s.audit(r.Context(), adminIDFromContext(r.Context()), "credential.create", "provider", provider.ID, map[string]any{"count": 0, "failed": len(failed)})
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"ids": []string{}, "saved": []any{}, "failed": failed, "models": []DiscoveredModel{},
+		})
+		return
+	}
 	acceptedPrimary := false
 	for _, credential := range credentials {
 		acceptedPrimary = acceptedPrimary || credential.IsPrimary
@@ -1033,6 +1103,18 @@ func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid_credential", "Replacement API key is invalid.")
 		return
 	}
+	if replacement != "" {
+		identities, identityErr := s.loadCredentialSecretIdentities(r.Context(), s.db, providerID)
+		if identityErr != nil {
+			writeError(w, http.StatusServiceUnavailable, "credentials_unavailable", "Existing API keys could not be checked for duplicates.")
+			return
+		}
+		duplicates := duplicateCredentialInputs([]credentialInput{{Label: input.Label, Secret: replacement}}, identities, r.PathValue("id"))
+		if label, duplicate := duplicates[0]; duplicate {
+			writeError(w, http.StatusConflict, "duplicate_credential", fmt.Sprintf("This API key is already saved as %q.", label))
+			return
+		}
+	}
 	shouldInspect := enabled || replacement != ""
 	var inspection credentialInspection
 	// inspectionWarning is the text saved on the record when the check could not
@@ -1072,6 +1154,22 @@ func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer func() { _ = tx.Rollback(r.Context()) }()
+	if _, err := tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, providerID); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "API key could not be checked for duplicates.")
+		return
+	}
+	if replacement != "" {
+		identities, identityErr := s.loadCredentialSecretIdentities(r.Context(), tx, providerID)
+		if identityErr != nil {
+			writeError(w, http.StatusServiceUnavailable, "credentials_unavailable", "Existing API keys could not be checked for duplicates.")
+			return
+		}
+		duplicates := duplicateCredentialInputs([]credentialInput{{Label: input.Label, Secret: replacement}}, identities, r.PathValue("id"))
+		if label, duplicate := duplicates[0]; duplicate {
+			writeError(w, http.StatusConflict, "duplicate_credential", fmt.Sprintf("This API key is already saved as %q.", label))
+			return
+		}
+	}
 	if input.IsPrimary {
 		if _, err := tx.Exec(r.Context(), `
 			UPDATE credentials SET is_primary=FALSE, updated_at=NOW()
