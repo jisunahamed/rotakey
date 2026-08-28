@@ -1902,7 +1902,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
       {panelProvider && !missingRecord && panel?.type === "import" && <ModelImportForm provider={panelProvider} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
       {panelProvider && !missingRecord && panel?.type === "credential" && (panel.credentialID
         ? <CredentialForm provider={panelProvider} credential={panelProvider.credentials.find((credential) => credential.id === panel.credentialID)} onClose={() => setPanel(null)} onComplete={complete} onRefresh={() => void load()} notify={notify} />
-        : <CredentialBatchForm provider={panelProvider} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />)}
+        : <CredentialBatchForm provider={panelProvider} onClose={() => setPanel(null)} onComplete={complete} onRefresh={() => void load()} notify={notify} />)}
     </div>
   );
 }
@@ -2789,143 +2789,125 @@ type CredentialInspection = {
   warning?: string;
 };
 
-function CredentialBatchForm({ provider, onClose, onComplete, notify }: {
+type BatchCredentialFailure = {
+  label: string;
+  secret: string;
+  error: string;
+  statusCode: number;
+};
+
+function CredentialBatchForm({ provider, onClose, onComplete, onRefresh, notify }: {
   provider: Provider;
   onClose: () => void;
   onComplete: (message: string) => void;
+  onRefresh: () => void;
   notify: (message: string, tone?: "success" | "danger") => void;
 }) {
-  const [drafts, setDrafts] = useState<CredentialDraft[]>(() => [newCredentialDraft()]);
+  const [keyText, setKeyText] = useState("");
   const [checkProtocol, setCheckProtocol] = useState(true);
+  const [firstIsPrimary, setFirstIsPrimary] = useState(false);
   const [limits, setLimits] = useState<RatePolicy>(emptyPolicy);
   const [balance, setBalance] = useState(
     provider.default_key_balance_usd === null || provider.default_key_balance_usd === undefined
       ? ""
       : String(provider.default_key_balance_usd)
   );
-  const [inspections, setInspections] = useState<{ label: string; result: CredentialInspection }[]>([]);
-  const [checkedSignature, setCheckedSignature] = useState("");
-  const [selectedModels, setSelectedModels] = useState<Record<string, string>>({});
+  const [failures, setFailures] = useState<BatchCredentialFailure[]>([]);
+  const [savedCount, setSavedCount] = useState(0);
+  const [duplicateCount, setDuplicateCount] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const completeDrafts = credentialInputs(drafts, limits);
-  const signature = JSON.stringify({
-    checkProtocol,
-    keys: completeDrafts.map((credential) => [credential.label, credential.secret])
-  });
-  const discoveredModels = mergeModelCatalogs(inspections.map((inspection) => inspection.result.models));
-  const checked = inspections.length === completeDrafts.length
-    && inspections.length > 0
-    && checkedSignature === signature
-    && inspections.every((inspection) => inspection.result.valid);
-  const dirty = drafts.some((draft) => draft.label.trim() || draft.secret.trim())
+  const pastedSecrets = uniqueKeyLines(keyText);
+  const dirty = Boolean(keyText.trim())
     || !checkProtocol
+    || firstIsPrimary
+    || JSON.stringify(limits) !== JSON.stringify(emptyPolicy())
     || balance !== (provider.default_key_balance_usd === null || provider.default_key_balance_usd === undefined
       ? ""
       : String(provider.default_key_balance_usd));
 
-  const resetInspection = () => {
-    setInspections([]);
-    setCheckedSignature("");
-    setSelectedModels({});
+  const clearResults = () => {
+    setFailures([]);
+    setSavedCount(0);
+    setDuplicateCount(0);
     setError("");
-  };
-
-  const validateDrafts = () => {
-    const incomplete = drafts.some((draft) => Boolean(draft.label.trim()) !== Boolean(draft.secret.trim()));
-    if (incomplete || completeDrafts.length === 0) {
-      setError("Add at least one complete API key entry.");
-      return false;
-    }
-    if (completeDrafts.some((credential) => credential.secret.length < 8)) {
-      setError("Every API key must contain at least 8 characters.");
-      return false;
-    }
-    const labels = completeDrafts.map((credential) => credential.label.toLocaleLowerCase());
-    if (new Set(labels).size !== labels.length) {
-      setError("Each API key needs a unique label inside this provider.");
-      return false;
-    }
-    const existingLabels = new Set(provider.credentials.map((credential) => credential.label.toLocaleLowerCase()));
-    const repeated = completeDrafts.find((credential) => existingLabels.has(credential.label.toLocaleLowerCase()));
-    if (repeated) {
-      setError(`${repeated.label} is already used by an API key on this provider.`);
-      return false;
-    }
-    if (completeDrafts.length > 100) {
-      setError("Add no more than 100 API keys at once.");
-      return false;
-    }
-    if (balanceInvalid(balance)) {
-      setError("Enter a valid non-negative USD balance for each key, or leave it blank.");
-      return false;
-    }
-    return true;
-  };
-
-  const inspectKeys = async () => {
-    if (!validateDrafts()) return null;
-    setBusy(true);
-    setError("");
-    try {
-      const results = await Promise.all(completeDrafts.map(async (credential) => ({
-        label: credential.label,
-        result: await api<CredentialInspection>(`/api/admin/providers/${provider.id}/credentials/inspect`, {
-          method: "POST",
-          json: { secret: credential.secret, skip_protocol_check: !checkProtocol }
-        })
-      })));
-      setInspections(results);
-      setCheckedSignature(signature);
-      setSelectedModels({});
-      const failed = results.find((inspection) => !inspection.result.valid);
-      if (failed) {
-        setError(`${failed.label}: ${failed.result.warning || keyCheckFailed}`);
-        return null;
-      }
-      return results;
-    } catch (caught) {
-      setError(errorMessage(caught));
-      return null;
-    } finally {
-      setBusy(false);
-    }
   };
 
   const save = async () => {
-    if (!validateDrafts()) return;
-    let verified = inspections;
-    if (!checked) {
-      const results = await inspectKeys();
-      if (!results) return;
-      verified = results;
+    if (pastedSecrets.length === 0) {
+      setError("Paste at least one API key, with one key on each line.");
+      return;
     }
-    if (!verified.every((inspection) => inspection.result.valid)) return;
+    if (pastedSecrets.length > 100) {
+      setError("Add no more than 100 API keys at once.");
+      return;
+    }
+    if (balanceInvalid(balance)) {
+      setError("Enter a valid non-negative USD balance for each key, or leave it blank.");
+      return;
+    }
+    const tooShort = pastedSecrets.filter((secret) => secret.length < 8);
+    const candidates = pastedSecrets.filter((secret) => secret.length >= 8);
+    if (candidates.length === 0) {
+      setFailures(tooShort.map((secret, index) => ({
+        label: `Key ${index + 1}`, secret, error: "This API key is shorter than 8 characters.", statusCode: 0
+      })));
+      setError("None of the pasted lines contains a complete API key.");
+      return;
+    }
 
+    const entries = automaticCredentialEntries(
+      provider,
+      candidates,
+      new Map(failures.map((failure) => [failure.secret, failure.label]))
+    );
     const trimmedBalance = balance.trim();
     const parsedBalance = trimmedBalance === "" ? null : Number(trimmedBalance);
     setBusy(true);
     setError("");
+    setFailures([]);
+    setSavedCount(0);
+    setDuplicateCount(Math.max(0, keyText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).length - pastedSecrets.length));
     try {
-      const credentials = completeDrafts.map((credential) => ({
-        ...credential,
+      const credentials = entries.map((entry, index) => ({
+        label: entry.label,
+        secret: entry.secret,
+        is_primary: firstIsPrimary && index === 0,
+        enabled: true,
+        limits,
         balance_usd: parsedBalance,
         skip_protocol_check: !checkProtocol
       }));
-      const result = await api<{ models: DiscoveredModel[] }>(`/api/admin/providers/${provider.id}/credentials`, {
+      const result = await api<{
+        saved: { id: string; label: string; models: number; protocol_verified: boolean }[];
+        failed: { label: string; error: string; status_code: number }[];
+      }>(`/api/admin/providers/${provider.id}/credentials`, {
         method: "POST",
-        json: { credentials }
+        json: { credentials, save_valid_only: true }
       });
-      const catalog = result.models?.length ? result.models : mergeModelCatalogs(verified.map((inspection) => inspection.result.models));
-      const routes = routeInputsFromSelection(selectedModels, new Set(catalog.map((model) => model.id)));
-      if (routes.length > 0) {
-        await api(`/api/admin/providers/${provider.id}/models/bulk`, {
-          method: "POST",
-          json: { models: routes }
-        });
+      const byLabel = new Map(entries.map((entry) => [entry.label, entry.secret]));
+      const rejected = result.failed.map((failure) => ({
+        label: failure.label,
+        secret: byLabel.get(failure.label) ?? "",
+        error: failure.error || keyCheckFailed,
+        statusCode: failure.status_code || 0
+      }));
+      rejected.push(...tooShort.map((secret, index) => ({
+        label: `Invalid line ${index + 1}`, secret, error: "This API key is shorter than 8 characters.", statusCode: 0
+      })));
+
+      setSavedCount(result.saved.length);
+      setFailures(rejected);
+      setKeyText(rejected.map((failure) => failure.secret).filter(Boolean).join("\n"));
+      if (result.saved.length > 0) onRefresh();
+      if (rejected.length === 0) {
+        onComplete(`${result.saved.length} API key${result.saved.length === 1 ? "" : "s"} verified, saved, and added to ${provider.models.length} existing model route${provider.models.length === 1 ? "" : "s"}.`);
+      } else if (result.saved.length > 0) {
+        notify(`${result.saved.length} valid API key${result.saved.length === 1 ? " was" : "s were"} saved. ${rejected.length} failed and remain here for retry or removal.`, "danger");
+      } else {
+        setError(`All ${rejected.length} API keys failed verification. Review or remove them below.`);
       }
-      onComplete(`${credentials.length} API key${credentials.length === 1 ? "" : "s"} added and ${routes.length} model route${routes.length === 1 ? "" : "s"} enabled.`);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -2944,37 +2926,62 @@ function CredentialBatchForm({ provider, onClose, onComplete, notify }: {
     >
       <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
         {error && <InlineNotice tone="danger">{error}</InlineNotice>}
-        <CredentialEntries value={drafts} onChange={(next) => { setDrafts(next); resetInspection(); }} />
+        {savedCount > 0 && <InlineNotice tone="success">{savedCount} valid API key{savedCount === 1 ? " was" : "s were"} saved and joined this provider's existing model routes.</InlineNotice>}
+        {duplicateCount > 0 && <InlineNotice>{duplicateCount} duplicate pasted line{duplicateCount === 1 ? " was" : "s were"} ignored.</InlineNotice>}
+        <label className="field">
+          <span>API keys <small>One key per line</small></span>
+          <textarea
+            required
+            rows={10}
+            spellCheck={false}
+            autoComplete="off"
+            placeholder={`sk-key-one\nsk-key-two\nsk-key-three`}
+            value={keyText}
+            onChange={(event) => { setKeyText(event.target.value); clearResults(); }}
+          />
+          <small>Paste the whole list once. Labels are generated automatically; blank and duplicate lines are ignored.</small>
+        </label>
+        <Toggle
+          checked={firstIsPrimary}
+          onChange={setFirstIsPrimary}
+          label="Use first valid key as primary"
+          description="Optional. If the first line fails verification, the provider's current primary key is left unchanged."
+        />
         <Toggle
           checked={checkProtocol}
-          onChange={(value) => { setCheckProtocol(value); resetInspection(); }}
+          onChange={(value) => { setCheckProtocol(value); clearResults(); }}
           label="Check inference protocol"
-          description="Turn this off when the model catalog works but the provider blocks protocol probes. Every key can still be verified and saved through the catalog."
+          description="Turn this off when the model catalog works but the provider blocks protocol probes. Every line is still verified through the model catalog."
         />
         <div className="validation-action">
           <div>
-            <strong>{checkProtocol ? "Check all keys and load models" : "Verify all keys and load models"}</strong>
-            <small>{checkProtocol ? "Each key is checked against the catalog and inference protocol." : "Each key is verified through `/models` without an inference probe."}</small>
+            <strong>Verify and save all valid keys</strong>
+            <small>One failed key does not block the others. Saved keys immediately join all {provider.models.length} existing model routes.</small>
           </div>
-          <Button type="button" variant="quiet" disabled={busy} onClick={() => void inspectKeys()}>
-            <RefreshCw size={14} aria-hidden="true" /> {busy ? "Checking…" : `Check ${Math.max(1, completeDrafts.length)} key${Math.max(1, completeDrafts.length) === 1 ? "" : "s"}`}
-          </Button>
+          <code>{pastedSecrets.length} key{pastedSecrets.length === 1 ? "" : "s"}</code>
         </div>
-        {inspections.length > 0 && (
-          <InlineNotice tone={checked ? "success" : "danger"}>
-            {checked
-              ? `${inspections.length}/${inspections.length} API keys verified${checkProtocol ? " with protocol checks" : " through the model catalog"}.`
-              : `${inspections.filter((inspection) => inspection.result.valid).length}/${inspections.length} API keys verified.`}
-          </InlineNotice>
-        )}
-        {discoveredModels.length > 0 && (
-          <ModelCatalog
-            provider={provider}
-            models={discoveredModels}
-            existing={provider.models}
-            selected={selectedModels}
-            onChange={setSelectedModels}
-          />
+        {failures.length > 0 && (
+          <div className="credential-entry-list" aria-label="API keys that failed verification">
+            <div className="credential-entry-list__intro"><div><strong>Failed API keys</strong><small>These were not saved. Remove them or leave them here and retry.</small></div></div>
+            {failures.map((failure) => (
+              <section className="credential-entry" key={`${failure.label}-${failure.secret}`}>
+                <header>
+                  <span><strong>{failure.label}</strong><small>{maskedSecret(failure.secret)}{failure.statusCode ? ` · HTTP ${failure.statusCode}` : ""}</small></span>
+                  <Button
+                    type="button"
+                    variant="quiet"
+                    onClick={() => {
+                      const remaining = failures.filter((item) => item !== failure);
+                      setFailures(remaining);
+                      setKeyText(remaining.map((item) => item.secret).filter(Boolean).join("\n"));
+                      if (remaining.length === 0) setError("");
+                    }}
+                  ><Trash2 size={13} aria-hidden="true" /> Remove</Button>
+                </header>
+                <InlineNotice tone="danger">{failure.error}</InlineNotice>
+              </section>
+            ))}
+          </div>
         )}
         <fieldset><legend>Shared limits for these API keys</legend><p className="fieldset-note">The same limits are applied separately to every new key. Blank means no limit.</p><RateFields value={limits} onChange={setLimits} /></fieldset>
         <fieldset>
@@ -2987,7 +2994,7 @@ function CredentialBatchForm({ provider, onClose, onComplete, notify }: {
         </fieldset>
         <div className="sheet-actions">
           <span />
-          <Button type="submit" disabled={busy}>{busy ? "Working…" : checked ? `Add ${completeDrafts.length} API key${completeDrafts.length === 1 ? "" : "s"}` : `Check and add ${Math.max(1, completeDrafts.length)} key${Math.max(1, completeDrafts.length) === 1 ? "" : "s"}`}</Button>
+          <Button type="submit" disabled={busy}>{busy ? "Verifying and saving…" : `Verify and add ${pastedSecrets.length || "all"} key${pastedSecrets.length === 1 ? "" : "s"}`}</Button>
         </div>
       </form>
     </Sheet>
@@ -4835,6 +4842,38 @@ type CredentialDraft = {
   secret: string;
   is_primary: boolean;
 };
+
+function uniqueKeyLines(value: string) {
+  const seen = new Set<string>();
+  const keys: string[] = [];
+  for (const line of value.split(/\r?\n/)) {
+    const key = line.trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    keys.push(key);
+  }
+  return keys;
+}
+
+function automaticCredentialEntries(provider: Provider, secrets: string[], preferred = new Map<string, string>()) {
+  const used = new Set(provider.credentials.map((credential) => credential.label.toLocaleLowerCase()));
+  let sequence = provider.credentials.length + 1;
+  return secrets.map((secret) => {
+    let label = preferred.get(secret) ?? "";
+    if (!label || used.has(label.toLocaleLowerCase())) {
+      do {
+        label = `Key ${sequence}`;
+        sequence += 1;
+      } while (used.has(label.toLocaleLowerCase()));
+    }
+    used.add(label.toLocaleLowerCase());
+    return { label, secret };
+  });
+}
+
+function maskedSecret(secret: string) {
+  return secret.length <= 4 ? "••••" : `•••• ${secret.slice(-4)}`;
+}
 
 let credentialDraftSequence = 0;
 

@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -823,7 +824,8 @@ func (c credentialInput) validBalance() bool {
 
 func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Credentials []credentialInput `json:"credentials"`
+		Credentials   []credentialInput `json:"credentials"`
+		SaveValidOnly bool              `json:"save_valid_only,omitempty"`
 	}
 	if decodeJSON(w, r, 1<<20, &input) != nil {
 		return
@@ -862,19 +864,60 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusNotFound, "provider_not_found", "Provider was not found.")
 		return
 	}
+	checked := make([]credentialInspection, len(input.Credentials))
+	if input.SaveValidOnly {
+		// Bulk paste should not turn 30 independent catalog checks into a long
+		// serial queue. Keep concurrency bounded so one provider is not flooded.
+		semaphore := make(chan struct{}, 8)
+		var group sync.WaitGroup
+		for index, credential := range input.Credentials {
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				semaphore <- struct{}{}
+				defer func() { <-semaphore }()
+				checked[index] = inspectProviderSecretWithProtocol(
+					r.Context(), provider, []byte(credential.Secret), !credential.SkipProtocolCheck,
+				)
+			}()
+		}
+		group.Wait()
+	} else {
+		for index, credential := range input.Credentials {
+			checked[index] = inspectProviderSecretWithProtocol(
+				r.Context(), provider, []byte(credential.Secret), !credential.SkipProtocolCheck,
+			)
+		}
+	}
+
+	credentials := make([]credentialInput, 0, len(input.Credentials))
 	inspections := make([]credentialInspection, 0, len(input.Credentials))
-	for _, credential := range input.Credentials {
-		inspection := inspectProviderSecretWithProtocol(
-			r.Context(), provider, []byte(credential.Secret), !credential.SkipProtocolCheck,
-		)
+	failed := make([]map[string]any, 0)
+	for index, credential := range input.Credentials {
+		inspection := checked[index]
 		if !inspection.Valid && !credential.AllowUnverified {
+			if input.SaveValidOnly {
+				failed = append(failed, map[string]any{
+					"label": credential.Label, "error": inspection.Warning,
+					"status_code": inspection.StatusCode,
+				})
+				continue
+			}
 			writeError(
 				w, http.StatusUnprocessableEntity, "invalid_credential",
 				fmt.Sprintf("%s: %s The API key was not saved.", credential.Label, inspection.Warning),
 			)
 			return
 		}
+		credentials = append(credentials, credential)
 		inspections = append(inspections, inspection)
+	}
+	if len(credentials) == 0 {
+		s.audit(r.Context(), adminIDFromContext(r.Context()), "credential.create", "provider", r.PathValue("id"), map[string]any{"count": 0, "failed": len(failed)})
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"ids": []string{}, "saved": []any{}, "failed": failed, "models": []DiscoveredModel{},
+		})
+		return
 	}
 
 	tx, err := s.db.Begin(r.Context())
@@ -883,7 +926,11 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer func() { _ = tx.Rollback(r.Context()) }()
-	if primaryCount == 1 {
+	acceptedPrimary := false
+	for _, credential := range credentials {
+		acceptedPrimary = acceptedPrimary || credential.IsPrimary
+	}
+	if acceptedPrimary {
 		if _, err := tx.Exec(r.Context(), `
 			UPDATE credentials SET is_primary=FALSE, updated_at=NOW() WHERE provider_id=$1
 		`, r.PathValue("id")); err != nil {
@@ -891,8 +938,9 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	created := make([]string, 0, len(input.Credentials))
-	for index, credential := range input.Credentials {
+	created := make([]string, 0, len(credentials))
+	saved := make([]map[string]any, 0, len(credentials))
+	for index, credential := range credentials {
 		encrypted, err := s.vault.Encrypt([]byte(credential.Secret))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "encryption_failed", "Credential could not be encrypted.")
@@ -932,14 +980,18 @@ func (s *Server) handleCreateCredentials(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		created = append(created, id)
+		saved = append(saved, map[string]any{
+			"id": id, "label": credential.Label, "models": len(inspections[index].Models),
+			"protocol_verified": inspections[index].ProtocolVerified,
+		})
 	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "credential_create_failed", "Credentials could not be saved.")
 		return
 	}
-	s.audit(r.Context(), adminIDFromContext(r.Context()), "credential.create", "provider", r.PathValue("id"), map[string]any{"count": len(created)})
+	s.audit(r.Context(), adminIDFromContext(r.Context()), "credential.create", "provider", r.PathValue("id"), map[string]any{"count": len(created), "failed": len(failed)})
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"ids": created, "models": mergeDiscoveredModels(inspections),
+		"ids": created, "saved": saved, "failed": failed, "models": mergeDiscoveredModels(inspections),
 	})
 }
 
