@@ -3619,6 +3619,13 @@ function ModelCatalog({
 type PlaygroundProtocol = "auto" | "chat" | "responses" | "messages";
 type PlaygroundPanel = "models" | "run" | "settings";
 type PlaygroundModel = ModelRoute & { provider: Provider; credentials: Credential[] };
+type PlaygroundRequestDraft = {
+  prompt: string;
+  system: string;
+  protocol: PlaygroundProtocol;
+  maxTokens: number;
+  temperature: number;
+};
 type PlaygroundRun = {
   id: number;
   modelAlias: string;
@@ -3630,6 +3637,29 @@ type PlaygroundRun = {
   inputTokens: number;
   outputTokens: number;
 };
+
+type PlaygroundRequestState = {
+  phase: "idle" | "sending" | "waiting" | "completed" | "failed" | "cancelled";
+  startedAt: number;
+  elapsedMS: number;
+  protocol: PlaygroundProtocol;
+  error?: string;
+};
+
+function formatElapsed(milliseconds: number) {
+  return `${(milliseconds / 1000).toFixed(1)}s`;
+}
+
+function playgroundRequestLabel(phase: PlaygroundRequestState["phase"]) {
+  switch (phase) {
+    case "sending": return "Request sent";
+    case "waiting": return "Waiting for model response";
+    case "completed": return "Response received";
+    case "failed": return "Request failed";
+    case "cancelled": return "Request cancelled";
+    default: return "Ready to send";
+  }
+}
 
 function recordValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -3696,7 +3726,10 @@ function PlaygroundPage({
   const [temperature, setTemperature] = useState(0.7);
   const [runs, setRuns] = useState<PlaygroundRun[]>([]);
   const [running, setRunning] = useState(false);
+  const [lastRequest, setLastRequest] = useState<PlaygroundRequestDraft | null>(null);
+  const [requestState, setRequestState] = useState<PlaygroundRequestState>({ phase: "idle", startedAt: 0, elapsedMS: 0, protocol: "auto" });
   const requestController = useRef<AbortController | null>(null);
+  const requestPhaseTimer = useRef<number | null>(null);
 
   useEffect(() => {
     mounted.current = true;
@@ -3704,8 +3737,17 @@ function PlaygroundPage({
       mounted.current = false;
       stopSweep.current = true;
       requestController.current?.abort();
+      if (requestPhaseTimer.current !== null) window.clearTimeout(requestPhaseTimer.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (!running || !requestState.startedAt) return;
+    const timer = window.setInterval(() => {
+      setRequestState((current) => ({ ...current, elapsedMS: performance.now() - current.startedAt }));
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [running, requestState.startedAt]);
 
   const load = useCallback(async (background = false) => {
     if (!background) setLoading(true);
@@ -3830,41 +3872,59 @@ function PlaygroundPage({
     await load(true);
   };
 
-  const runPrompt = async () => {
-    if (!selected || !prompt.trim() || running) return;
-    const requestPrompt = prompt.trim();
+  const runPrompt = async (requestOverride?: PlaygroundRequestDraft) => {
+    if (!selected || running) return;
+    const request = requestOverride || { prompt: prompt.trim(), system: systemPrompt, protocol, maxTokens, temperature };
+    if (!request.prompt.trim()) return;
+    const target = selected;
+    const requestPrompt = request.prompt.trim();
     const started = performance.now();
     const controller = new AbortController();
     requestController.current = controller;
+    setLastRequest(request);
+    setRequestState({ phase: "sending", startedAt: started, elapsedMS: 0, protocol: request.protocol });
+    requestPhaseTimer.current = window.setTimeout(() => {
+      if (mounted.current) setRequestState((current) => current.phase === "sending" ? { ...current, phase: "waiting" } : current);
+    }, 350);
     setRunning(true);
     try {
       const payload = await api<Record<string, unknown>>("/api/admin/playground/run", {
         method: "POST",
         signal: controller.signal,
         json: {
-          model: selected.public_alias,
+          model: target.public_alias,
           prompt: requestPrompt,
-          system: systemPrompt,
-          protocol,
-          max_tokens: maxTokens,
-          temperature
+          system: request.system,
+          protocol: request.protocol,
+          max_tokens: request.maxTokens,
+          temperature: request.temperature
         }
       });
       const usage = playgroundUsage(payload);
       setRuns((current) => [{
-        id: Date.now(), modelAlias: selected.public_alias, prompt: requestPrompt, response: playgroundText(payload),
-        protocol: playgroundResponseProtocol(payload, protocol), latencyMS: Math.round(performance.now() - started),
+        id: Date.now(), modelAlias: target.public_alias, prompt: requestPrompt, response: playgroundText(payload),
+        protocol: playgroundResponseProtocol(payload, request.protocol), latencyMS: Math.round(performance.now() - started),
         inputTokens: usage.input, outputTokens: usage.output
       }, ...current].slice(0, 20));
+      setRequestState({ phase: "completed", startedAt: started, elapsedMS: performance.now() - started, protocol: playgroundResponseProtocol(payload, request.protocol) });
       setPrompt("");
     } catch (caught) {
-      if (controller.signal.aborted) return;
+      const elapsedMS = performance.now() - started;
+      if (controller.signal.aborted) {
+        setRequestState({ phase: "cancelled", startedAt: started, elapsedMS, protocol: request.protocol });
+        return;
+      }
       setRuns((current) => [{
-        id: Date.now(), modelAlias: selected.public_alias, prompt: requestPrompt, error: errorMessage(caught), protocol,
-        latencyMS: Math.round(performance.now() - started), inputTokens: 0, outputTokens: 0
+        id: Date.now(), modelAlias: target.public_alias, prompt: requestPrompt, error: errorMessage(caught), protocol: request.protocol,
+        latencyMS: Math.round(elapsedMS), inputTokens: 0, outputTokens: 0
       }, ...current].slice(0, 20));
+      setRequestState({ phase: "failed", startedAt: started, elapsedMS, protocol: request.protocol, error: errorMessage(caught) });
     } finally {
       if (requestController.current === controller) requestController.current = null;
+      if (requestPhaseTimer.current !== null) {
+        window.clearTimeout(requestPhaseTimer.current);
+        requestPhaseTimer.current = null;
+      }
       if (mounted.current) setRunning(false);
     }
   };
@@ -3907,7 +3967,16 @@ function PlaygroundPage({
 
         <section className={`playground-runner${activePanel === "run" ? " is-active" : ""}`}>
           <header className="playground-pane-title"><div><span>Test target</span><strong title={selected?.public_alias}>{selected?.public_alias}</strong><small>{selected?.provider.name} · {selected ? modelState(selected) : "unavailable"}</small></div>{selected && <Button variant="quiet" onClick={() => setActivePanel("settings")}>Settings</Button>}</header>
-          <div className="playground-protocols" role="group" aria-label="Request protocol">{(["auto", "chat", "responses", "messages"] as PlaygroundProtocol[]).map((item) => <button key={item} className={protocol === item ? "is-active" : ""} onClick={() => setProtocol(item)}>{item === "messages" ? "Messages" : item[0].toUpperCase() + item.slice(1)}</button>)}</div>
+            <div className="playground-protocols" role="group" aria-label="Request protocol">{(["auto", "chat", "responses", "messages"] as PlaygroundProtocol[]).map((item) => <button key={item} className={protocol === item ? "is-active" : ""} onClick={() => setProtocol(item)}>{item === "messages" ? "Messages" : item[0].toUpperCase() + item.slice(1)}</button>)}</div>
+          <div className={`playground-live-status is-${requestState.phase}`} role="status" aria-live="polite">
+            <span className="playground-live-status__dot" aria-hidden="true" />
+            <div><strong>{playgroundRequestLabel(requestState.phase)}</strong><small>{selected?.provider.name} · {requestState.protocol === "auto" ? "auto protocol" : requestState.protocol}</small></div>
+            <time>{formatElapsed(requestState.elapsedMS)}</time>
+            {requestState.phase === "failed" && lastRequest && <button type="button" onClick={() => void runPrompt(lastRequest)} disabled={running}><RefreshCw size={13} aria-hidden="true" /> Retry</button>}
+          </div>
+          <div className={`playground-error-detail${requestState.phase === "failed" && requestState.error ? "" : " is-empty"}`} aria-hidden={requestState.phase !== "failed" || !requestState.error}>
+            {requestState.phase === "failed" && requestState.error && <><AlertTriangle size={15} aria-hidden="true" /><pre>{requestState.error}</pre></>}
+          </div>
           <div className="playground-transcript" aria-live="polite">
             {runs.length === 0 ? <div className="playground-empty"><FlaskConical size={22} aria-hidden="true" /><strong>Ready for a real gateway request</strong><p>The selected route uses its configured provider, key rotation, failover, translation and cost tracking.</p></div> : runs.map((run) => <article key={run.id} className={run.error ? "has-error" : ""}>
               <header><span>{run.protocol}</span><small>{run.latencyMS} ms · {run.inputTokens} in · {run.outputTokens} out</small></header>
