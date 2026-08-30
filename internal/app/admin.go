@@ -48,6 +48,7 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	mux.Handle("PUT /api/admin/models/{id}", admin(s.handleUpdateModel))
 	mux.Handle("POST /api/admin/models/{id}/probe", admin(s.handleProbeModel))
 	mux.Handle("DELETE /api/admin/models/{id}", admin(s.handleDeleteModel))
+	mux.Handle("POST /api/admin/playground/run", admin(s.handlePlaygroundRun))
 	mux.Handle("POST /api/admin/providers/{id}/credentials", admin(s.handleCreateCredentials))
 	mux.Handle("POST /api/admin/providers/{id}/credentials/inspect", admin(s.handleInspectProviderCredential))
 	mux.Handle("POST /api/admin/providers/{id}/credentials/delete-unusable", admin(s.handleDeleteUnusableCredentials))

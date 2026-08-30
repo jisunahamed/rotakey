@@ -13,6 +13,7 @@ import {
   Database,
   Download,
   FileClock,
+  FlaskConical,
   Github,
   KeyRound,
   LogOut,
@@ -23,11 +24,13 @@ import {
   RefreshCw,
   Route,
   Search,
+  Send,
   Settings as SettingsIcon,
   ShieldCheck,
   Sun,
   Trash2,
   Upload,
+  Square,
   X
 } from "lucide-react";
 import { api, APIError, setCSRF } from "./api";
@@ -61,13 +64,14 @@ import {
   type SettingsUpdateResult
 } from "./types";
 
-type Page = "overview" | "providers" | "models" | "logs" | "access" | "settings";
+type Page = "overview" | "providers" | "models" | "playground" | "logs" | "access" | "settings";
 type AuthPhase = "loading" | "setup" | "login" | "app";
 
 const navItems: Array<{ id: Page; label: string; icon: typeof Activity }> = [
   { id: "overview", label: "Overview", icon: CircleGauge },
   { id: "providers", label: "Providers", icon: Database },
   { id: "models", label: "Model routes", icon: Route },
+  { id: "playground", label: "Playground", icon: FlaskConical },
   { id: "logs", label: "Request logs", icon: FileClock },
   { id: "access", label: "Gateway key", icon: KeyRound },
   { id: "settings", label: "Settings", icon: SettingsIcon }
@@ -444,6 +448,7 @@ function App() {
           {page === "overview" && <OverviewPage navigate={navigate} notify={notify} />}
           {page === "providers" && <ProvidersPage notify={notify} />}
           {page === "models" && <ModelsPage navigate={navigate} notify={notify} />}
+          {page === "playground" && <PlaygroundPage navigate={navigate} notify={notify} />}
           {page === "logs" && <LogsPage />}
           {page === "access" && (
             <AccessPage
@@ -2673,6 +2678,24 @@ function ProviderForm({ provider, onClose, onComplete, notify }: { provider: Pro
 
 type ModelDraft = Omit<ModelRoute, "id" | "provider_id" | "created_at" | "updated_at" | "capability_status" | "capability_profile" | "capabilities_checked_at" | "capability_error"> & { manual?: boolean };
 
+function modelToDraft(model: ModelRoute): ModelDraft {
+  return {
+    public_alias: model.public_alias,
+    upstream_model: model.upstream_model,
+    supports_chat: model.supports_chat,
+    supports_responses: model.supports_responses,
+    supports_messages: model.supports_messages,
+    default_max_output_tokens: model.default_max_output_tokens,
+    tokenizer: model.tokenizer,
+    input_cost_per_million_usd: model.input_cost_per_million_usd,
+    output_cost_per_million_usd: model.output_cost_per_million_usd,
+    request_cost_usd: model.request_cost_usd,
+    capture_bodies: model.capture_bodies,
+    strip_parameters: model.strip_parameters ?? [],
+    enabled: model.enabled
+  };
+}
+
 function ModelFields({ value, onChange }: { value: ModelDraft; onChange: (value: ModelDraft) => void }) {
   return (
     <div className="form-stack">
@@ -2710,13 +2733,7 @@ function ModelFields({ value, onChange }: { value: ModelDraft; onChange: (value:
 function ModelForm({ provider, model, onClose, onComplete, notify }: { provider: Provider; model?: ModelRoute; onClose: () => void; onComplete: (message: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
   const ask = useConfirm();
   const routingMode = useRoutingMode();
-  const [draft, setDraft] = useState<ModelDraft>(model ? {
-    public_alias: model.public_alias, upstream_model: model.upstream_model,
-    supports_chat: model.supports_chat, supports_responses: model.supports_responses, supports_messages: model.supports_messages,
-    default_max_output_tokens: model.default_max_output_tokens, tokenizer: model.tokenizer,
-    input_cost_per_million_usd: model.input_cost_per_million_usd, output_cost_per_million_usd: model.output_cost_per_million_usd, request_cost_usd: model.request_cost_usd,
-    capture_bodies: model.capture_bodies, strip_parameters: model.strip_parameters ?? [], enabled: model.enabled
-  } : {
+  const [draft, setDraft] = useState<ModelDraft>(model ? modelToDraft(model) : {
     public_alias: `${provider.slug}/`, upstream_model: "", supports_chat: true,
     supports_responses: false, supports_messages: true, default_max_output_tokens: 1024,
     tokenizer: "heuristic", input_cost_per_million_usd: 0, output_cost_per_million_usd: 0, request_cost_usd: undefined,
@@ -3597,6 +3614,384 @@ function ModelCatalog({
       </div>
     </section>
   );
+}
+
+type PlaygroundProtocol = "auto" | "chat" | "responses" | "messages";
+type PlaygroundPanel = "models" | "run" | "settings";
+type PlaygroundModel = ModelRoute & { provider: Provider; credentials: Credential[] };
+type PlaygroundRun = {
+  id: number;
+  modelAlias: string;
+  prompt: string;
+  response?: string;
+  error?: string;
+  protocol: PlaygroundProtocol;
+  latencyMS: number;
+  inputTokens: number;
+  outputTokens: number;
+};
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function playgroundText(payload: Record<string, unknown>): string {
+  if (typeof payload.output_text === "string") return payload.output_text;
+  const choices = Array.isArray(payload.choices) ? payload.choices : [];
+  const message = recordValue(recordValue(choices[0]).message);
+  if (typeof message.content === "string") return message.content;
+  const anthropicContent = Array.isArray(payload.content) ? payload.content : [];
+  const anthropicText = anthropicContent.map((item) => recordValue(item).text).filter((item): item is string => typeof item === "string").join("\n");
+  if (anthropicText) return anthropicText;
+  const output = Array.isArray(payload.output) ? payload.output : [];
+  const responseText = output.flatMap((item) => {
+    const content = recordValue(item).content;
+    return Array.isArray(content) ? content : [];
+  }).map((item) => recordValue(item).text).filter((item): item is string => typeof item === "string").join("\n");
+  return responseText || JSON.stringify(payload, null, 2);
+}
+
+function playgroundUsage(payload: Record<string, unknown>) {
+  const usage = recordValue(payload.usage);
+  return {
+    input: Number(usage.prompt_tokens ?? usage.input_tokens ?? 0),
+    output: Number(usage.completion_tokens ?? usage.output_tokens ?? 0)
+  };
+}
+
+function playgroundResponseProtocol(payload: Record<string, unknown>, requested: PlaygroundProtocol): PlaygroundProtocol {
+  if (payload.type === "message") return "messages";
+  if (typeof payload.object === "string" && payload.object.startsWith("response")) return "responses";
+  return requested === "auto" ? "chat" : requested;
+}
+
+function PlaygroundPage({
+  navigate,
+  notify
+}: {
+  navigate: (page: Page, query?: Record<string, string>) => void;
+  notify: (message: string, tone?: "success" | "danger") => void;
+}) {
+  const ask = useConfirm();
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [selectedID, setSelectedID] = useState(() => new URLSearchParams(location.search).get("model") || "");
+  const [query, setQuery] = useState("");
+  const [providerFilter, setProviderFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [activePanel, setActivePanel] = useState<PlaygroundPanel>("models");
+  const compact = useMediaQuery("(max-width: 1050px)");
+  const [probeResults, setProbeResults] = useState<Record<string, ModelProbeResult>>({});
+  const [checkingAll, setCheckingAll] = useState(false);
+  const [checkingID, setCheckingID] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [probeProgress, setProbeProgress] = useState({ completed: 0, total: 0 });
+  const stopSweep = useRef(false);
+  const mounted = useRef(true);
+  const [prompt, setPrompt] = useState("");
+  const [systemPrompt, setSystemPrompt] = useState("");
+  const [protocol, setProtocol] = useState<PlaygroundProtocol>("auto");
+  const [maxTokens, setMaxTokens] = useState(1024);
+  const [temperature, setTemperature] = useState(0.7);
+  const [runs, setRuns] = useState<PlaygroundRun[]>([]);
+  const [running, setRunning] = useState(false);
+  const requestController = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      stopSweep.current = true;
+      requestController.current?.abort();
+    };
+  }, []);
+
+  const load = useCallback(async (background = false) => {
+    if (!background) setLoading(true);
+    try {
+      const result = await api<{ providers: Provider[] }>("/api/admin/providers");
+      const normalized = normalizeProviders(result.providers);
+      if (!mounted.current) return;
+      setProviders(normalized);
+      setLoadError("");
+      const available = normalized.flatMap((provider) => provider.models);
+      setSelectedID((current) => available.some((model) => model.id === current) ? current : available[0]?.id || "");
+    } catch (caught) {
+      if (mounted.current) setLoadError(errorMessage(caught));
+    } finally {
+      if (mounted.current) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (!selectedID) return;
+    const url = new URL(location.href);
+    url.searchParams.set("model", selectedID);
+    history.replaceState(history.state, "", url);
+  }, [selectedID]);
+
+  const models: PlaygroundModel[] = providers.flatMap((provider) => provider.models.map((model) => ({ ...model, provider, credentials: provider.credentials })));
+  const readyKeys = (model: PlaygroundModel) => model.credentials.filter((credential) => credentialPoolState(credential) === "healthy").length;
+  const modelState = (model: PlaygroundModel) => {
+    const probe = probeResults[model.id];
+    if (!model.enabled) return "disabled";
+    if (probe?.state === "checking") return "checking";
+    if (probe?.state === "failed" || model.capability_status === "failed") return "failed";
+    if (readyKeys(model) === 0 || probe?.state === "blocked") return "waiting";
+    if (probe?.state === "passed" || probe?.state === "warning" || model.capability_status === "probe_verified" || model.capability_status === "catalog_verified") return "live";
+    return "unverified";
+  };
+  const selected = models.find((model) => model.id === selectedID);
+  const filtered = models.filter((model) => {
+    const needle = query.trim().toLowerCase();
+    return (!providerFilter || model.provider.id === providerFilter) &&
+      (!statusFilter || modelState(model) === statusFilter) &&
+      (!needle || `${model.public_alias} ${model.upstream_model} ${model.provider.name}`.toLowerCase().includes(needle));
+  });
+  const failedModels = models.filter((model) => modelState(model) === "failed");
+
+  const checkModel = async (model: PlaygroundModel, quiet = false) => {
+    setCheckingID(model.id);
+    setProbeResults((current) => ({ ...current, [model.id]: { state: "checking" } }));
+    try {
+      const result = await api<{ warning?: string }>(`/api/admin/models/${model.id}/probe`, { method: "POST" });
+      if (!mounted.current) return;
+      setProbeResults((current) => ({ ...current, [model.id]: result.warning ? { state: "warning", error: result.warning } : { state: "passed" } }));
+      if (!quiet) notify(result.warning ? "Model is provider-listed; the live probe was inconclusive." : `${model.public_alias} is live.`);
+    } catch (caught) {
+      if (!mounted.current) return;
+      const state = caught instanceof APIError && caught.code === "model_probe_blocked" ? "blocked" : "failed";
+      setProbeResults((current) => ({ ...current, [model.id]: { state, error: errorMessage(caught) } }));
+      if (!quiet) notify(errorMessage(caught), "danger");
+    } finally {
+      if (mounted.current) setCheckingID("");
+    }
+  };
+
+  const checkAll = async () => {
+    if (checkingAll || models.length === 0) return;
+    stopSweep.current = false;
+    setCheckingAll(true);
+    setProbeProgress({ completed: 0, total: models.length });
+    let cursor = 0;
+    let completed = 0;
+    const worker = async () => {
+      while (!stopSweep.current && cursor < models.length) {
+        const model = models[cursor++];
+        await checkModel(model, true);
+        completed++;
+        if (mounted.current) setProbeProgress({ completed, total: models.length });
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(3, models.length) }, worker));
+    if (!mounted.current) return;
+    setCheckingAll(false);
+    notify(stopSweep.current ? `Model sweep stopped after ${completed} checks.` : `${completed} model routes checked.`);
+    await load(true);
+  };
+
+  const bulkDisableFailed = async () => {
+    if (bulkBusy || failedModels.length === 0) return;
+    if (!(await ask({ title: `Disable ${failedModels.length} failed route${failedModels.length === 1 ? "" : "s"}?`, body: "The routes remain configured but stop receiving traffic until they are enabled again.", confirmLabel: `Disable ${failedModels.length}`, detail: failedModels.map((model) => model.public_alias).join("\n") }))) return;
+    setBulkBusy(true);
+    let changed = 0;
+    let failed = 0;
+    for (const model of failedModels) {
+      try {
+        await api(`/api/admin/models/${model.id}`, { method: "PUT", json: { ...modelToDraft(model), enabled: false } });
+        changed++;
+      } catch {
+        failed++;
+      }
+    }
+    setBulkBusy(false);
+    notify(`${changed} failed route${changed === 1 ? "" : "s"} disabled${failed ? ` · ${failed} could not be changed` : ""}.`, failed ? "danger" : "success");
+    await load(true);
+  };
+
+  const bulkDeleteFailed = async () => {
+    if (bulkBusy || failedModels.length === 0) return;
+    if (!(await ask({ title: `Delete ${failedModels.length} failed route${failedModels.length === 1 ? "" : "s"}?`, body: "These public aliases stop immediately and cannot be restored.", confirmLabel: `Delete ${failedModels.length}`, detail: failedModels.map((model) => model.public_alias).join("\n") }))) return;
+    setBulkBusy(true);
+    let changed = 0;
+    let failed = 0;
+    for (const model of failedModels) {
+      try {
+        await api(`/api/admin/models/${model.id}`, { method: "DELETE" });
+        changed++;
+      } catch {
+        failed++;
+      }
+    }
+    setBulkBusy(false);
+    notify(`${changed} failed route${changed === 1 ? "" : "s"} deleted${failed ? ` · ${failed} could not be deleted` : ""}.`, failed ? "danger" : "success");
+    await load(true);
+  };
+
+  const runPrompt = async () => {
+    if (!selected || !prompt.trim() || running) return;
+    const requestPrompt = prompt.trim();
+    const started = performance.now();
+    const controller = new AbortController();
+    requestController.current = controller;
+    setRunning(true);
+    try {
+      const payload = await api<Record<string, unknown>>("/api/admin/playground/run", {
+        method: "POST",
+        signal: controller.signal,
+        json: {
+          model: selected.public_alias,
+          prompt: requestPrompt,
+          system: systemPrompt,
+          protocol,
+          max_tokens: maxTokens,
+          temperature
+        }
+      });
+      const usage = playgroundUsage(payload);
+      setRuns((current) => [{
+        id: Date.now(), modelAlias: selected.public_alias, prompt: requestPrompt, response: playgroundText(payload),
+        protocol: playgroundResponseProtocol(payload, protocol), latencyMS: Math.round(performance.now() - started),
+        inputTokens: usage.input, outputTokens: usage.output
+      }, ...current].slice(0, 20));
+      setPrompt("");
+    } catch (caught) {
+      if (controller.signal.aborted) return;
+      setRuns((current) => [{
+        id: Date.now(), modelAlias: selected.public_alias, prompt: requestPrompt, error: errorMessage(caught), protocol,
+        latencyMS: Math.round(performance.now() - started), inputTokens: 0, outputTokens: 0
+      }, ...current].slice(0, 20));
+    } finally {
+      if (requestController.current === controller) requestController.current = null;
+      if (mounted.current) setRunning(false);
+    }
+  };
+
+  if (loading) return <div className="resource-page"><PageHeader eyebrow="Model lab" title="Playground" description="Run and manage every model route from one workspace." /><PageSkeleton /></div>;
+  if (loadError && models.length === 0) return <EmptyState level={2} title="Playground could not be loaded" description={loadError} action={<Button onClick={() => void load()}><RefreshCw size={14} aria-hidden="true" /> Try again</Button>} />;
+  if (models.length === 0) return <EmptyState level={2} title="No model routes to test" description="Add a route to a provider first." action={<Button onClick={() => navigate("providers")}><ArrowRight size={14} aria-hidden="true" /> Go to providers</Button>} />;
+
+  return (
+    <div className="resource-page playground-page">
+      <PageHeader eyebrow="Model lab" title="Playground" description="Check availability, run real prompts, and manage route settings without leaving the workspace." />
+      {loadError && <InlineNotice tone="danger">{loadError} Showing the last loaded model list.</InlineNotice>}
+      <div className="playground-tabs" role="tablist" aria-label="Playground panels">
+        {(["models", "run", "settings"] as PlaygroundPanel[]).map((panel) => <button key={panel} role="tab" aria-selected={activePanel === panel} onClick={() => setActivePanel(panel)}>{panel === "run" ? "Run" : panel[0].toUpperCase() + panel.slice(1)}</button>)}
+      </div>
+      <div className="playground-workbench">
+        <section className={`playground-models${activePanel === "models" ? " is-active" : ""}`}>
+          <header className="playground-pane-title"><div><span>Routes</span><strong>{filtered.length} of {models.length}</strong></div><Button variant="quiet" disabled={checkingAll} onClick={() => void checkAll()}><Activity size={13} aria-hidden="true" /> Check all</Button></header>
+          <div className="playground-filters">
+            <label><Search size={14} aria-hidden="true" /><span className="sr-only">Search model routes</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Alias, model or provider" /></label>
+            <select aria-label="Filter by provider" value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)}><option value="">All providers</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select>
+            <select aria-label="Filter by status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">All statuses</option><option value="live">Live</option><option value="failed">Failed</option><option value="waiting">Waiting</option><option value="disabled">Disabled</option><option value="unverified">Unverified</option></select>
+          </div>
+          {checkingAll && <div className="playground-progress"><span style={{ width: `${probeProgress.total ? probeProgress.completed / probeProgress.total * 100 : 0}%` }} /><small>{probeProgress.completed}/{probeProgress.total}</small><button onClick={() => { stopSweep.current = true; }}>Stop</button></div>}
+          {failedModels.length > 0 && <div className="playground-bulk-actions"><span>{failedModels.length} failed</span><button disabled={bulkBusy || checkingAll} onClick={() => void bulkDisableFailed()}><Power size={12} aria-hidden="true" /> Disable</button><button disabled={bulkBusy || checkingAll} onClick={() => void bulkDeleteFailed()}><Trash2 size={12} aria-hidden="true" /> Delete</button></div>}
+          <div className="playground-model-list">
+            {filtered.map((model) => {
+              const state = modelState(model);
+              return <div key={model.id} className={selectedID === model.id ? "is-selected" : ""}>
+                <button className="playground-model-select" onClick={() => { setSelectedID(model.id); if (compact) setActivePanel("run"); }} aria-current={selectedID === model.id}>
+                  <span className={`playground-model-dot is-${state}`} role="img" aria-label={state === "live" ? "Live" : state === "failed" ? "Failed" : state === "checking" ? "Checking" : state === "waiting" ? "Waiting for a key" : state === "disabled" ? "Disabled" : "Unverified"} />
+                  <span><code title={model.public_alias}>{model.public_alias}</code><small>{model.provider.name} · {state} · {readyKeys(model)}/{model.credentials.length} keys</small></span>
+                </button>
+                <button className="console-icon" disabled={checkingAll || checkingID === model.id} onClick={() => void checkModel(model)} aria-label={`Check ${model.public_alias}`} title="Check model"><RefreshCw size={13} aria-hidden="true" /></button>
+              </div>;
+            })}
+            {filtered.length === 0 && <p className="inline-empty">No model routes match these filters.</p>}
+          </div>
+        </section>
+
+        <section className={`playground-runner${activePanel === "run" ? " is-active" : ""}`}>
+          <header className="playground-pane-title"><div><span>Test target</span><strong title={selected?.public_alias}>{selected?.public_alias}</strong><small>{selected?.provider.name} · {selected ? modelState(selected) : "unavailable"}</small></div>{selected && <Button variant="quiet" onClick={() => setActivePanel("settings")}>Settings</Button>}</header>
+          <div className="playground-protocols" role="group" aria-label="Request protocol">{(["auto", "chat", "responses", "messages"] as PlaygroundProtocol[]).map((item) => <button key={item} className={protocol === item ? "is-active" : ""} onClick={() => setProtocol(item)}>{item === "messages" ? "Messages" : item[0].toUpperCase() + item.slice(1)}</button>)}</div>
+          <div className="playground-transcript" aria-live="polite">
+            {runs.length === 0 ? <div className="playground-empty"><FlaskConical size={22} aria-hidden="true" /><strong>Ready for a real gateway request</strong><p>The selected route uses its configured provider, key rotation, failover, translation and cost tracking.</p></div> : runs.map((run) => <article key={run.id} className={run.error ? "has-error" : ""}>
+              <header><span>{run.protocol}</span><small>{run.latencyMS} ms · {run.inputTokens} in · {run.outputTokens} out</small></header>
+              <div className="playground-user-message"><strong>You</strong><p>{run.prompt}</p></div>
+              <div className="playground-model-message"><strong>{run.error ? `${run.modelAlias} error` : run.modelAlias}</strong><pre>{run.error || run.response}</pre></div>
+            </article>)}
+          </div>
+          <form className="playground-composer" onSubmit={(event) => { event.preventDefault(); void runPrompt(); }}>
+            <details><summary>Request options</summary><label><span>System prompt</span><textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} rows={3} /></label><div><label><span>Max output</span><input type="number" min={1} max={1000000} value={maxTokens} onChange={(event) => setMaxTokens(Number(event.target.value))} /></label><label><span>Temperature</span><input type="number" min={0} max={2} step={0.1} value={temperature} onChange={(event) => setTemperature(Number(event.target.value))} /></label></div></details>
+            <label><span className="sr-only">Prompt</span><textarea rows={3} value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Send a prompt through the selected route" onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); void runPrompt(); } }} /></label>
+            {running ? <button type="button" className="playground-send" onClick={() => requestController.current?.abort()} aria-label="Stop request" title="Stop request"><Square size={16} aria-hidden="true" /></button> : <button type="submit" className="playground-send" disabled={!selected || !prompt.trim()} aria-label="Send prompt" title="Send prompt"><Send size={17} aria-hidden="true" /></button>}
+          </form>
+        </section>
+
+        <aside className={`playground-settings${activePanel === "settings" ? " is-active" : ""}`}>
+          {selected && <PlaygroundSettings key={selected.id} model={selected} navigate={navigate} notify={notify} onUpdated={() => load(true)} />}
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function PlaygroundSettings({
+  model,
+  navigate,
+  notify,
+  onUpdated
+}: {
+  model: PlaygroundModel;
+  navigate: (page: Page, query?: Record<string, string>) => void;
+  notify: (message: string, tone?: "success" | "danger") => void;
+  onUpdated: () => Promise<void>;
+}) {
+  const ask = useConfirm();
+  const [draft, setDraft] = useState<ModelDraft>(() => modelToDraft(model));
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  useEffect(() => setDraft(modelToDraft(model)), [model.updated_at]);
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api(`/api/admin/models/${model.id}`, { method: "PUT", json: draft });
+      notify(`Route ${draft.public_alias} updated.`);
+      await onUpdated();
+    } catch (caught) {
+      notify(errorMessage(caught), "danger");
+    } finally {
+      setSaving(false);
+    }
+  };
+  const remove = async () => {
+    if (!(await ask(deleteRouteQuestion(model.public_alias)))) return;
+    setDeleting(true);
+    try {
+      await api(`/api/admin/models/${model.id}`, { method: "DELETE" });
+      notify(`Route ${model.public_alias} deleted.`);
+      await onUpdated();
+    } catch (caught) {
+      notify(errorMessage(caught), "danger");
+    } finally {
+      setDeleting(false);
+    }
+  };
+  const toggleEnabled = async () => {
+    const enabled = !draft.enabled;
+    setSaving(true);
+    try {
+      await api(`/api/admin/models/${model.id}`, { method: "PUT", json: { ...draft, enabled } });
+      setDraft((current) => ({ ...current, enabled }));
+      notify(`${model.public_alias} ${enabled ? "enabled" : "disabled"}.`);
+      await onUpdated();
+    } catch (caught) {
+      notify(errorMessage(caught), "danger");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return <>
+    <header className="playground-pane-title"><div><span>Route settings</span><strong>{model.provider.name}</strong><small>{model.upstream_model}</small></div><div className="button-row"><button className="console-icon" disabled={saving || deleting} onClick={() => void toggleEnabled()} aria-label={`${draft.enabled ? "Disable" : "Enable"} ${model.public_alias}`} title={draft.enabled ? "Disable route" : "Enable route"}><Power size={14} aria-hidden="true" /></button><button className="console-icon" onClick={() => navigate("logs", { q: model.public_alias })} aria-label="Open request logs" title="Open request logs"><FileClock size={14} aria-hidden="true" /></button></div></header>
+    <form className="playground-settings-form" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+      <ModelFields value={draft} onChange={setDraft} />
+      <div className="playground-settings-actions"><Button variant="danger" type="button" disabled={saving || deleting} onClick={() => void remove()}><Trash2 size={13} aria-hidden="true" /> {deleting ? "Deleting…" : "Delete"}</Button><Button type="submit" disabled={saving || deleting}>{saving ? "Saving…" : "Save settings"}</Button></div>
+    </form>
+  </>;
 }
 
 type ModelProbeResult = {
