@@ -48,8 +48,16 @@ var (
 	deprecatedParameterPatterns = []*regexp.Regexp{
 		regexp.MustCompile(`(?i)['"` + "`" + `]?([A-Za-z][A-Za-z0-9_.-]{0,63})['"` + "`" + `]?\s+is\s+deprecated(?:\s+for\s+(?:this|the)\s+model)?`),
 		regexp.MustCompile(`(?i)(?:parameter|argument)\s+['"` + "`" + `]?([A-Za-z][A-Za-z0-9_.-]{0,63})['"` + "`" + `]?\s+(?:is|has\s+been)\s+deprecated`),
-		regexp.MustCompile(`(?i)['"` + "`" + `]?([A-Za-z][A-Za-z0-9_.-]{0,63})['"` + "`" + `]?\s+is\s+not\s+supported\s+(?:for|with)\s+this\s+model`),
+		regexp.MustCompile(`(?i)['"` + "`" + `]?([A-Za-z][A-Za-z0-9_.-]{0,63})['"` + "`" + `]?\s+(?:is|are)\s+not\s+supported\s+(?:for|with|in)\b`),
 	}
+	// responsesEndpointSuggestionPattern recognizes an upstream 400 that tells
+	// the caller to move the request to the Responses endpoint, such as Azure's
+	// "To use function tools, use /v1/responses". The verb must sit directly
+	// before the endpoint so "use /v1/chat/completions instead of /v1/responses"
+	// does not match.
+	responsesEndpointSuggestionPattern = regexp.MustCompile(
+		`(?i)\buse\s+(?:the\s+)?(?:['"` + "`" + `]?/?v1/responses\b|responses\s+api\b)`,
+	)
 )
 
 type compatibilityReplacement struct {
@@ -396,6 +404,22 @@ func compatibilityParameterMatches(message string) [][]string {
 	return matches
 }
 
+// errorDemandsResponsesEndpoint reports whether an upstream 400 explicitly
+// directs the request to the Responses endpoint. The provider's own error text
+// is stronger evidence than the route's configured booleans, so the caller may
+// retry at /responses even when the route never claimed to support it.
+func errorDemandsResponsesEndpoint(body []byte) bool {
+	var envelope struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &envelope) != nil {
+		return false
+	}
+	return responsesEndpointSuggestionPattern.MatchString(envelope.Error.Message)
+}
+
 func unsupportedCompatibilityReplacement(body []byte, payload map[string]any) (compatibilityReplacement, bool) {
 	var envelope struct {
 		Error struct {
@@ -561,6 +585,38 @@ func (s *Server) rememberResponsesEndpointMissing(ctx context.Context, modelID s
 func (s *Server) forgetResponsesEndpointMissing(ctx context.Context, modelID string) {
 	if err := s.redis.Del(ctx, responsesMissingKey(modelID)).Err(); err != nil {
 		s.logger.Warn("responses endpoint cache reset failed", "model_id", modelID, "error", err)
+	}
+}
+
+func responsesPreferredKey(modelID string) string {
+	return "compatibility:prefer-responses:" + modelID
+}
+
+// responsesEndpointPreferred reports which routes' providers have rejected a
+// Chat Completions request by directing it to /responses. Later requests start
+// on the Responses translation instead of paying the same 400 again.
+func (s *Server) responsesEndpointPreferred(ctx context.Context, modelIDs []string) map[string]bool {
+	preferred := make(map[string]bool, len(modelIDs))
+	for _, modelID := range modelIDs {
+		if found, err := s.redis.Exists(ctx, responsesPreferredKey(modelID)).Result(); err == nil && found > 0 {
+			preferred[modelID] = true
+		}
+	}
+	return preferred
+}
+
+func (s *Server) rememberResponsesEndpointPreferred(ctx context.Context, modelID string) {
+	if err := s.redis.Set(ctx, responsesPreferredKey(modelID), "400", adaptiveCompatibilityTTL).Err(); err != nil {
+		s.logger.Warn("preferred responses cache write failed", "model_id", modelID, "error", err)
+	}
+}
+
+// forgetResponsesEndpointPreferred drops the learned preference so an edited or
+// re-probed route is planned from its own configuration again, mirroring
+// forgetResponsesEndpointMissing.
+func (s *Server) forgetResponsesEndpointPreferred(ctx context.Context, modelID string) {
+	if err := s.redis.Del(ctx, responsesPreferredKey(modelID)).Err(); err != nil {
+		s.logger.Warn("preferred responses cache reset failed", "model_id", modelID, "error", err)
 	}
 }
 

@@ -168,12 +168,61 @@ func TestNativeResponsesFallsBackAfterEndpointMissing(t *testing.T) {
 	}
 }
 
+// TestPreferredResponsesOutranksRouteConfiguration covers the opposite repair: a
+// provider that rejects Chat Completions and names /responses has said more about
+// the model than the route's own booleans ever did, so the preference is allowed
+// to send a chat-only route to the endpoint it never claimed to support.
+func TestPreferredResponsesOutranksRouteConfiguration(t *testing.T) {
+	chatOnly := routeRuntime{
+		Model:    ModelRoute{ID: "mdl_1", SupportsChat: true},
+		Provider: Provider{APIFormat: "openai"},
+	}
+	preferred := dispatchState{PreferNativeResponses: map[string]bool{"mdl_1": true}}
+	if !servesNativeResponses(chatOnly, preferred) || !prefersNativeResponses(chatOnly, preferred) {
+		t.Fatal("a provider's own instruction to use /responses was ignored")
+	}
+	// An observed 404 is evidence; a preference read out of prose is a guess. The
+	// pair must settle on Chat Completions rather than trade the request back and
+	// forth between two endpoints.
+	both := dispatchState{
+		PreferNativeResponses:      map[string]bool{"mdl_1": true},
+		NativeResponsesUnavailable: map[string]bool{"mdl_1": true},
+	}
+	if servesNativeResponses(chatOnly, both) || prefersNativeResponses(chatOnly, both) {
+		t.Fatal("a 404 at /responses lost to a preference inferred from an error message")
+	}
+	// The preference is per route, like the 404 it competes with.
+	sibling := routeRuntime{
+		Model:    ModelRoute{ID: "mdl_2", SupportsChat: true},
+		Provider: Provider{APIFormat: "openai"},
+	}
+	if servesNativeResponses(sibling, preferred) {
+		t.Fatal("one route's preference diverted another route in the pool")
+	}
+	// A route that already publishes native Responses is not "switched" by a
+	// preference: it was going there anyway.
+	native := routeRuntime{
+		Model:    ModelRoute{ID: "mdl_3", SupportsChat: true, SupportsResponses: true},
+		Provider: Provider{APIFormat: "openai"},
+	}
+	if !servesNativeResponses(native, dispatchState{}) {
+		t.Fatal("a native Responses route needed a preference to reach /responses")
+	}
+}
+
 func TestResponsesMissingKeyIsScopedToTheRoute(t *testing.T) {
 	if got := responsesMissingKey("mdl_1"); got != "compatibility:no-responses:mdl_1" {
 		t.Fatalf("responses cache key = %q", got)
 	}
 	if responsesMissingKey("mdl_1") == responsesMissingKey("mdl_2") {
 		t.Fatal("two routes share one responses cache key")
+	}
+	if got := responsesPreferredKey("mdl_1"); got != "compatibility:prefer-responses:mdl_1" {
+		t.Fatalf("preferred responses cache key = %q", got)
+	}
+	// The two facts are opposites, so they must never collide on one key.
+	if responsesPreferredKey("mdl_1") == responsesMissingKey("mdl_1") {
+		t.Fatal("the missing and preferred endpoint facts share one cache key")
 	}
 }
 

@@ -146,6 +146,19 @@ func TestUnsupportedCompatibilityParameters(t *testing.T) {
 			want: []string{"seed"},
 		},
 		{
+			// Azure Foundry blames the field in the plural and names the model, and
+			// the caller's tools are mentioned in the same breath. Only the parameter
+			// directly before "are not supported" may be learned: dropping `tools`
+			// would answer a tool call with prose.
+			name: "azure plural rejection names one parameter",
+			body: `{"error":{"message":"Function tools with reasoning_effort are not supported for gpt-5.6-sol in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'.","type":"invalid_request_error","param":null,"code":null}}`,
+			payload: map[string]any{
+				"model": "gpt-5.6-sol", "reasoning_effort": "medium",
+				"tools": []any{map[string]any{"type": "function"}},
+			},
+			want: []string{"reasoning_effort"},
+		},
+		{
 			name: "param requires unsupported signal",
 			body: `{"error":{"message":"thinking has an invalid value","param":"thinking","code":"invalid_value"}}`,
 			payload: map[string]any{
@@ -176,6 +189,53 @@ func TestUnsupportedCompatibilityParameters(t *testing.T) {
 			got := unsupportedCompatibilityParameters([]byte(test.body), test.payload)
 			if !reflect.DeepEqual(got, test.want) {
 				t.Fatalf("parameters = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
+// TestErrorDemandsResponsesEndpoint covers the signal that turns a dead-end 400
+// into a retry: a provider naming /responses is telling the gateway which
+// endpoint the request belongs on, and that is worth more than the route's own
+// configuration. The direction matters — a provider steering a request away from
+// /responses must not be read as an invitation to send one there.
+func TestErrorDemandsResponsesEndpoint(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{
+			name: "azure directs function tools to responses",
+			body: `{"error":{"message":"Function tools with reasoning_effort are not supported for gpt-5.6-sol in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'.","type":"invalid_request_error"}}`,
+			want: true,
+		},
+		{
+			name: "responses api named in prose",
+			body: `{"error":{"message":"This model is only available through the Responses API. Use the Responses API instead."}}`,
+			want: true,
+		},
+		{
+			name: "steered away from responses",
+			body: `{"error":{"message":"This model is not available in /v1/responses. Use /v1/chat/completions instead of /v1/responses."}}`,
+			want: false,
+		},
+		{
+			name: "unrelated rejection",
+			body: `{"error":{"message":"Unsupported parameter(s): reasoning_effort","code":"unsupported_parameter"}}`,
+			want: false,
+		},
+		{
+			name: "non json body",
+			body: `400 page not found`,
+			want: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := errorDemandsResponsesEndpoint([]byte(test.body)); got != test.want {
+				t.Fatalf("demands responses = %v, want %v", got, test.want)
 			}
 		})
 	}

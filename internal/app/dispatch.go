@@ -35,6 +35,10 @@ type dispatchState struct {
 	// endpoint rejects every model the same way, so the retry translates to Chat
 	// Completions instead of asking a second time.
 	NativeResponsesUnavailable map[string]bool
+	// PreferNativeResponses holds the model IDs whose provider rejected a Chat
+	// Completions request by naming /responses. An observed 404 always wins over
+	// this inferred preference, so a model in both maps is planned as Chat.
+	PreferNativeResponses map[string]bool
 }
 
 // upstreamPlan is one candidate's translated view of the public request.
@@ -50,6 +54,12 @@ type upstreamPlan struct {
 	TokenCost     int64
 	Removed       []string
 	Replaced      map[string]string
+	// SwitchedToResponses marks a plan that reached /responses only because the
+	// provider asked for it, so the answer can say so in a response header.
+	SwitchedToResponses bool
+	// ResponsesUnavailable carries the learned 404 into the attempt, which stops
+	// it from reading a Chat rejection as an invitation to try /responses again.
+	ResponsesUnavailable bool
 }
 
 // attemptOutcome reports what a single upstream attempt did. Done means the
@@ -78,6 +88,10 @@ type attemptOutcome struct {
 	// /responses endpoint, so every later plan for that model translates to Chat
 	// Completions.
 	NativeResponsesMissing bool
+	// NativeResponsesPreferred reports that the provider rejected this request at
+	// Chat Completions and named /responses, so every later plan for that model
+	// is translated up into the Responses endpoint instead.
+	NativeResponsesPreferred bool
 	// Compatibility marks that this attempt consumed a compatibility retry.
 	Compatibility bool
 }
@@ -90,7 +104,11 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 	if format == "" {
 		format = "openai"
 	}
-	plan := upstreamPlan{Format: format, Replaced: map[string]string{}}
+	plan := upstreamPlan{
+		Format:               format,
+		Replaced:             map[string]string{},
+		ResponsesUnavailable: state.NativeResponsesUnavailable[route.Model.ID],
+	}
 	payload := cloneMap(req.Public)
 	var err error
 
@@ -113,10 +131,13 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 		plan.Removed = appendUniqueStrings(plan.Removed, dropped...)
 		plan.Path = "/messages"
 		plan.Translated = true
-	case req.PublicMode == messageModeAnthropic && servesNativeResponses(route, state) && !route.Model.SupportsChat:
+	case req.PublicMode == messageModeAnthropic && servesNativeResponses(route, state) &&
+		(!route.Model.SupportsChat || prefersNativeResponses(route, state)):
 		// A route that publishes only Responses can still answer an Anthropic
 		// caller: the request crosses through Chat's shape into Responses, and the
-		// answer crosses back. Refusing here was the last protocol dead end.
+		// answer crosses back. Refusing here was the last protocol dead end. A
+		// chat-capable route arrives here once its provider has asked for
+		// /responses, because the Chat endpoint rejects the request outright.
 		chat, dropped, chatErr := translateAnthropicRequestToChat(payload)
 		if chatErr != nil {
 			return upstreamPlan{}, chatErr
@@ -129,6 +150,9 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 		plan.Removed = appendUniqueStrings(dropped, lost...)
 		plan.Path = "/responses"
 		plan.Translated = true
+		// Reaching this arm with a chat-capable route means the learned
+		// preference, not the route's own shape, chose the endpoint.
+		plan.SwitchedToResponses = route.Model.SupportsChat
 	case req.PublicMode == messageModeAnthropic:
 		var dropped []string
 		if payload, dropped, err = translateAnthropicRequestToChat(payload); err != nil {
@@ -139,6 +163,9 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 		plan.Translated = true
 	case req.PublicMode == messageModeResponses && servesNativeResponses(route, state):
 		plan.Path = "/responses"
+		// A route that never claimed Responses is here only because the provider
+		// asked for the endpoint, which spares this caller the Chat translation.
+		plan.SwitchedToResponses = !route.Model.SupportsResponses
 	case req.PublicMode == messageModeResponses:
 		var dropped []string
 		if payload, dropped, err = translateResponsesRequest(payload); err != nil {
@@ -147,9 +174,10 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 		plan.Removed = dropped
 		plan.Path = "/chat/completions"
 		plan.Translated = true
-	case !route.Model.SupportsChat && servesNativeResponses(route, state):
-		// The upstream serves only Responses, so a Chat caller's request is
-		// translated up into it rather than rejected as an unsupported endpoint.
+	case servesNativeResponses(route, state) && (!route.Model.SupportsChat || prefersNativeResponses(route, state)):
+		// The upstream serves only Responses, or it has rejected this model's Chat
+		// requests and named /responses, so a Chat caller's request is translated
+		// up into it rather than rejected as an unsupported endpoint.
 		var dropped []string
 		if payload, dropped, err = translateChatRequestToResponses(payload); err != nil {
 			return upstreamPlan{}, err
@@ -157,6 +185,7 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 		plan.Removed = dropped
 		plan.Path = "/responses"
 		plan.Translated = true
+		plan.SwitchedToResponses = route.Model.SupportsChat
 	default:
 		plan.Path = "/chat/completions"
 	}
@@ -200,9 +229,21 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 // servesNativeResponses reports whether a request may be sent to the provider's
 // own /responses endpoint. A route configured for native Responses against a
 // provider that has since answered 404 there is translated to Chat Completions
-// instead, because asking again can only fail the same way.
+// instead, because asking again can only fail the same way. A provider that
+// rejected Chat Completions by naming /responses counts as well: its own error
+// is better evidence than the route's unverified configuration.
 func servesNativeResponses(route routeRuntime, state dispatchState) bool {
-	return route.Model.SupportsResponses && !state.NativeResponsesUnavailable[route.Model.ID]
+	if state.NativeResponsesUnavailable[route.Model.ID] {
+		return false
+	}
+	return route.Model.SupportsResponses || state.PreferNativeResponses[route.Model.ID]
+}
+
+// prefersNativeResponses reports whether the provider asked for /responses for
+// this model. An observed 404 outranks the request, so a model in both maps is
+// planned as Chat Completions.
+func prefersNativeResponses(route routeRuntime, state dispatchState) bool {
+	return state.PreferNativeResponses[route.Model.ID] && !state.NativeResponsesUnavailable[route.Model.ID]
 }
 
 // wireEndpoint names the upstream endpoint for compatibility learning, which is

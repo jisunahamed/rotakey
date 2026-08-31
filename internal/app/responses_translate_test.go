@@ -117,6 +117,76 @@ func TestNativeResponsesUnavailableFallsBackToChat(t *testing.T) {
 	}
 }
 
+// TestPreferredResponsesPlansEveryPublicMode is the answer to a provider that
+// rejects Chat Completions and names /responses: whichever protocol the caller
+// spoke, the next plan goes to the endpoint the provider asked for, and the
+// switch is reported so an operator can see why the route moved. The route here
+// claims only Chat, which is exactly the configuration the provider contradicted.
+func TestPreferredResponsesPlansEveryPublicMode(t *testing.T) {
+	server := &Server{redis: unreachableRedis()}
+	defer server.redis.Close()
+	route := routeRuntime{
+		Provider: Provider{APIFormat: "openai"},
+		Model:    ModelRoute{ID: "mdl_4", SupportsChat: true, UpstreamModel: "gpt-upstream", DefaultMaxOutputTokens: 256},
+	}
+	preferred := dispatchState{PreferNativeResponses: map[string]bool{"mdl_4": true}}
+
+	modes := map[string]map[string]any{
+		messageModeChat: {
+			"model":    "public/alias",
+			"messages": []any{map[string]any{"role": "user", "content": "Hello"}},
+		},
+		messageModeResponses: {"model": "public/alias", "input": "Hello"},
+		messageModeAnthropic: {
+			"model": "public/alias", "max_tokens": json.Number("64"),
+			"messages": []any{map[string]any{"role": "user", "content": "Hello"}},
+		},
+	}
+	for mode, public := range modes {
+		t.Run(mode, func(t *testing.T) {
+			req := dispatchRequest{PublicMode: mode, Alias: "public/alias", Public: public, Raw: mustJSON(public)}
+			plan, err := server.buildPlan(context.Background(), req, route, preferred)
+			if err != nil {
+				t.Fatalf("preferred Responses plan failed: %v", err)
+			}
+			if plan.Path != "/responses" || plan.wireEndpoint() != "responses" {
+				t.Fatalf("plan = %#v", plan)
+			}
+			if !plan.SwitchedToResponses {
+				t.Fatal("the endpoint switch was not reported to the caller")
+			}
+			// Every mode must arrive in the Responses shape, whether it was already
+			// there or had to be translated on the way.
+			if plan.Payload["input"] == nil {
+				t.Fatalf("payload is not a Responses request: %#v", plan.Payload)
+			}
+			if _, leaked := plan.Payload["messages"]; leaked {
+				t.Fatalf("Chat messages reached a Responses upstream: %#v", plan.Payload)
+			}
+
+			// A later 404 at /responses retires the preference, and the same request
+			// must fall back to Chat rather than bounce between the two endpoints.
+			both := dispatchState{
+				PreferNativeResponses:      map[string]bool{"mdl_4": true},
+				NativeResponsesUnavailable: map[string]bool{"mdl_4": true},
+			}
+			fallback, err := server.buildPlan(context.Background(), req, route, both)
+			if err != nil {
+				t.Fatalf("fallback plan failed: %v", err)
+			}
+			if fallback.Path != "/chat/completions" {
+				t.Fatalf("fallback plan = %#v", fallback)
+			}
+			if fallback.SwitchedToResponses {
+				t.Fatal("a Chat plan claimed it had switched to Responses")
+			}
+			if !fallback.ResponsesUnavailable {
+				t.Fatal("the learned 404 did not reach the attempt, which would read the next rejection as an invitation to retry")
+			}
+		})
+	}
+}
+
 func TestTranslateChatRequestToResponsesCoversToolsAndStructuredOutput(t *testing.T) {
 	translated, dropped, err := translateChatRequestToResponses(map[string]any{
 		"model": "gpt-upstream",

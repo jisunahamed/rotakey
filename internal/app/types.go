@@ -163,6 +163,9 @@ type AttemptRecord struct {
 	DurationMS         int64             `json:"duration_ms"`
 	RemovedParameters  []string          `json:"removed_parameters,omitempty"`
 	ReplacedParameters map[string]string `json:"replaced_parameters,omitempty"`
+	// SwitchedEndpoint names the upstream endpoint the retry moved to, so a
+	// repaired request reads as plainly as a removed or replaced parameter.
+	SwitchedEndpoint string `json:"switched_endpoint,omitempty"`
 }
 
 type RoutingDecision struct {

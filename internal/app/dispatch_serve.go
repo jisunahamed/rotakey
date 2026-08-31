@@ -220,12 +220,16 @@ func (s *Server) servePooled(
 		return
 	}
 
-	state := dispatchState{Replaced: map[string]string{}, NativeResponsesUnavailable: map[string]bool{}}
-	if req.PublicMode == messageModeResponses {
-		// A provider that answered 404 at /responses within the last day is not
-		// asked again: the first request already established that the endpoint is
-		// absent, so every later one starts on the Chat translation.
-		state.NativeResponsesUnavailable = s.responsesEndpointMissing(r.Context(), routeModelIDs(routes))
+	// Both learned endpoint facts are loaded for every public protocol. A provider
+	// that answered 404 at /responses within the last day is not asked again, and
+	// one that rejected Chat Completions by naming /responses starts there instead
+	// of paying the same 400 over again. Loading the 404 unconditionally is what
+	// keeps the two from trading a request back and forth across requests.
+	modelIDs := routeModelIDs(routes)
+	state := dispatchState{
+		Replaced:                   map[string]string{},
+		NativeResponsesUnavailable: s.responsesEndpointMissing(r.Context(), modelIDs),
+		PreferNativeResponses:      s.responsesEndpointPreferred(r.Context(), modelIDs),
 	}
 	plans, err := s.buildPoolPlans(r.Context(), req, candidates, state)
 	if err != nil {
@@ -334,17 +338,28 @@ func (s *Server) servePooled(
 		}
 		result.ErrorCode, result.ErrorMessage = outcome.ErrorCode, outcome.ErrorMessage
 
-		if len(outcome.LearnedStrip) > 0 || len(outcome.LearnedReplace) > 0 || outcome.NativeResponsesMissing {
+		if len(outcome.LearnedStrip) > 0 || len(outcome.LearnedReplace) > 0 ||
+			outcome.NativeResponsesMissing || outcome.NativeResponsesPreferred {
 			state.Removed = appendUniqueStrings(state.Removed, outcome.LearnedStrip...)
 			for from, to := range outcome.LearnedReplace {
 				state.Replaced[from] = to
 			}
 			if outcome.NativeResponsesMissing {
 				state.NativeResponsesUnavailable[candidate.Route.Model.ID] = true
+				// A 404 seen at /responses is worth more than a preference inferred
+				// from prose, so it also retires the preference. Without this the two
+				// signals would send the next request back to the endpoint that has
+				// already proved absent.
+				delete(state.PreferNativeResponses, candidate.Route.Model.ID)
+				s.forgetResponsesEndpointPreferred(r.Context(), candidate.Route.Model.ID)
 				s.rememberResponsesEndpointMissing(r.Context(), candidate.Route.Model.ID)
 				s.logger.Info("provider has no Responses endpoint; translating to Chat Completions",
 					"request_id", req.RequestID, "model", candidate.Route.Model.PublicAlias,
 					"provider", candidate.Route.Provider.Name)
+			}
+			if outcome.NativeResponsesPreferred && !state.NativeResponsesUnavailable[candidate.Route.Model.ID] {
+				state.PreferNativeResponses[candidate.Route.Model.ID] = true
+				s.rememberResponsesEndpointPreferred(r.Context(), candidate.Route.Model.ID)
 			}
 			rebuilt, rebuildErr := s.buildPoolPlans(r.Context(), req, candidates, state)
 			if rebuildErr != nil {
@@ -515,27 +530,63 @@ func (s *Server) runAttempt(
 	record.StatusCode = response.StatusCode
 	upstreamRequestID := valueOr(response.Header.Get("Request-Id"), response.Header.Get("X-Request-Id"))
 
-	if response.StatusCode == http.StatusBadRequest && allowCompatibility {
+	if response.StatusCode == http.StatusBadRequest {
 		errorBody, wasTruncated, readErr := boundedBody(response.Body, minInt64(s.cfg.MaxResponseBytes, 2<<20))
 		_ = response.Body.Close()
 		_ = s.limiter.AdjustTokens(r.Context(), reserved, 0)
 		record.Error = upstreamErrorCode(errorBody)
 		record.ErrorMessage = upstreamErrorMessage(errorBody, credential.Secret)
+		// The signals are read even when the compatibility budget is spent. A 400
+		// the gateway can name is a fault in the request's shape rather than in the
+		// key, and the strike further down would otherwise punish a healthy
+		// credential for a rejection no rotation can avoid.
+		var (
+			switchEndpoint bool
+			replacement    compatibilityReplacement
+			hasReplacement bool
+			parameters     []string
+		)
 		if readErr == nil && !wasTruncated {
-			if repair, ok := unsupportedCompatibilityReplacement(errorBody, plan.Payload); ok {
+			// A provider that names /responses in its rejection is answered by moving
+			// the request there, before any parameter is considered for removal:
+			// switching endpoint keeps the tools the caller asked for, while stripping
+			// the field the provider blamed would silently drop them.
+			switchEndpoint = plan.Path == "/chat/completions" && !plan.ResponsesUnavailable &&
+				errorDemandsResponsesEndpoint(errorBody)
+			if !switchEndpoint {
+				if replacement, hasReplacement = unsupportedCompatibilityReplacement(errorBody, plan.Payload); !hasReplacement {
+					parameters = unsupportedCompatibilityParameters(errorBody, plan.Payload)
+				}
+			}
+		}
+		if allowCompatibility {
+			switch {
+			case switchEndpoint:
+				record.Error = "responses_endpoint_preferred"
+				record.ErrorMessage = "Provider requires the Responses endpoint for this request; retried at /responses."
 				record.Retryable = true
-				record.ReplacedParameters = map[string]string{repair.From: repair.To}
-				s.rememberCompatibilityReplacement(r.Context(), candidate.Route.Model.ID, plan.wireEndpoint(), repair)
-				s.logger.Info("learned upstream parameter replacement",
+				record.SwitchedEndpoint = "responses"
+				s.logger.Info("provider directed this request to the Responses endpoint",
 					"request_id", req.RequestID, "model", candidate.Route.Model.PublicAlias,
-					"provider", candidate.Route.Provider.Name, "from", repair.From, "to", repair.To)
+					"provider", candidate.Route.Provider.Name)
 				return attemptOutcome{
 					Record: record, Status: response.StatusCode,
 					UpstreamRequestID: upstreamRequestID, Compatibility: true, ResetSkips: true,
-					LearnedReplace: map[string]string{repair.From: repair.To},
+					NativeResponsesPreferred: true,
 				}
-			}
-			if parameters := unsupportedCompatibilityParameters(errorBody, plan.Payload); len(parameters) > 0 {
+			case hasReplacement:
+				record.Retryable = true
+				record.ReplacedParameters = map[string]string{replacement.From: replacement.To}
+				s.rememberCompatibilityReplacement(r.Context(), candidate.Route.Model.ID, plan.wireEndpoint(), replacement)
+				s.logger.Info("learned upstream parameter replacement",
+					"request_id", req.RequestID, "model", candidate.Route.Model.PublicAlias,
+					"provider", candidate.Route.Provider.Name, "from", replacement.From, "to", replacement.To)
+				return attemptOutcome{
+					Record: record, Status: response.StatusCode,
+					UpstreamRequestID: upstreamRequestID, Compatibility: true, ResetSkips: true,
+					LearnedReplace: map[string]string{replacement.From: replacement.To},
+				}
+			case len(parameters) > 0:
 				record.Retryable = true
 				record.RemovedParameters = parameters
 				s.rememberCompatibilityParameters(r.Context(), candidate.Route.Model.ID, parameters)
@@ -549,7 +600,9 @@ func (s *Server) runAttempt(
 				}
 			}
 		}
-		s.markUpstreamFailure(r.Context(), credential.ID, response.StatusCode, response.Header, errorBody)
+		if !switchEndpoint && !hasReplacement && len(parameters) == 0 {
+			s.markUpstreamFailure(r.Context(), credential.ID, response.StatusCode, response.Header, errorBody)
+		}
 		return s.writeAttemptFailure(w, r, req, plan, response, errorBody, wasTruncated, record, credential, upstreamRequestID)
 	}
 
@@ -630,13 +683,17 @@ func (s *Server) runAttempt(
 }
 
 // setCompatibilityHeaders tells the caller which parameters the gateway had to
-// drop or rename to make the request acceptable upstream.
+// drop or rename to make the request acceptable upstream, and whether it had to
+// send the request to a different endpoint than the route publishes.
 func (s *Server) setCompatibilityHeaders(w http.ResponseWriter, plan upstreamPlan) {
 	if len(plan.Removed) > 0 {
 		w.Header().Set("X-Rotakey-Removed-Parameters", strings.Join(plan.Removed, ","))
 	}
 	if len(plan.Replaced) > 0 {
 		w.Header().Set("X-Rotakey-Replaced-Parameters", formatCompatibilityReplacements(plan.Replaced))
+	}
+	if plan.SwitchedToResponses {
+		w.Header().Set("X-Rotakey-Switched-Endpoint", "responses")
 	}
 }
 
