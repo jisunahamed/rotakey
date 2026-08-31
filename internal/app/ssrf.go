@@ -19,7 +19,14 @@ func validateProviderURL(raw string, allowPrivate bool) (*url.URL, error) {
 	if parsed.Scheme != "https" && !(allowPrivate && parsed.Scheme == "http") {
 		return nil, errors.New("base URL must use HTTPS; HTTP is allowed only with private-network access")
 	}
-	if parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	// A query string is the one rejection an operator hits by following provider
+	// documentation rather than by mistake: Azure's portal shows a "Target URI"
+	// ending in ?api-version=..., and the generic message left no clue that the
+	// query is the part to delete.
+	if parsed.RawQuery != "" || parsed.ForceQuery {
+		return nil, errors.New("base URL must not contain a query string; remove the part from \"?\" onwards, such as ?api-version=")
+	}
+	if parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" {
 		return nil, errors.New("base URL must contain only scheme, host, optional port, and path")
 	}
 	parsed.Path = strings.TrimRight(parsed.Path, "/")

@@ -80,6 +80,11 @@ func inspectProviderSecretWithProtocol(ctx context.Context, provider Provider, s
 		case http.StatusForbidden:
 			result.Warning = "API key does not have permission to list models (HTTP 403)."
 		default:
+			if foundryCatalogSoftPass(provider, response.StatusCode) {
+				result.Valid = true
+				result.Warning = fmt.Sprintf("Foundry publishes no model catalog (HTTP %d). Add each model by its deployment name; Rotakey validates it with Messages before use.", response.StatusCode)
+				return result
+			}
 			if provider.APIFormat == "anthropic" && (response.StatusCode == http.StatusUseProxy || response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusMethodNotAllowed || response.StatusCode/100 == 3) {
 				result.Valid = true
 				result.Warning = fmt.Sprintf("Model catalog is unavailable (HTTP %d). Add a model ID manually; Rotakey will validate it with Messages before use.", response.StatusCode)
@@ -200,6 +205,32 @@ func isGeminiOpenAIProvider(provider Provider) bool {
 		return false
 	}
 	return strings.TrimRight(parsed.Path, "/") == "/v1beta/openai"
+}
+
+// isFoundryAnthropicProvider recognises Azure AI Foundry's native Claude
+// surface. Foundry serves Messages at /anthropic/v1 but publishes no Models API
+// at all, which is a different situation from a catalog that happens to be
+// unreachable, and it is why the key check cannot be a catalog check here.
+func isFoundryAnthropicProvider(provider Provider) bool {
+	if provider.APIFormat != "anthropic" {
+		return false
+	}
+	parsed, err := url.Parse(strings.TrimSpace(provider.BaseURL))
+	if err != nil || !strings.HasSuffix(strings.ToLower(parsed.Hostname()), ".services.ai.azure.com") {
+		return false
+	}
+	return strings.TrimRight(parsed.Path, "/") == "/anthropic/v1"
+}
+
+// foundryCatalogSoftPass reports whether a missing Foundry catalog should leave
+// the key usable. Every status is forgiven except the two that name the key
+// itself: an endpoint that does not exist says nothing about the credential,
+// while 401 and 403 say everything.
+func foundryCatalogSoftPass(provider Provider, status int) bool {
+	if !isFoundryAnthropicProvider(provider) {
+		return false
+	}
+	return status != http.StatusUnauthorized && status != http.StatusForbidden
 }
 
 func isNVIDIAOpenAIProvider(provider Provider) bool {

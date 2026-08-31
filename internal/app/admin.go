@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -344,7 +345,43 @@ func normalizeProviderCompatibilityURL(rawURL, apiFormat string) string {
 			return parsed.String()
 		}
 	}
+	// Azure hands out a "Target URI" rather than a base URL: it names the exact
+	// endpoint and carries an ?api-version= query that a base URL may not have.
+	// Pasting it produced a base that appended a second /messages and 404ed on
+	// every request, so the endpoint and the query are trimmed back to the root
+	// the deployment actually serves.
+	if root, ok := azureCompatibilityRoot(host, path, apiFormat); ok {
+		parsed.Path = root
+		parsed.RawPath = ""
+		parsed.RawQuery = ""
+		parsed.Fragment = ""
+		return parsed.String()
+	}
 	return rawURL
+}
+
+// azureCompatibilityRoot maps an Azure AI Foundry or Azure OpenAI endpoint path
+// to the base URL Rotakey appends its own paths to. Only the endpoints the
+// gateway itself calls are recognised, so an unfamiliar path is left alone
+// rather than guessed at.
+func azureCompatibilityRoot(host, path, apiFormat string) (string, bool) {
+	if !strings.HasSuffix(host, ".services.ai.azure.com") && !strings.HasSuffix(host, ".openai.azure.com") {
+		return "", false
+	}
+	roots := map[string][]string{
+		// Foundry serves Claude natively at /anthropic/v1, with no Models API.
+		"anthropic": {"", "/anthropic", "/anthropic/v1", "/anthropic/v1/messages", "/anthropic/v1/models"},
+		// Azure's v1 OpenAI surface needs no api-version and serves all three paths.
+		"openai": {"", "/openai", "/openai/v1", "/openai/v1/models", "/openai/v1/chat/completions", "/openai/v1/responses"},
+	}
+	prefix := map[string]string{"anthropic": "/anthropic/v1", "openai": "/openai/v1"}[apiFormat]
+	if prefix == "" {
+		return "", false
+	}
+	if slices.Contains(roots[apiFormat], path) {
+		return prefix, true
+	}
+	return "", false
 }
 
 func providerSlugFromName(name string) string {
@@ -1512,9 +1549,19 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if input.DefaultAnthropicProviderID != "" {
-		var valid bool
-		if err := s.db.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM providers WHERE id=$1 AND api_format='anthropic' AND enabled=TRUE)`, input.DefaultAnthropicProviderID).Scan(&valid); err != nil || !valid {
+		var baseURL string
+		if err := s.db.QueryRow(r.Context(),
+			`SELECT base_url FROM providers WHERE id=$1 AND api_format='anthropic' AND enabled=TRUE`,
+			input.DefaultAnthropicProviderID).Scan(&baseURL); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_anthropic_provider", "Choose an enabled Anthropic-compatible provider.")
+			return
+		}
+		// Files and Batches are Anthropic's own APIs. Azure Foundry serves Messages
+		// and nothing else, so a Foundry provider holding this setting would answer
+		// every upload with a 404 that reads like a fault in the gateway.
+		if isFoundryAnthropicProvider(Provider{APIFormat: "anthropic", BaseURL: baseURL}) {
+			writeError(w, http.StatusBadRequest, "invalid_anthropic_provider",
+				"Azure Foundry has no Files or Batches API. Choose a provider that serves Anthropic's own endpoints.")
 			return
 		}
 	}

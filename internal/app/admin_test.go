@@ -95,6 +95,56 @@ func TestNormalizeOfficialProviderCompatibilityURLs(t *testing.T) {
 	}
 }
 
+// TestNormalizeAzureFoundryCompatibilityURLs covers what an operator actually
+// pastes: Azure's portal shows a "Target URI" naming the exact endpoint and
+// carrying an ?api-version= query. Left alone it produced a base URL that
+// appended a second /messages and 404ed on every request.
+func TestNormalizeAzureFoundryCompatibilityURLs(t *testing.T) {
+	const foundry = "https://my-resource.services.ai.azure.com/anthropic/v1"
+	const azureOpenAI = "https://my-resource.openai.azure.com/openai/v1"
+	tests := []struct {
+		name, input, protocol, want string
+	}{
+		{"foundry resource root", "https://my-resource.services.ai.azure.com", "anthropic", foundry},
+		{"foundry anthropic prefix", "https://my-resource.services.ai.azure.com/anthropic", "anthropic", foundry},
+		{"foundry base with slash", "https://my-resource.services.ai.azure.com/anthropic/v1/", "anthropic", foundry},
+		{"foundry target uri", "https://my-resource.services.ai.azure.com/anthropic/v1/messages?api-version=2024-10-21", "anthropic", foundry},
+		{"azure openai root", "https://my-resource.openai.azure.com", "openai", azureOpenAI},
+		{"azure openai chat endpoint", "https://my-resource.openai.azure.com/openai/v1/chat/completions", "openai", azureOpenAI},
+		{"azure openai responses endpoint", "https://my-resource.openai.azure.com/openai/v1/responses?api-version=preview", "openai", azureOpenAI},
+		// The protocols do not borrow each other's prefix, and an unfamiliar path
+		// is left exactly as typed rather than guessed at.
+		{"foundry anthropic path under openai format", "https://my-resource.services.ai.azure.com/anthropic/v1", "openai", "https://my-resource.services.ai.azure.com/anthropic/v1"},
+		{"unknown azure path", "https://my-resource.services.ai.azure.com/models/chat", "anthropic", "https://my-resource.services.ai.azure.com/models/chat"},
+		{"unrelated host", "https://example.com/anthropic/v1/messages?api-version=1", "anthropic", "https://example.com/anthropic/v1/messages?api-version=1"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := normalizeProviderCompatibilityURL(test.input, test.protocol); got != test.want {
+				t.Fatalf("normalizeProviderCompatibilityURL(%q, %q) = %q, want %q", test.input, test.protocol, got, test.want)
+			}
+		})
+	}
+}
+
+// TestValidateProviderURLNamesTheQueryString guards the message an operator sees
+// when a pasted Target URI is rejected: the generic "scheme, host, port, path"
+// wording never said which part to delete.
+func TestValidateProviderURLNamesTheQueryString(t *testing.T) {
+	_, err := validateProviderURL("https://my-resource.services.ai.azure.com/anthropic/v1?api-version=2024-10-21", false)
+	if err == nil {
+		t.Fatal("a base URL with a query string was accepted")
+	}
+	if !strings.Contains(err.Error(), "query string") || !strings.Contains(err.Error(), "api-version") {
+		t.Fatalf("query string rejection = %q", err)
+	}
+	// The other malformed-URL rejections keep their own wording.
+	if _, err := validateProviderURL("https://user:pass@example.com/v1", false); err == nil ||
+		strings.Contains(err.Error(), "query string") {
+		t.Fatalf("userinfo rejection = %v", err)
+	}
+}
+
 func TestProviderJSONIncludesEmptyCollections(t *testing.T) {
 	raw, err := json.Marshal(Provider{
 		Models:      []ModelRoute{},

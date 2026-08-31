@@ -405,3 +405,93 @@ func TestProbeSkipsResponsesCheckForChatOnlyRoutes(t *testing.T) {
 		t.Fatal("a chat-only route gained native Responses")
 	}
 }
+
+// TestFoundryAnthropicProviderIsRecognised pins the narrow shape that earns the
+// catalog exemption. Foundry publishes no Models API at all, so its keys were
+// being rejected for a catalog that was never going to exist — but the exemption
+// must not spread to hosts that do publish one.
+func TestFoundryAnthropicProviderIsRecognised(t *testing.T) {
+	foundry := Provider{APIFormat: "anthropic", BaseURL: "https://my-resource.services.ai.azure.com/anthropic/v1"}
+	if !isFoundryAnthropicProvider(foundry) {
+		t.Fatal("a Foundry Claude provider was not recognised")
+	}
+	for name, provider := range map[string]Provider{
+		"openai format on the same host": {APIFormat: "openai", BaseURL: "https://my-resource.services.ai.azure.com/anthropic/v1"},
+		"anthropic proper":               {APIFormat: "anthropic", BaseURL: "https://api.anthropic.com/v1"},
+		"foundry with another path":      {APIFormat: "anthropic", BaseURL: "https://my-resource.services.ai.azure.com/v1"},
+		"lookalike host":                 {APIFormat: "anthropic", BaseURL: "https://services.ai.azure.com.example.com/anthropic/v1"},
+		"unparseable":                    {APIFormat: "anthropic", BaseURL: "://"},
+	} {
+		if isFoundryAnthropicProvider(provider) {
+			t.Fatalf("%s was treated as Foundry", name)
+		}
+	}
+}
+
+// TestFoundryCatalogSoftPass draws the line between "this endpoint does not
+// exist" and "this key is not welcome". Only the second may fail the key.
+func TestFoundryCatalogSoftPass(t *testing.T) {
+	foundry := Provider{APIFormat: "anthropic", BaseURL: "https://my-resource.services.ai.azure.com/anthropic/v1"}
+	for _, status := range []int{http.StatusBadRequest, http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusInternalServerError} {
+		if !foundryCatalogSoftPass(foundry, status) {
+			t.Fatalf("HTTP %d failed a Foundry key over a catalog Foundry does not publish", status)
+		}
+	}
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		if foundryCatalogSoftPass(foundry, status) {
+			t.Fatalf("HTTP %d let a rejected key through", status)
+		}
+	}
+	if foundryCatalogSoftPass(Provider{APIFormat: "anthropic", BaseURL: "https://api.anthropic.com/v1"}, http.StatusNotFound) {
+		t.Fatal("a non-Foundry provider borrowed the catalog exemption")
+	}
+}
+
+// TestFoundryMessagesProbeUsesTheDeploymentName is the check that closes the
+// loop for a Foundry route: with no catalog to pick from, the operator types the
+// deployment name, and the probe must send exactly that to /messages with the
+// headers Foundry's Anthropic surface expects.
+func TestFoundryMessagesProbeUsesTheDeploymentName(t *testing.T) {
+	var (
+		sawPath    string
+		sawModel   any
+		sawKey     string
+		sawVersion string
+	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawPath = r.URL.Path
+		sawKey = r.Header.Get("X-Api-Key")
+		sawVersion = r.Header.Get("Anthropic-Version")
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		sawModel = payload["model"]
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"type":"message","role":"assistant","content":[{"type":"text","text":"a"}]}`))
+	}))
+	defer upstream.Close()
+
+	input := modelInput{UpstreamModel: "my-claude-deployment", SupportsMessages: true}
+	status, profile, _, _, err := probeProviderModelWithSecret(context.Background(), Provider{
+		BaseURL: upstream.URL + "/anthropic/v1", APIFormat: "anthropic", AuthHeader: "X-Api-Key",
+		TimeoutSeconds: 60, AllowPrivateNetwork: true,
+	}, &input, []byte("foundry-key"))
+	if err != nil || status != "probe_verified" {
+		t.Fatalf("probe = %q, err = %v", status, err)
+	}
+	if sawPath != "/anthropic/v1/messages" {
+		t.Fatalf("probe path = %q", sawPath)
+	}
+	if sawModel != "my-claude-deployment" {
+		t.Fatalf("probed model = %#v, want the deployment name", sawModel)
+	}
+	// Foundry authenticates the Anthropic surface with x-api-key, not a bearer
+	// token, and requires the version header Rotakey defaults to.
+	if sawKey != "foundry-key" || sawVersion != "2023-06-01" {
+		t.Fatalf("probe headers: x-api-key=%q anthropic-version=%q", sawKey, sawVersion)
+	}
+	if profile["messages"] != "native" {
+		t.Fatalf("capability profile messages = %q", profile["messages"])
+	}
+}
