@@ -126,6 +126,8 @@ Before response headers/body begin, Rotakey can try every other eligible key for
 
 If a provider returns HTTP 400 and explicitly says that a safe optional field is unsupported or deprecated for the selected model, Rotakey removes that field and retries before returning an error. For example, a response saying `` `temperature` is deprecated for this model `` is repaired automatically. The successful response includes `X-Rotakey-Removed-Parameters`, the failed and repaired attempts remain visible in Request logs, and the model-specific result is cached for 24 hours. Rotakey never auto-removes core semantic fields such as `model`, `messages`, `tools`, or `response_format`.
 
+A provider may also blame the endpoint rather than a field. Azure rejects a tool call that carries `reasoning_effort` with `To use function tools, use /v1/responses`. Rotakey reads that instruction, replays the request at the upstream Responses endpoint — translating from whichever protocol the client used — and returns `X-Rotakey-Switched-Endpoint: responses`. The endpoint is tried before any field is stripped, so the tools stay in the request; the attempt reads `switched to /responses` in Request logs. The preference is cached per model route for 24 hours, and a later `404` at `/responses` retires it immediately. A `400` recognized as a request-shape fault is not counted against the API key that carried it, because no rotation would avoid it.
+
 For cross-protocol streaming, Rotakey normalizes standard Anthropic text/tool events plus common compatible variants such as text carried in `content_block_start`, indented SSE data lines, and `thinking_delta`. A stream that completes without any text or tool output emits `upstream_stream_empty` instead of silently returning an empty success. Streaming usage is reconciled when supplied; otherwise output is conservatively estimated from emitted bytes.
 
 OpenAI clients use the `/v1` base URL. Anthropic SDKs and Claude Code use the host root because they append `/v1/messages` themselves. Both protocols use the same Rotakey gateway key.
@@ -259,3 +261,13 @@ See [Deployment](DEPLOYMENT.md) for Compose, domain, backup/restore, and GitHub 
 Gemini's native REST root (`https://generativelanguage.googleapis.com/v1beta`) is not an OpenAI-compatible base URL. Configure the provider as **OpenAI-compatible** and use `https://generativelanguage.googleapis.com/v1beta/openai/` with `Authorization: Bearer`. Rotakey recognizes the native root and normalizes it to the compatibility endpoint when saving. A successful authenticated OpenAI-format model catalog validates the provider; use the route probe for a capability check of an individual Gemini model.
 
 Gemini model catalogs can expose IDs like `models/gemini-2.5-flash`. You may keep a public alias such as `google/models/gemini-2.5-flash`; Rotakey still sends the upstream request with the Gemini OpenAI-compatible model ID that Google expects.
+
+## 13. Azure AI Foundry
+
+Foundry serves Claude deployments through Anthropic's own Messages API. Configure the provider as **Anthropic-compatible** with base URL `https://YOUR-RESOURCE.services.ai.azure.com/anthropic/v1`, header `x-api-key`, and version `2023-06-01` — the **Use Foundry Claude** button in the wizard fills all of that in. OpenAI deployments on the same resource use `https://YOUR-RESOURCE.services.ai.azure.com/openai/v1` as an **OpenAI-compatible** provider.
+
+The portal shows a **Target URI** rather than a base URL: it names the endpoint and ends in `?api-version=…`. Pasting it whole would make Rotakey append a second `/messages` and `404` on every request, so the wizard offers the base URL the resource actually serves, and saving normalizes the Azure endpoint and query away. A base URL is rejected outright if it still carries a query string.
+
+Foundry publishes no model catalog, so the key check cannot list models and instead reports that the key was accepted. Add each model manually by its **deployment name** — the name you gave it in Foundry, not the vendor's name for the model — and Rotakey validates the route with a minimal Messages probe. A key is still marked invalid on `401` or `403`.
+
+Foundry serves neither the Files nor the Batches API, so a Foundry provider cannot be the **default Anthropic resource provider** in Settings; that setting needs a provider serving Anthropic's own endpoints. Foundry options are greyed out there.

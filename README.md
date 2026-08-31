@@ -126,7 +126,7 @@ Providers, Model routes, and Request logs use the same dense resource/inspector 
 
 In **Providers → Add provider**:
 
-1. Choose **OpenAI-compatible** or **Anthropic-compatible**, then enter the provider base URL. Use the official quick setup buttons for OpenAI or Anthropic; Rotakey also normalizes their root, `/models`, and inference endpoint URLs to `/v1`. The Anthropic setup uses `x-api-key` and `anthropic-version: 2023-06-01`.
+1. Choose **OpenAI-compatible** or **Anthropic-compatible**, then enter the provider base URL. Use the official quick setup buttons for OpenAI or Anthropic; Rotakey also normalizes their root, `/models`, and inference endpoint URLs to `/v1`. The Anthropic setup uses `x-api-key` and `anthropic-version: 2023-06-01`. **Use Foundry Claude** fills in the Azure AI Foundry contract, which the [operator guide](docs/OPERATOR-GUIDE.md) describes in full.
 2. Enter API keys in separate fields. Use **Add another API key** for more keys, and optionally mark one key as **Primary**.
 3. Choose **Check keys & load models**. Rotakey loads the authenticated upstream `/models` catalog before any route is created. Official OpenAI and Anthropic catalogs validate the key directly; custom compatibility providers also receive a one-token protocol check. If an Anthropic-compatible catalog returns `305`, `404`, `405`, or a non-standard response, add the model ID manually; Rotakey validates manually created routes with a minimal Messages probe.
 4. Select the models to expose and edit their globally unique public aliases, such as `groq/llama-3.3-70b`.
@@ -222,6 +222,8 @@ Some OpenAI-compatible providers reject otherwise common top-level request field
 Adaptive removal is intentionally limited to an allowlist of optional behavior, sampling, telemetry, and stream-hint fields. Core request fields and arbitrary parameters are never silently removed. For a permanent or provider-specific override, edit a model route and add a field under **Remove unsupported request fields**.
 
 When an upstream explicitly recommends an equivalent output-limit field, Rotakey preserves the value and learns the model-specific replacement—for example, `max_tokens → max_completion_tokens`. Safe replacements appear in routing attempts and `X-Rotakey-Replaced-Parameters`; arbitrary parameter renames are never inferred.
+
+Some providers reject a request for the endpoint it arrived on rather than for a field it carried. Azure answers a tool call that also sets `reasoning_effort` with a `400` saying to use `/v1/responses` instead. Rotakey reads that instruction, replays the request at the upstream Responses endpoint—translating from whichever protocol the client used—and marks the reply with `X-Rotakey-Switched-Endpoint: responses`. Switching endpoint is attempted before any field is removed, so the tools the caller asked for survive the repair. The preference is cached per model route for 24 hours; an upstream that later answers `404` at `/responses` retires it at once and the route returns to Chat Completions. A `400` Rotakey can name this way is a fault in the request's shape rather than in the key, so it no longer counts a failure against the credential that carried it.
 
 ## Responses compatibility
 
