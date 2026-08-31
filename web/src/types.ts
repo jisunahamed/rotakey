@@ -282,6 +282,7 @@ export type RequestLog = {
     duration_ms: number;
     removed_parameters?: string[];
     replaced_parameters?: Record<string, string>;
+    switched_endpoint?: string;
   }>;
   routing_decisions: Array<{
     credential_id?: string;

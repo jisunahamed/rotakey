@@ -2437,6 +2437,14 @@ function ProviderWizard({ onClose, onComplete }: { onClose: () => void; onComple
                 setError("Provider name and base URL are required.");
                 return;
               }
+              // The Foundry preset fills in the shape of the base URL and leaves
+              // the resource name to the operator. Carrying the template forward
+              // would spend the whole key step failing to reach a host that does
+              // not exist.
+              if (provider.base_url.includes(FOUNDRY_RESOURCE_PLACEHOLDER)) {
+                setError(`Replace ${FOUNDRY_RESOURCE_PLACEHOLDER} in the base URL with your Foundry resource name.`);
+                return;
+              }
               // The balance field says what is wrong with it in place; the step
               // guard has to agree, or Continue carries an unusable figure into the
               // key step and the wizard fails at the very end instead.
@@ -2537,8 +2545,67 @@ function geminiCompatibilitySuggestion(baseURL: string, apiFormat: ProviderDraft
   return "";
 }
 
+const FOUNDRY_HOST_SUFFIX = ".services.ai.azure.com";
+const FOUNDRY_RESOURCE_PLACEHOLDER = "YOUR-RESOURCE";
+const FOUNDRY_CLAUDE_BASE_URL = `https://${FOUNDRY_RESOURCE_PLACEHOLDER}${FOUNDRY_HOST_SUFFIX}/anthropic/v1`;
+
+/** foundryAddressSuggestion reads an Azure Foundry address and reports the base
+ * URL and protocol that resource actually serves. The portal shows a "Target
+ * URI" naming one endpoint and carrying an ?api-version= query; saved as a base
+ * URL it appends a second /messages and every request 404s. Returns null for an
+ * address that is not Foundry's, or is already right. */
+function foundryAddressSuggestion(baseURL: string, apiFormat: ProviderDraft["api_format"]) {
+  const typed = baseURL.trim();
+  if (typed.includes(FOUNDRY_RESOURCE_PLACEHOLDER)) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(typed);
+  } catch {
+    // The regular URL validation remains responsible for incomplete input.
+    return null;
+  }
+  if (!parsed.hostname.toLowerCase().endsWith(FOUNDRY_HOST_SUFFIX)) return null;
+  const path = parsed.pathname.replace(/\/+$/, "").toLowerCase();
+  // A bare host says nothing about which family the operator wants, so the
+  // protocol already chosen decides; a path that names one overrules it.
+  const claude = path === "" ? apiFormat === "anthropic" : path.startsWith("/anthropic");
+  if (path !== "" && !claude && !path.startsWith("/openai")) return null;
+  const api_format: ProviderDraft["api_format"] = claude ? "anthropic" : "openai";
+  const base_url = `${parsed.origin}${claude ? "/anthropic/v1" : "/openai/v1"}`;
+  if (base_url.toLowerCase() === typed.toLowerCase() && api_format === apiFormat) return null;
+  return { base_url, api_format, protocolChanged: api_format !== apiFormat };
+}
+
+/** applyFoundryAddress accepts the suggestion. The authentication fields move
+ * only when the protocol does, so a header the operator typed for a working
+ * provider survives a base URL correction. */
+function applyFoundryAddress(value: ProviderDraft, suggestion: { base_url: string; api_format: ProviderDraft["api_format"] }): ProviderDraft {
+  if (suggestion.api_format === value.api_format) return { ...value, base_url: suggestion.base_url };
+  return {
+    ...value,
+    base_url: suggestion.base_url,
+    api_format: suggestion.api_format,
+    auth_header: suggestion.api_format === "anthropic" ? "X-Api-Key" : "Authorization",
+    auth_scheme: suggestion.api_format === "anthropic" ? "" : "Bearer",
+    anthropic_version: value.anthropic_version || "2023-06-01"
+  };
+}
+
+/** foundryHasNoResourceAPIs reports a provider that publishes only Messages.
+ * Foundry serves no Files or Batches endpoint, so naming one as the default
+ * Anthropic resource provider fails every upload. The backend refuses the save;
+ * this greys the option out before the operator gets that far. */
+function foundryHasNoResourceAPIs(provider: Provider) {
+  try {
+    return new URL(provider.base_url).hostname.toLowerCase().endsWith(FOUNDRY_HOST_SUFFIX);
+  } catch {
+    return false;
+  }
+}
+
 function ProviderFields({ value, onChange, existingKeys }: { value: ProviderDraft; onChange: (value: ProviderDraft) => void; existingKeys?: number }) {
   const geminiSuggestion = geminiCompatibilitySuggestion(value.base_url, value.api_format);
+  const foundrySuggestion = foundryAddressSuggestion(value.base_url, value.api_format);
   const balanceError = providerBalanceError(value.default_key_balance);
   const balanceErrorID = useId();
   const useOfficialPreset = (kind: "openai" | "anthropic") => onChange({
@@ -2550,12 +2617,34 @@ function ProviderFields({ value, onChange, existingKeys }: { value: ProviderDraf
     auth_scheme: kind === "openai" ? "Bearer" : "",
     anthropic_version: value.anthropic_version || "2023-06-01"
   });
+  // Foundry serves Claude through Anthropic's own Messages API, on a base URL
+  // built from the resource name. A resource already typed is kept and cleaned;
+  // otherwise the field carries the shape, with the name left to fill in.
+  const useFoundryPreset = () => {
+    let base_url = FOUNDRY_CLAUDE_BASE_URL;
+    try {
+      const parsed = new URL(value.base_url.trim());
+      if (parsed.hostname.toLowerCase().endsWith(FOUNDRY_HOST_SUFFIX)) base_url = `${parsed.origin}/anthropic/v1`;
+    } catch {
+      // An address that is not a URL yet simply gets the template.
+    }
+    onChange({
+      ...value,
+      name: value.name.trim() || "Foundry Claude",
+      base_url,
+      api_format: "anthropic",
+      auth_header: "X-Api-Key",
+      auth_scheme: "",
+      anthropic_version: value.anthropic_version || "2023-06-01"
+    });
+  };
   return (
     <div className="form-stack">
       <div className="button-row">
         <span className="muted">Official provider setup</span>
         <Button type="button" variant="quiet" onClick={() => useOfficialPreset("openai")}>Use OpenAI</Button>
         <Button type="button" variant="quiet" onClick={() => useOfficialPreset("anthropic")}>Use Anthropic</Button>
+        <Button type="button" variant="quiet" onClick={useFoundryPreset}>Use Foundry Claude</Button>
       </div>
       <label className="field"><span>API protocol <small>Controls authentication, validation and upstream request format</small></span><select value={value.api_format} onChange={(event) => {
         const api_format = event.target.value as "openai" | "anthropic";
@@ -2572,6 +2661,16 @@ function ProviderFields({ value, onChange, existingKeys }: { value: ProviderDraf
       {geminiSuggestion && <InlineNotice>
         Gemini native API URL detected. OpenAI compatibility requires <code>{geminiSuggestion}</code>{" "}
         <button type="button" className="button button--quiet" onClick={() => onChange({ ...value, base_url: geminiSuggestion })}>Use compatible URL</button>
+      </InlineNotice>}
+      {foundrySuggestion && <InlineNotice>
+        Azure Foundry address detected. This resource serves its deployments from <code>{foundrySuggestion.base_url}</code>
+        {foundrySuggestion.protocolChanged && `, through the ${foundrySuggestion.api_format === "anthropic" ? "Anthropic" : "OpenAI"}-compatible protocol`}.{" "}
+        <button type="button" className="button button--quiet" onClick={() => onChange(applyFoundryAddress(value, foundrySuggestion))}>
+          {foundrySuggestion.protocolChanged ? "Use Foundry base URL and protocol" : "Use Foundry base URL"}
+        </button>
+      </InlineNotice>}
+      {value.base_url.includes(FOUNDRY_RESOURCE_PLACEHOLDER) && <InlineNotice tone="warning">
+        Replace <code>{FOUNDRY_RESOURCE_PLACEHOLDER}</code> with your Foundry resource name — the first label of the Target URI the Azure portal shows beside the deployment.
       </InlineNotice>}
       <div className="field-pair">
         <label className="field"><span>Authentication header</span><input value={value.auth_header} onChange={(e) => onChange({ ...value, auth_header: e.target.value })} /></label>
@@ -2700,7 +2799,7 @@ function ModelFields({ value, onChange }: { value: ModelDraft; onChange: (value:
   return (
     <div className="form-stack">
       <label className="field"><span>Public alias <small>Applications put this in the model field</small></span><input required placeholder="groq/llama-3.3-70b" value={value.public_alias} onChange={(e) => onChange({ ...value, public_alias: e.target.value })} /></label>
-      <label className="field"><span>Upstream model ID</span><input required placeholder="llama-3.3-70b-versatile" value={value.upstream_model} onChange={(e) => onChange({ ...value, upstream_model: e.target.value })} /></label>
+      <label className="field"><span>Upstream model ID <small>On Azure and Foundry this is the deployment name, not the vendor's name for the model</small></span><input required placeholder="llama-3.3-70b-versatile" value={value.upstream_model} onChange={(e) => onChange({ ...value, upstream_model: e.target.value })} /></label>
       <div className="field-pair">
         <label className="field"><span>Default max output tokens</span><input type="number" min={1} value={value.default_max_output_tokens} onChange={(e) => onChange({ ...value, default_max_output_tokens: Number(e.target.value) })} /></label>
         <label className="field"><span>Tokenizer profile</span><select value={value.tokenizer} onChange={(e) => onChange({ ...value, tokenizer: e.target.value })}><option value="heuristic">Conservative heuristic</option><option value="cl100k_base">cl100k_base</option><option value="o200k_base">o200k_base</option></select></label>
@@ -4884,6 +4983,7 @@ function attemptSummary(attempt: RequestLog["attempts"][number]) {
   if (attempt.removed_parameters?.length) parts.push(`removed ${attempt.removed_parameters.join(", ")}`);
   const replaced = Object.entries(attempt.replaced_parameters ?? {});
   if (replaced.length) parts.push(`replaced ${replaced.map(([from, to]) => `${from} → ${to}`).join(", ")}`);
+  if (attempt.switched_endpoint) parts.push(`switched to /${attempt.switched_endpoint}`);
   return parts.join(" · ");
 }
 
@@ -5130,7 +5230,10 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
       <PageHeader eyebrow="Control plane policy" title="Settings" description="Bound waiting and retention so the gateway stays predictable on a small VPS." />
       <section className="settings-list">
         <label className="settings-row"><span><strong>Routing mode</strong><small>{settings.routing_mode === "model" ? "Model-wise: one alias pools every provider publishing that name, rotating across providers and keys. Saving strips the provider prefix from aliases that carry one." : "Provider-wise: each alias belongs to one provider. Saving prepends the provider slug to aliases that lack one."}</small></span><div><select value={settings.routing_mode} onChange={(event) => setSettings({ ...settings, routing_mode: event.target.value as RoutingMode })}><option value="provider">Provider-wise</option><option value="model">Model-wise (pooled)</option></select></div></label>
-        <label className="settings-row"><span><strong>Default Anthropic resource provider</strong><small>Files have no model field, so uploads need one native Anthropic provider. Batches remain model-routed.</small></span><div><select value={settings.default_anthropic_provider_id || ""} onChange={(event) => setSettings({ ...settings, default_anthropic_provider_id: event.target.value })}><option value="">Not configured</option>{providers.filter((provider) => provider.api_format === "anthropic" && provider.enabled).map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></div></label>
+        <label className="settings-row"><span><strong>Default Anthropic resource provider</strong><small>Files have no model field, so uploads need one native Anthropic provider. Batches remain model-routed.</small></span><div><select value={settings.default_anthropic_provider_id || ""} onChange={(event) => setSettings({ ...settings, default_anthropic_provider_id: event.target.value })}><option value="">Not configured</option>{providers.filter((provider) => provider.api_format === "anthropic" && provider.enabled).map((provider) => {
+          const noResourceAPIs = foundryHasNoResourceAPIs(provider);
+          return <option key={provider.id} value={provider.id} disabled={noResourceAPIs}>{provider.name}{noResourceAPIs ? " — no Files or Batches" : ""}</option>;
+        })}</select></div></label>
         <label className="settings-row"><span><strong>Capacity wait ceiling</strong><small>Requests wait only when capacity can return within this deadline.</small></span><div><input type="number" min={0} max={30000} step={100} value={settings.max_wait_ms} onChange={(e) => setSettings({ ...settings, max_wait_ms: Number(e.target.value) })} /><code>ms</code></div></label>
         <label className="settings-row"><span><strong>Global provider timeout</strong><small>Applies this request timeout to every provider and becomes the default for new providers.</small></span><div><input type="number" min={1} max={900} value={settings.default_provider_timeout_seconds} onChange={(e) => setSettings({ ...settings, default_provider_timeout_seconds: Number(e.target.value) })} /><code>seconds</code></div></label>
         <label className="settings-row"><span><strong>Metadata retention</strong><small>Request IDs, routing attempts, status, latency and usage.</small></span><div><input type="number" min={1} max={3650} value={settings.metadata_retention_days} onChange={(e) => setSettings({ ...settings, metadata_retention_days: Number(e.target.value) })} /><code>days</code></div></label>
