@@ -1,0 +1,33 @@
+/* Runs before the stylesheets, so the very first paint is already in the
+   operator's theme. The console sets this same attribute, but not until the
+   bundle has been fetched, parsed and mounted — which is a full white flash on
+   every load for anyone who chose dark, on the one surface people leave open on
+   a second monitor.
+
+   It is a file rather than an inline <script> because the gateway serves the
+   console under `script-src 'self'` with no nonce and no hash (server.go), and
+   an inline block is exactly what that refuses to run. A same-origin file is
+   allowed, still blocks rendering here in <head>, and needs no exception opened
+   in the policy.
+
+   It resolves "system" to a literal here rather than leaving the word in the
+   attribute. That is what lets the dark palette key off a single
+   [data-theme="dark"] selector instead of the two byte-identical blocks
+   tokens.css used to carry. The two colours are the --surface-canvas values from
+   tokens.css; this is the only place they are repeated, because a stylesheet
+   that has not loaded yet cannot be read. */
+(function () {
+  var canvas = { light: "#e9ebef", dark: "#0d1015" };
+  var theme = "light";
+  try {
+    var stored = localStorage.getItem("relay-theme");
+    if (stored === "dark" || stored === "light") theme = stored;
+    else if (matchMedia("(prefers-color-scheme: dark)").matches) theme = "dark";
+  } catch (unreadableStorage) {
+    /* Storage is denied in some embedded and private contexts. Light is the
+       default the console ships with, so there is nothing further to do. */
+  }
+  document.documentElement.dataset.theme = theme;
+  var meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", canvas[theme]);
+})();

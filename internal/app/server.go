@@ -241,10 +241,19 @@ func (s *Server) serveWeb(w http.ResponseWriter, r *http.Request) {
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	if assetPath == "index.html" {
+	switch {
+	case assetPath == "index.html":
 		w.Header().Set("Cache-Control", "no-store")
-	} else {
+	case strings.HasPrefix(assetPath, "assets/"):
+		// Only this directory carries a content hash in the filename, so only this
+		// directory can be promised to a browser forever.
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	default:
+		// Copied through from web/public under its own name — the favicon, and the
+		// script that resolves the theme before first paint. An upgrade replaces
+		// the contents without changing the name, so a year-long immutable promise
+		// would pin every operator to the build they first loaded.
+		w.Header().Set("Cache-Control", "public, max-age=300")
 	}
 	w.Header().Set("Content-Type", contentType)
 	_, _ = w.Write(body)
