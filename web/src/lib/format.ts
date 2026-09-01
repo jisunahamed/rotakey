@@ -16,6 +16,17 @@ export function formatNumber(value: number) {
   return new Intl.NumberFormat("en", { notation: safe > 9999 ? "compact" : "standard", maximumFractionDigits: 1 }).format(safe);
 }
 
+/** A count and the thing being counted, agreeing with each other. The console
+ *  writes these by hand in about thirty places and every one of them prints
+ *  "1 chats" for a single chat, which is the kind of wrong that makes an
+ *  operator distrust the numbers beside it. The plural is derived rather than
+ *  passed, because the callers that would have to pass it are the ones that
+ *  forget. */
+export function countOf(value: number, noun: string, plural = `${noun}s`) {
+  const safe = safeNumber(value);
+  return `${formatNumber(safe)} ${safe === 1 ? noun : plural}`;
+}
+
 export function formatCompact(value: number) {
   return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(safeNumber(value));
 }

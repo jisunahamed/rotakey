@@ -42,6 +42,30 @@ export type ModelRoute = {
   updated_at: string;
 };
 
+/** One thing the gateway worked out from a provider's own answer and has been
+ * acting on ever since, without anyone asking it to.
+ *
+ * Each one is a repair: an endpoint switched because the provider named a
+ * different one, a field dropped or renamed because the provider rejected it. All
+ * of it is right, and all of it was invisible — the console showed a route's own
+ * configuration while the gateway sent something else, for a day, with nothing on
+ * any screen saying so. None of it is configuration: it lives in Redis, every fact
+ * expires within a day, and a restart forgets all of it. So it is shown as facts
+ * with an expiry, never as settings with a value. */
+export type LearnedFact = {
+  kind: "prefer_responses" | "no_responses" | "strip_parameters" | "rename_parameters" | "strip_item_fields";
+  /** Which endpoint the fact applies to, on the two that are learned per
+   * endpoint. Absent on the two that apply to the route as a whole. */
+  endpoint?: string;
+  parameters?: string[];
+  /** `[sent, accepted]` pairs, the same shape an attempt's evidence uses. */
+  renames?: Array<[string, string]>;
+  /** When Redis drops this and the gateway plans from the route's own
+   * configuration again. Absolute, so nothing here needs to agree with the
+   * server's clock about what "in 20 hours" means. */
+  expires_at: string;
+};
+
 /** A tracked API key's credit. Absent when the operator does not track a balance
  * on that key, which is a different state from having spent it all. */
 export type CreditRemaining = {

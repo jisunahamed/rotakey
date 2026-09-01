@@ -13,6 +13,7 @@ import {
   FieldStack,
   Inspector,
   Label,
+  Markdown,
   Menu,
   MenuItem,
   MenuSection,
@@ -78,6 +79,51 @@ const routes = [
   { alias: "a-very-long-alias-that-has-nowhere-to-go", upstream: "azure-foundry/deepseek-r1-0528-with-a-long-deployment-name", provider: "Azure AI Foundry", state: "quarantined", keys: "0 / 1", calls: "0" },
   { alias: "gpt-4o-mini", upstream: "gpt-4o-mini-2024-07-18", provider: "OpenAI production", state: "unverified", keys: "4 / 4", calls: "—" }
 ] as const;
+
+// Written as lines because the content is full of backticks and a template
+// literal would need every one of them escaped, which makes the sample unreadable
+// exactly where being able to read it is the point.
+const reply = [
+  "Here is what that error means.",
+  "",
+  "## What happened",
+  "",
+  "The provider refused the request because it carried `max_tokens`, which the",
+  "*Responses* endpoint does not accept. The **endpoint switch itself worked** —",
+  "only the body was wrong.",
+  "",
+  "1. The first attempt went to `/chat/completions` and was refused.",
+  "2. The gateway retried at `/responses`.",
+  "3. That attempt carried a field the endpoint has never accepted.",
+  "",
+  "> A 400 on an endpoint the gateway chose for itself is not the key's fault.",
+  "",
+  "```go",
+  "if endpoint == \"chat\" {",
+  "\tpayload[\"max_tokens\"] = output",
+  "} else {",
+  "\tpayload[\"max_output_tokens\"] = output",
+  "}",
+  "```",
+  "",
+  "See the [request log](/admin/requests) for the attempt rows. ~~Retry manually~~",
+  "— it is fixed in 3.0.1.",
+  "",
+  "---",
+  "",
+  "```json",
+  "{ \"model\": \"gpt-5.6-sol\", \"max_output_tokens\": 1024,"
+].join("\n");
+
+const hostileReply = [
+  "### A reply the console does not trust",
+  "",
+  "<script>alert('nope')</script> and <img src=x onerror=alert(1)> are text.",
+  "",
+  "- [Looks like a link](javascript:alert(1)) — shown as what it is",
+  "- [A real one](https://example.com/docs) — a link, in a new tab",
+  "- An unclosed **bold and *italic* that never end"
+].join("\n");
 
 function Bench({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
   return (
@@ -638,6 +684,24 @@ export function KitchenSink({ theme, setTheme }: { theme: ThemeChoice; setTheme:
             }
           />
         </WorkbenchFrame>
+      </Bench>
+
+      <Bench
+        title="Markdown"
+        note="A model's reply. The last block is an unterminated fence, which is what a code block looks like while it is still streaming in."
+      >
+        <div className="sink-prose">
+          <Markdown text={reply} baseHeading={3} />
+        </div>
+      </Bench>
+
+      <Bench
+        title="Markdown — what a reply cannot do"
+        note="Everything here is a model's own output. None of it is trusted: React escapes every string, and a link scheme that is not http, https or mailto is shown as the text the model wrote instead of becoming a link."
+      >
+        <div className="sink-prose">
+          <Markdown text={hostileReply} baseHeading={3} />
+        </div>
       </Bench>
     </div>
   );

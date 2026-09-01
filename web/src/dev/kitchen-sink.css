@@ -108,6 +108,16 @@
   border-bottom: 1px solid var(--edge);
 }
 
+/* A measure, because prose is the one thing in the console that is read a line at
+   a time rather than scanned. The transcript will hold it to the same width, so
+   the bench has to show it at that width or it proves nothing. */
+.sink-prose {
+  max-width: 68ch;
+  padding: var(--space-8);
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+}
+
 @media (max-width: 650px) {
   .sink-states > div { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
 }

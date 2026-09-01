@@ -7,6 +7,13 @@
       "runtimeArgs": ["run", "dev", "--prefix", "web"],
       "port": 5173,
       "url": "http://localhost:5173"
+    },
+    {
+      "name": "console-mock",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:mock", "--prefix", "web"],
+      "port": 5173,
+      "url": "http://localhost:5173"
     }
   ]
 }

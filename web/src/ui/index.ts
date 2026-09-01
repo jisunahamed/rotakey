@@ -36,6 +36,13 @@ export { Tabs, TabPanel, Segmented, tabID, panelID } from "./Tabs";
 export { Disclosure } from "./Disclosure";
 export { Menu, MenuItem, MenuSection } from "./Menu";
 export { WorkbenchFrame, Workbench, Inspector } from "./Workbench";
+/** The one exception to the `ui-` prefix, and it predates the rule: the rotor has
+ *  had its own component and its own stylesheet since before the kit existed, and
+ *  it is the console's signature rather than a generic shape. It lives here now
+ *  because three pages draw it and none of them should be importing it from
+ *  another page. */
+export { Rotor } from "./Rotor";
+export { Markdown } from "./Markdown";
 export { states, stateEntry, type ConsoleState, type KeyState, type DerivedState, type StateTone, type StateEntry } from "./state";
 
 /** The parts that were already right.

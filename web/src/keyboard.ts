@@ -53,9 +53,9 @@ export function useListKeys() {
     if (rows.length === 0) return;
     const active = document.activeElement;
     let here = rows.findIndex((row) => row === active || row.contains(active));
-    // A row can carry a second control beside the one marked `data-row` — the
-    // playground's per-route check button. Landing on it still counts as being on
-    // that row, so the arrow keys move from there rather than jumping to the top.
+    // A row can carry a second control beside the one marked `data-row` — an
+    // overflow menu, a check button. Landing on it still counts as being on that
+    // row, so the arrow keys move from there rather than jumping to the top.
     if (here < 0 && active) here = rows.findIndex((row) => row.parentElement?.contains(active));
 
     const next =

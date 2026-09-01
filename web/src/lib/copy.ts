@@ -11,7 +11,8 @@
  *  not what happened, and the operator has no way to look them up.
  */
 
-import { type Overview, type RequestLog } from "../types";
+import { type LearnedFact, type Overview, type RatePolicy, type RequestLog } from "../types";
+import { formatNumber } from "./format";
 
 /** What the console says when a provider turns a key away. Three call sites showed
  *  this — the credential panel, the provider wizard and the overview inspector —
@@ -50,11 +51,26 @@ const capabilityPhrase: Record<string, string> = {
 };
 
 /** The per-protocol capability enum, same reasoning. "translated" on its own does
- *  not say who translates or that the call still works. */
+ *  not say who translates or that the call still works.
+ *
+ *  Every value `modelCapabilityProfile` writes is here — all eight, not the four
+ *  the three protocol rows happened to use. The profile is one map with rows for
+ *  streaming, tools and thinking too, and those three carry their own spellings;
+ *  with only four names the inspector printed "Not checked yet" over a route that
+ *  had been checked, which is the exact failure the phrase table exists to stop. */
 const protocolPhrase: Record<string, string> = {
   native: "Native",
   translated: "Translated by the gateway",
   off: "Off",
+  /** The provider's own shape supports it and no request has proved it — the
+   *  catalog says so, or the probe did not exercise it. */
+  native_unverified: "Native, not yet proved",
+  /** Streaming: whatever the provider sends is re-shaped into the protocol the
+   *  caller asked in, so it is neither native nor off. */
+  gateway_normalized: "Normalized by the gateway",
+  /** Thinking, on an OpenAI-shaped route reached by an Anthropic caller. The
+   *  reasoning does not survive the translation, and nothing is going to make it. */
+  unsupported_cross_protocol: "Not carried between protocols",
   unknown: "Not checked yet"
 };
 
@@ -145,4 +161,83 @@ export function rangeLabel(range: Overview["range"]) {
  *  as a category rather than as the limit doing the limiting. */
 export function limitScopeLabel(scope: string | undefined) {
   return scope === "model" ? "model limit" : "shared key limit";
+}
+
+/** The three shapes a request can be put on the wire in, named the way the
+ *  documentation an operator would go and read names them. `chat` and
+ *  `responses` are two different OpenAI endpoints and `messages` is Anthropic's,
+ *  so the bare enum says nothing about which one an SDK will end up using. */
+const endpointNames: Record<string, string> = {
+  auto: "Chosen by Rotakey",
+  chat: "Chat Completions",
+  responses: "Responses",
+  messages: "Messages"
+};
+
+export function endpointLabel(value: string | undefined) {
+  return endpointNames[value ?? ""] ?? "";
+}
+
+/** Whose API a request was finally sent as. The log stores this as `openai` or
+ *  `anthropic`, which names a company rather than the wire format being
+ *  debugged, and it is only worth saying at all when it differs from what the
+ *  caller asked for. */
+export function apiFamilyLabel(value: string | undefined) {
+  if (value === "anthropic") return "the Anthropic Messages API";
+  if (value === "openai") return "the OpenAI API";
+  return "";
+}
+
+/** What the gateway taught itself about one route, in a sentence that says what
+ *  it is doing now and what made it start.
+ *
+ *  Both halves are needed. "Sending to Responses" on its own reads as a setting
+ *  someone chose and cannot find, which is exactly how the v3.0.0 endpoint-switch
+ *  defect stayed hidden for a day: the route said Chat Completions, the gateway
+ *  sent Responses, and neither screen was lying about its own half. */
+export function learnedFactSentence(fact: LearnedFact) {
+  switch (fact.kind) {
+    case "prefer_responses":
+      return `Sending to ${endpointLabel("responses")}. The provider turned down a ${endpointLabel("chat")} request for this model and named ${endpointLabel("responses")} instead.`;
+    case "no_responses":
+      return `Sending as ${endpointLabel("chat")}. The provider answered "not found" at ${endpointLabel("responses")}, so Rotakey translates the request rather than failing it.`;
+    case "strip_parameters": {
+      const names = fact.parameters ?? [];
+      return `Removing ${names.join(", ")} from every request. The provider rejected ${names.length === 1 ? "it" : "them"} by name.`;
+    }
+    case "rename_parameters": {
+      const pairs = (fact.renames ?? []).map(([from, to]) => `${from} to ${to}`);
+      return `Renaming ${pairs.join(", ")} on ${endpointLabel(fact.endpoint)} requests. The provider named the spelling it accepts.`;
+    }
+    case "strip_item_fields": {
+      // The path, not the bare name. These fields are put there by the caller's
+      // own client rather than by Rotakey or by the operator, so the sentence has
+      // to say which part of the request lost something or the operator has
+      // nowhere to go and look for it.
+      const paths = fact.parameters ?? [];
+      return `Removing ${paths.join(", ")} from every message in the request. The provider rejected ${paths.length === 1 ? "it" : "them"} by name, and the app that sent the request adds ${paths.length === 1 ? "it" : "them"} on its own.`;
+    }
+  }
+}
+
+/** The limits on a policy, short enough to sit at the end of a key's row.
+ *
+ *  Two of the seven, because a row that lists all seven is unreadable and no
+ *  install sets all seven. The acronyms stay short here and are expanded in the
+ *  title through `rateSummaryFull` — the row is a dense grid, and "requests per
+ *  minute 60 · tokens per minute 400,000" is a paragraph. */
+export function rateSummary(policy: RatePolicy) {
+  const set = capacityDimensions.filter((dimension) => policy[dimension] !== null && policy[dimension] !== undefined);
+  if (set.length === 0) return "";
+  const shown = set.slice(0, 2).map((dimension) => `${dimension.toUpperCase()} ${formatNumber(policy[dimension] as number)}`);
+  return `${shown.join(" · ")}${set.length > 2 ? ` +${set.length - 2}` : ""}`;
+}
+
+/** The same limits with every acronym spelled out. This is what a preview line
+ *  before a save says, and what a dense row carries in its title. */
+export function rateSummaryFull(policy: RatePolicy) {
+  return capacityDimensions
+    .filter((dimension) => policy[dimension] !== null && policy[dimension] !== undefined)
+    .map((dimension) => `${formatNumber(policy[dimension] as number)} ${dimensionNames[dimension]}`)
+    .join(", ");
 }

@@ -3158,36 +3158,16 @@ fieldset legend {
 
 .resource-inspector-close { display: none; }
 
-/* The two filter strips are the same shape but not the same width: the log page's
-   narrower inspector leaves the list column less room, so its status select gets
-   118px against the model page's 126px. They used to be declared together and then
-   the log figure redeclared further down, so the shared value was dead and an edit
-   to it changed nothing on either page. */
-.model-filter,
+/* The log page's third column is a segmented control and a three-digit box, so it
+   takes the width it needs rather than the slot a dropdown used to sit in. The
+   models page declared this shape jointly until Models moved onto the primitive
+   `Toolbar`, whose row is flex; its select is `.mdl-filter` now. */
 .log-filter {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) 126px;
-}
-
-/* The log page's third column is a segmented control and a three-digit box, so it
-   takes the width it needs rather than the slot a dropdown used to sit in. */
-.log-filter {
   grid-template-columns: 14px minmax(0, 1fr) auto;
 }
 
-.model-filter label,
 .log-filter label { min-width: 0; }
-
-.model-filter select {
-  width: 100%;
-  min-height: var(--control-h-md);
-  padding: var(--space-2) var(--space-4);
-  color: var(--text-strong);
-  background: var(--surface-sunken);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-fitting);
-  font-size: var(--text-mini);
-}
 
 /* Three states and a code box, not a list of twelve codes. A provider can return
    any status, and a dropdown that only knew twelve of them showed "All statuses"
@@ -3234,46 +3214,774 @@ fieldset legend {
   font-variant-numeric: tabular-nums;
 }
 
-.model-sweep {
-  display: grid;
-  grid-template-columns: minmax(150px, 0.7fr) minmax(90px, 1fr) auto;
-  align-items: center;
+/* ── Playground ──────────────────────────────────────────────────────────────
+   Two panes: the chats on the left, the conversation on the right.
+
+   The old page was three, and it did not lay out at any width. It computed
+   `height: calc(100vh - var(--main-pad-top) - var(--main-pad-bottom))` from two
+   custom properties that were declared nowhere in six thousand lines of CSS, so
+   the whole calc was invalid, `height` fell back to `auto`, and a `min-height: 0`
+   twenty lines below cancelled the 680px floor that was the only thing holding
+   the frame open. Above 1200px the workbench collapsed to a stub; at 1024×768
+   the composer was clipped by an `overflow: hidden` with nothing to scroll.
+
+   The frame is a fixed height so that the transcript scrolls inside itself and
+   the composer stays where the operator left it, which is the whole reason a
+   chat is a frame rather than a document. `--shell-chrome` is what the shell has
+   already spent — its padding, and below 900px the sticky header too — and dvh
+   rather than vh so a phone's toolbar eats into the frame instead of pushing the
+   composer off the bottom. */
+
+.pg-page {
+  display: flex;
+  height: calc(100dvh - var(--shell-chrome));
+  min-height: 0;
+  flex-direction: column;
   gap: var(--space-5);
-  min-height: 50px;
-  padding: var(--space-3) var(--space-5);
-  background: color-mix(in srgb, var(--iris) 4%, var(--surface-raised));
+}
+
+/* The page's own heading, stripped of the panel padding a section header carries
+   when it opens a panel. Here it opens the page, and every pixel it takes is a
+   pixel of transcript. */
+.pg-page > .ui-section-header {
+  flex: 0 0 auto;
+  min-height: 0;
+  padding: 0;
+}
+
+.pg-frame {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  grid-template-columns: 280px minmax(0, 1fr);
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--lift-panel);
+}
+
+/* ── The chats ───────────────────────────────────────────────────────────────
+   Not re-sorted by recency. A list that reorders itself under the pointer is one
+   of the console's own long-standing complaints, so a new chat goes to the front
+   and every existing one stays where the operator last saw it. */
+
+.pg-chats {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border-right: 1px solid var(--edge);
+}
+
+.pg-chats__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--control-h-xl);
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-5);
   border-bottom: 1px solid var(--edge);
 }
 
-.model-sweep__readout span,
-.model-sweep__readout strong {
-  display: block;
+.pg-chats__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-3);
 }
 
-.model-sweep__readout span {
-  color: var(--iris);
-  font-family: var(--font-label);
+.pg-chats__row {
+  display: grid;
+  width: 100%;
+  min-height: var(--row-h-lg);
+  align-content: center;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-fitting);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pg-chats__row:hover {
+  background: var(--surface-sunken);
+}
+
+.pg-chats__row.is-selected {
+  background: var(--select-wash);
+  box-shadow: var(--select-bar);
+}
+
+/* Both lines truncate rather than wrap. A chat's name is the first thing that was
+   said in it, which can be a paragraph, and a list where one row is nine lines
+   tall is a list nobody can scan. */
+.pg-chats__title,
+.pg-chats__model {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pg-chats__title {
+  font-size: var(--text-sm);
+  color: var(--text-strong);
+}
+
+.pg-chats__model {
+  font-family: var(--font-data);
   font-size: var(--text-micro);
-  letter-spacing: var(--track-label);
-  text-transform: uppercase;
+  color: var(--text-muted);
 }
 
-/* This counter advances once per route checked rather than once per poll, so during
-   a sweep of a few hundred models it is the fastest-changing figure in the console
-   and the one where proportional digits were most obvious. */
-.model-sweep__readout strong {
-  margin-top: var(--space-1);
-  font-size: var(--text-mini);
+.pg-chats__note {
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--edge);
+  font-size: var(--text-micro);
+  line-height: var(--leading-normal);
+  color: var(--text-muted);
+}
+
+/* ── The conversation ────────────────────────────────────────────────────────
+   Every word in the header is a value: the model, its state, and where a message
+   to it actually goes. Nothing here labels itself, because a strip that reads
+   "Model: gpt-4o · Provider: Azure" spends half its width saying what the
+   operator can already see.
+
+   The run settings used to be a fourth control in this row, and four controls do
+   not fit: at 1180px the header had 614px and its children wanted 753, so the
+   line naming the provider's own model collapsed to 31px and rendered
+   "gpt-5.6-sol" as "got…". They now sit above the composer, where they have the
+   full text column and stand beside the box whose next message they shape. */
+
+.pg-chat {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.pg-chat__head {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-h-xl);
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--edge);
+}
+
+.pg-model {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  height: var(--control-h-sm);
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-fitting);
+  background: var(--surface-raised);
+  color: var(--text-strong);
+  cursor: pointer;
+  transition: border-color var(--dur-state) var(--ease);
+}
+
+.pg-model:hover {
+  border-color: var(--edge-strong);
+}
+
+.pg-model:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.pg-model__name {
+  overflow: hidden;
+  font-family: var(--font-data);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Where a message to this alias actually goes. Under model-wise routing the
+   alias carries no provider name at all, so without this line the header names a
+   model and never says whose it is. It takes the slack in the header, which is
+   why it is here and the run settings are not. */
+.pg-chat__where {
+  display: flex;
+  align-items: baseline;
+  flex: 1;
+  min-width: 0;
+  gap: var(--space-3);
+  font-size: var(--text-micro);
+  color: var(--text-muted);
+}
+
+.pg-chat__provider {
+  white-space: nowrap;
+}
+
+.pg-chat__provider::after {
+  content: "·";
+  margin-left: var(--space-3);
+  color: var(--edge-strong);
+}
+
+/* The provider's own name for the model. It is what gives way inside this line
+   when the window narrows: the provider is one word and can be read whole, and
+   the alias above is what the operator's applications ask for. */
+.pg-chat__upstream {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-data);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pg-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: var(--space-7) var(--space-6);
+}
+
+/* With nothing sent yet the transcript is one 160px panel, and left at the top
+   of a 600px scroller it reads as a page that failed to finish loading. `safe`
+   is load-bearing: an engine that does not know the keyword drops the
+   declaration and falls back to `stretch`, which fills the scroller instead of
+   scrolling the panel's own top out of reach. */
+.pg-scroll:has(> .ui-empty) {
+  display: grid;
+  align-content: safe center;
+}
+
+/* ── The transcript ──────────────────────────────────────────────────────────
+   Set as a document, not as chat bubbles. This console is an instrument panel
+   and a transcript is a record: who spoke, what they said, and underneath a
+   reply, what the gateway actually did to produce it.
+
+   The measure is capped because prose is read, not scanned. A reply set across
+   1400px of a wide monitor loses the reader's eye on every line return. */
+
+.pg-turns {
+  display: flex;
+  width: 100%;
+  max-width: 780px;
+  margin: 0 auto;
+  flex-direction: column;
+  gap: var(--space-9);
+  padding: 0;
+  list-style: none;
+}
+
+.pg-turn {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-3);
+}
+
+.pg-turn__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.pg-turn__tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.pg-turn__body {
+  min-width: 0;
+}
+
+/* What the operator typed, kept exactly as they typed it: a prompt is often
+   indented or laid out in lines, and re-flowing it would misrepresent what was
+   actually sent. `anywhere` rather than `break-word` because a pasted key or a
+   URL with no spaces in it is otherwise wider than the pane. */
+.pg-said {
+  padding: var(--space-5) var(--space-6);
+  border-left: 2px solid var(--edge-strong);
+  border-radius: var(--radius-fitting);
+  background: var(--surface-sunken);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  color: var(--text-strong);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pg-writing {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* The one animated thing on the page, and only while bytes are actually
+   arriving. The other three states this class carries — stopped, empty, done —
+   are verdicts and stand still. */
+.pg-writing--live::after {
+  content: "";
+  display: inline-block;
+  width: var(--icon-dot);
+  height: var(--icon-dot);
+  margin-left: var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--iris);
+  animation: pg-pulse 1.1s var(--ease) infinite;
+}
+
+@keyframes pg-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+.pg-failed {
+  padding: var(--space-4) var(--space-5);
+  border-left: 2px solid var(--fault-mark);
+  border-radius: var(--radius-fitting);
+  background: var(--fault-wash);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  color: var(--text-strong);
+}
+
+/* ── The evidence strip ──────────────────────────────────────────────────────
+   The reason this page exists. All of it was already being computed and thrown
+   away: the response headers name the parameters the gateway dropped and the
+   endpoint it switched to, and the log row names the key that answered. None of
+   it reached a screen before. */
+
+.pg-evidence {
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+}
+
+.pg-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
   font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
 }
 
-.model-sweep__track {
+.pg-facts > li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+/* The separator trails its item rather than leading the next one. The strip wraps
+   — at 567px on a desktop and after every fact on a phone — and a "·" set with
+   `li + li::before` lands at the *start* of the new line, where it stops being a
+   separator and starts looking like a bullet. Trailing, it stays on the line it
+   punctuates and the last item never grows one. */
+.pg-facts > li:not(:last-child)::after {
+  content: "·";
+  color: var(--edge-strong);
+}
+
+.pg-facts__link {
+  color: var(--iris);
+}
+
+.pg-note {
+  font-size: var(--text-micro);
+  line-height: var(--leading-normal);
+  color: var(--text-muted);
+}
+
+/* ── The composer ────────────────────────────────────────────────────────────
+   The send button is placed by the layout. It used to be pinned at
+   `right: 27px; bottom: 27px`, which put it on top of the text at 1024px. */
+
+.pg-foot {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6) var(--space-6);
+  border-top: 1px solid var(--edge);
+}
+
+.pg-foot > * {
+  width: 100%;
+  max-width: 780px;
+}
+
+/* What the next message will be sent with, and the way into the sheet that
+   changes it. A full-width quiet row rather than a chip: it is a summary of five
+   settings, and the header it used to live in could give it 335px of the 753 its
+   four controls wanted. Here it has the whole text column and reads in full from
+   1024px up.
+
+   Both `min-width: 0`s are load-bearing, and neither is the one that usually is.
+   The summary sets `white-space: nowrap`, so its min-content size is the whole
+   sentence — 423px — and an automatic minimum size means a box never shrinks
+   below that. It does not overflow; it *pushes*. Without these two lines the
+   375px foot sized its grid track to 460px, the composer and the send button
+   went with it, and the send button sat 38px off the right edge of the phone.
+   The button needs one because it is a grid item of `.pg-foot`; the span needs
+   the other because it is a flex item of the button, and clearing only the outer
+   one leaves the text spilling out of a correctly-sized row. */
+.pg-runline {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h-sm);
+  min-width: 0;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-fitting);
+  background: transparent;
+  color: var(--text-muted);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur-state) var(--ease), color var(--dur-state) var(--ease);
+}
+
+.pg-runline:hover {
+  border-color: var(--edge);
+  color: var(--text-strong);
+}
+
+.pg-runline:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.pg-runline > span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--text-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pg-composer {
+  display: grid;
+  gap: var(--space-3);
+}
+
+/* Grows with what is in it and then scrolls. The height is written by the
+   component from `scrollHeight`; the ceiling is here, so the number that decides
+   how much of the transcript a long prompt is allowed to cover is written where
+   every other size in the console is written. */
+.pg-composer__box {
+  width: 100%;
+  min-height: var(--control-h-xl);
+  max-height: 40vh;
+  padding: var(--space-5) var(--space-6);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-panel);
+  background: var(--surface-raised);
+  color: var(--text-strong);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  resize: none;
+}
+
+.pg-composer__box:disabled {
+  background: var(--surface-inset);
+  cursor: not-allowed;
+}
+
+.pg-composer__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+
+.pg-composer__hint {
+  min-width: 0;
+  font-size: var(--text-micro);
+  line-height: var(--leading-normal);
+  color: var(--text-muted);
+}
+
+/* ── The two sheets ──────────────────────────────────────────────────────── */
+
+.pg-sheet-note {
+  font-size: var(--text-mini);
+  line-height: var(--leading-normal);
+  color: var(--text-muted);
+}
+
+.pg-picker {
+  display: grid;
+  max-height: 50vh;
+  gap: var(--space-1);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.pg-picker__row {
+  display: grid;
+  align-items: center;
+  min-height: var(--row-h-lg);
+  grid-template-columns: var(--icon-dot) minmax(0, 1.1fr) minmax(0, 1fr) auto;
+  gap: var(--space-2) var(--space-5);
+  padding: var(--space-3) var(--space-5);
+  border: 1px solid transparent;
+  border-radius: var(--radius-fitting);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pg-picker__row:hover {
+  background: var(--surface-sunken);
+}
+
+.pg-picker__row.is-selected {
+  background: var(--select-wash);
+  box-shadow: var(--select-bar);
+}
+
+.pg-picker__alias,
+.pg-picker__where,
+.pg-picker__keys {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pg-picker__alias {
+  font-family: var(--font-data);
+  font-size: var(--text-sm);
+  color: var(--text-strong);
+}
+
+.pg-picker__where,
+.pg-picker__keys {
+  font-size: var(--text-micro);
+  color: var(--text-muted);
+}
+
+.pg-picker__keys {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* A row of small actions only appears when the pointer is on the turn it belongs
+   to, and only where there is a pointer at all. On a touch screen there is no
+   hover state to reveal them with, so they are simply there. */
+@media (hover: hover) {
+  .pg-turn__tools {
+    opacity: 0;
+    transition: opacity var(--dur-state) var(--ease);
+  }
+
+  .pg-turn:hover .pg-turn__tools,
+  .pg-turn:focus-within .pg-turn__tools {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 1050px) {
+  .pg-frame {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+}
+
+/* Below 900px the chats stop being a column and become a drawer over the
+   conversation — the opposite way round from every other page in the console,
+   because here the conversation is the page and the list is what is visiting.
+   `useDrawerOverlay` owns the focus trap, Escape, the scroll lock and the scrim;
+   these rules only put the panel where it can be seen. */
+@media (max-width: 900px) {
+  .pg-frame {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pg-chats {
+    display: none;
+    position: fixed;
+    inset: var(--mobile-header-height) auto 0 0;
+    z-index: var(--layer-inspector);
+    width: min(320px, 88vw);
+    border-right: 1px solid var(--edge);
+    background: var(--surface-raised);
+    box-shadow: var(--lift-float);
+  }
+
+  .pg-chats.is-open {
+    display: flex;
+  }
+
+  .pg-scroll {
+    padding: var(--space-6) var(--space-5);
+  }
+
+  .pg-foot {
+    padding: var(--space-4) var(--space-5) var(--space-5);
+  }
+}
+
+@media (max-width: 650px) {
+  /* On a phone the header is the chats button, the model and the overflow menu,
+     and there is no room left for where the model lives. It is the one thing
+     here that can be looked up elsewhere — the settings row above the composer
+     survives at every width, because it is the only place the reply cap and the
+     temperature are stated at all. The line itself stays: emptied, it is the
+     flexible gap that keeps the overflow menu against the right edge. */
+  .pg-chat__provider,
+  .pg-chat__upstream {
+    display: none;
+  }
+
+  /* Four facts and a link have 286px of line to sit on, so they stack instead of
+     wrapping into an uneven block. The separators go with the row: a "·" at the
+     end of every line is punctuation with nothing left to punctuate. */
+  .pg-facts {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .pg-facts > li:not(:last-child)::after {
+    content: none;
+  }
+
+  /* The summary wraps here rather than ellipsising. There are 286px of text
+     column on a 375px phone and the sentence wants 423, so one line would show
+     "Endpoint chosen by Rotakey · up to 16.4K tokens back · temp…" and cut the
+     reply cap, the temperature and whether the reply streams — three of the five
+     settings, and the three most likely to be wrong. Two lines cost 13px. */
+  .pg-runline {
+    height: auto;
+    min-height: var(--control-h-lg);
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .pg-runline > span {
+    overflow: visible;
+    white-space: normal;
+  }
+
+  .pg-model {
+    height: var(--control-h-lg);
+  }
+
+  .pg-turns {
+    gap: var(--space-8);
+  }
+
+  .pg-composer__box {
+    max-height: 32vh;
+  }
+
+  .pg-composer__bar {
+    gap: var(--space-4);
+  }
+
+  .pg-picker__row {
+    grid-template-columns: var(--icon-dot) minmax(0, 1fr);
+    min-height: var(--control-h-lg);
+  }
+
+  .pg-picker__keys {
+    grid-column: 2;
+    text-align: left;
+  }
+}
+
+/* ── Models ──────────────────────────────────────────────────────────────────
+   The page that owns the route object. Everything here is `mdl-`; everything
+   inside the two panes is a primitive, so this file only declares the frame, the
+   two strips above the list, and the four blocks in the inspector body that have
+   no primitive because nothing else in the console draws them.
+
+   The `.model-*` rules this replaces are gone: a filter strip declared jointly
+   with the log page's, a sweep bar with a readout and a directional glow, and a
+   limits editor that restyled `.field` and `.button` from inside a panel. */
+
+/* Same shape as `.resource-page`: a header that takes its own height and a frame
+   under it that takes the rest, so the two panes scroll and the page does not.
+   Below 901px there is no fixed height at all — the list is the page, the
+   inspector is a drawer over it, and the document scrolls. */
+.mdl-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+@media (min-width: 901px) {
+  .mdl-page {
+    height: calc(100dvh - var(--shell-chrome));
+    min-height: 600px;
+    overflow: hidden;
+  }
+
+  .mdl-page > .ui-section-header {
+    flex: 0 0 auto;
+  }
+
+  .mdl-page > .ui-workbench-frame {
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* The frame's own floor is what keeps a two-row list from collapsing on a
+     short page, and it is exactly what stops the frame fitting a tall one. Above
+     this width the height above is the floor, so the workbench takes the space
+     it is given rather than asking for 650px of it. */
+  .mdl-page .ui-workbench {
+    min-height: 0;
+  }
+}
+
+/* The provider filter, beside the search box in the toolbar. The old rule made
+   the whole strip a three-column grid so that the two controls could be sized
+   against each other; `Toolbar` is a flex row now, so the select only has to say
+   how much room it wants and where it stops growing. */
+.mdl-filter {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.mdl-filter select {
+  width: 100%;
+  min-width: 9rem;
+  min-height: var(--control-h-md);
+  padding: var(--space-2) var(--space-4);
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-fitting);
+  font-size: var(--text-mini);
+}
+
+/* A sweep of two hundred routes takes minutes, and the only thing the operator
+   needs from the bar is how much of it is left. The old strip spent fifty pixels
+   and a two-line accent readout saying the same thing the toast says at the end;
+   the count is on the live region for a screen reader and in the menu label for
+   everyone else, so the bar itself is three pixels of progress and nothing more. */
+.mdl-sweep {
+  flex: 0 0 auto;
   height: 3px;
   overflow: hidden;
   background: color-mix(in srgb, var(--text-muted) 18%, transparent);
 }
 
-.model-sweep__track > span {
+.mdl-sweep > span {
   display: block;
   width: 0;
   height: 100%;
@@ -3281,820 +3989,175 @@ fieldset legend {
   transition: width var(--dur-move) linear;
 }
 
-/* Playground is a three-pane operator surface: model selection, live evidence and
-   route configuration remain visible together on a workstation. The separators,
-   rather than floating cards, carry the hierarchy. */
-.playground-page {
-  min-height: 0;
-}
-
-.playground-page > .notice {
-  margin-bottom: var(--space-4);
-}
-
-.playground-workbench {
-  display: grid;
-  min-height: 680px;
-  grid-template-columns: minmax(250px, 0.72fr) minmax(380px, 1.45fr) minmax(300px, 0.9fr);
-  overflow: hidden;
-  background: var(--surface-raised);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-panel);
-  box-shadow: var(--lift-panel);
-}
-
-.playground-models,
-.playground-runner,
-.playground-settings {
-  min-width: 0;
-  min-height: 0;
-}
-
-.playground-models,
-.playground-settings {
-  background: var(--surface-raised);
-}
-
-.playground-models {
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid var(--edge);
-}
-
-.playground-settings {
-  overflow-y: auto;
-  border-left: 1px solid var(--edge);
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-}
-
-.playground-pane-title {
-  display: flex;
-  min-height: var(--row-h-xl);
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-5);
-  background: var(--surface-raised);
-  border-bottom: 1px solid var(--edge);
-}
-
-.playground-pane-title > div {
-  min-width: 0;
-}
-
-.playground-pane-title span,
-.playground-pane-title strong,
-.playground-pane-title small {
-  display: block;
-}
-
-.playground-pane-title span {
-  color: var(--iris);
-  font-family: var(--font-label);
-  font-size: var(--text-micro);
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
-.playground-pane-title strong {
-  overflow: hidden;
-  margin-top: var(--space-1);
-  font-size: var(--text-mini);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.playground-pane-title small {
-  overflow: hidden;
-  margin-top: var(--space-1);
-  color: var(--text-muted);
-  font-size: var(--text-micro);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.playground-pane-title .button {
-  flex: 0 0 auto;
-  min-height: var(--control-h-md);
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--text-micro);
-}
-
-.playground-filters {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-2);
-  padding: var(--space-3);
-  border-bottom: 1px solid var(--edge);
-}
-
-.playground-filters label {
-  display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: 15px minmax(0, 1fr);
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  padding: 0 var(--space-3);
-  background: var(--surface-sunken);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-fitting);
-}
-
-.playground-filters label:focus-within {
-  border-color: var(--iris);
-}
-
-.playground-filters input,
-.playground-filters select {
-  width: 100%;
-  min-width: 0;
-  min-height: var(--control-h-md);
-  color: var(--text-strong);
-  background: var(--surface-sunken);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-fitting);
-  font-size: var(--text-micro);
-}
-
-/* The border goes because the label around it already draws one, and a second
-   line 3px inside the first reads as a seam. The outline stays: the global focus
-   rule is written with :where() so it carries zero specificity, which means a
-   plain `outline: 0` here beat it and left the model search as the one control
-   in the console a keyboard could reach without seeing where it had landed. The
-   label's iris border on :focus-within is a colour-only cue and not a substitute. */
-.playground-filters input {
-  border: 0;
-}
-
-.playground-filters select {
-  padding: 0 var(--space-3);
-}
-
-.playground-model-list {
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-}
-
-.playground-model-list > div {
-  display: grid;
-  min-height: var(--row-h-lg);
-  grid-template-columns: minmax(0, 1fr) 36px;
-  align-items: center;
-  border-bottom: 1px solid var(--edge);
-}
-
-.playground-model-list > div:hover,
-.playground-model-list > div.is-selected {
-  background: var(--select-wash);
-  box-shadow: var(--select-bar);
-}
-
-.playground-model-select {
-  display: grid;
-  width: 100%;
-  min-width: 0;
-  min-height: var(--row-h-lg);
-  grid-template-columns: 9px minmax(0, 1fr);
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  color: var(--text-strong);
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  text-align: left;
-}
-
-.playground-model-dot {
-  display: inline-block;
-  width: var(--icon-dot);
-  height: var(--icon-dot);
-  flex: 0 0 auto;
-  background: var(--idle-mark);
-  border-radius: var(--radius-pill);
-}
-
-.playground-model-dot.is-live {
-  background: var(--live-mark);
-  box-shadow: 0 0 0 3px var(--live-wash);
-}
-
-.playground-model-dot.is-failed {
-  background: var(--fault-mark);
-  box-shadow: 0 0 0 3px var(--fault-wash);
-}
-
-.playground-model-dot.is-checking,
-.playground-model-dot.is-waiting {
-  background: var(--hold-mark);
-  box-shadow: 0 0 0 3px var(--hold-wash);
-}
-
-.playground-model-dot.is-disabled {
-  opacity: 0.55;
-}
-
-.playground-model-dot.is-unverified {
-  background: transparent;
-  box-shadow: inset 0 0 0 2px var(--edge-strong);
-}
-
-.playground-model-select span,
-.playground-model-select code,
-.playground-model-select small {
-  display: block;
-  min-width: 0;
-}
-
-.playground-model-select code,
-.playground-model-select small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.playground-model-select code {
-  font-family: var(--font-data);
-  font-size: var(--text-micro);
-}
-
-.playground-model-select small {
-  margin-top: var(--space-1);
-  color: var(--text-muted);
-  font-size: var(--text-micro);
-}
-
-.playground-model-list .console-icon {
-  width: var(--icon-box);
-  height: var(--icon-box);
-}
-
-.playground-runner {
-  display: grid;
-  grid-template-rows: auto auto auto auto minmax(240px, 1fr) auto;
-  background: var(--surface-sunken);
-}
-
-.playground-protocols,
-.playground-tabs {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  background: var(--surface-raised);
-  border-bottom: 1px solid var(--edge);
-}
-
-.playground-protocols {
-  min-height: var(--row-h-md);
-  padding: 0 var(--space-4);
-}
-
-.playground-protocols button,
-.playground-tabs button {
-  min-height: var(--control-h-sm);
-  padding: 0 var(--space-4);
-  color: var(--text-muted);
-  background: transparent;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  font-size: var(--text-micro);
-  cursor: pointer;
-}
-
-.playground-protocols button.is-active,
-.playground-tabs button[aria-selected="true"] {
-  color: var(--text-strong);
-  border-bottom-color: var(--iris);
-}
-
-.playground-live-status {
-  display: grid;
-  min-height: var(--row-h-md);
-  grid-template-columns: 9px minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: var(--space-3);
-  padding: 0 var(--space-5);
-  background: var(--surface-raised);
-  border-bottom: 1px solid var(--edge);
-}
-
-.playground-live-status__dot {
-  width: var(--icon-dot);
-  height: var(--icon-dot);
-  background: var(--idle-mark);
-  border-radius: var(--radius-pill);
-}
-
-.playground-live-status.is-sending .playground-live-status__dot,
-.playground-live-status.is-waiting .playground-live-status__dot {
-  background: var(--hold-mark);
-  box-shadow: 0 0 0 3px var(--hold-wash);
-  animation: playground-status-pulse 1.25s ease-in-out infinite;
-}
-
-.playground-live-status.is-completed .playground-live-status__dot {
-  background: var(--live-mark);
-  box-shadow: 0 0 0 3px var(--live-wash);
-}
-
-.playground-live-status.is-failed .playground-live-status__dot {
-  background: var(--fault-mark);
-  box-shadow: 0 0 0 3px var(--fault-wash);
-}
-
-.playground-live-status.is-cancelled .playground-live-status__dot {
-  background: var(--hold-mark);
-}
-
-.playground-live-status strong,
-.playground-live-status small {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.playground-live-status strong {
-  font-size: var(--text-micro);
-}
-
-.playground-live-status small,
-.playground-live-status time {
-  margin-top: var(--space-1);
-  color: var(--text-muted);
-  font-family: var(--font-data);
-  font-size: var(--text-micro);
-  font-variant-numeric: tabular-nums;
-}
-
-.playground-live-status time {
-  min-width: 36px;
-  margin-top: 0;
-  text-align: right;
-}
-
-.playground-live-status button {
-  display: inline-flex;
-  min-height: var(--control-h-xs);
-  align-items: center;
-  gap: var(--space-2);
-  padding: 0 var(--space-3);
-  color: var(--text-strong);
-  background: transparent;
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-fitting);
-  font-size: var(--text-micro);
-  cursor: pointer;
-}
-
-.playground-error-detail {
-  display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
-  gap: var(--space-3);
-  padding: var(--space-4) var(--space-5);
-  color: var(--fault);
-  background: var(--fault-wash);
-  border-bottom: 1px solid var(--edge);
-}
-
-.playground-error-detail.is-empty {
-  min-height: 0;
-  padding: 0;
-  background: transparent;
-  border-bottom: 0;
-}
-
-/* No `font: inherit` here. The shorthand resets every font longhand it does not
-   name, and the one it silently took out was font-variant-numeric: tabular-nums,
-   which the element rule for `pre` sets and which every figure in an error
-   payload wants. The three longhands below say what this block actually needs. */
-.playground-error-detail pre {
-  min-width: 0;
+/* The one note in the route sheet that is not attached to a field: which name a
+   deployment-style provider wants in the model box. It sits between two fields,
+   so it takes the muted treatment a field hint would and none of the accent. */
+.mdl-form__note {
   margin: 0;
-  color: var(--text-strong);
-  font-family: var(--font-data);
-  font-size: var(--text-micro);
-  line-height: var(--leading-snug);
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-@keyframes playground-status-pulse {
-  0%, 100% { opacity: 0.55; }
-  50% { opacity: 1; }
-}
-
-.playground-tabs {
-  display: none;
-}
-
-.playground-transcript {
-  min-height: 0;
-  overflow-y: auto;
-  padding: var(--space-5);
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-}
-
-.playground-empty {
-  display: grid;
-  min-height: 100%;
-  place-content: center;
-  justify-items: center;
-  padding: var(--space-7);
   color: var(--text-muted);
-  text-align: center;
-}
-
-.playground-empty svg {
-  margin-bottom: var(--space-4);
-  color: var(--iris);
-}
-
-.playground-empty strong {
-  color: var(--text-strong);
-  font-size: var(--text-sm);
-}
-
-.playground-empty p {
-  max-width: 430px;
-  margin: var(--space-3) 0 0;
-  font-size: var(--text-mini);
-  line-height: var(--leading-snug);
-}
-
-.playground-transcript article {
-  margin-bottom: var(--space-5);
-  background: var(--surface-raised);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-fitting);
-}
-
-.playground-transcript article.has-error {
-  border-left: 3px solid var(--fault-mark);
-}
-
-.playground-transcript article > header {
-  display: flex;
-  min-height: var(--control-h-sm);
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: 0 var(--space-4);
-  color: var(--text-muted);
-  border-bottom: 1px solid var(--edge);
-  font-family: var(--font-data);
   font-size: var(--text-micro);
-  font-variant-numeric: tabular-nums;
-}
-
-.playground-user-message,
-.playground-model-message {
-  display: grid;
-  grid-template-columns: 74px minmax(0, 1fr);
-  gap: var(--space-4);
-  padding: var(--space-4);
-}
-
-.playground-model-message {
-  border-top: 1px solid var(--edge);
-}
-
-.playground-user-message strong,
-.playground-model-message strong {
-  color: var(--text-muted);
-  font-family: var(--font-label);
-  font-size: var(--text-micro);
-  text-transform: uppercase;
-}
-
-.playground-user-message p,
-.playground-model-message pre {
-  min-width: 0;
-  margin: 0;
-  color: var(--text-strong);
-  font-size: var(--text-mini);
   line-height: var(--leading-normal);
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
 }
 
-/* The two turns want different faces, which is why the shared block above no
-   longer sets one. It used to say `font: inherit`, and the shorthand did two
-   things nobody asked for: it put the model's reply in Archivo, and it reset
-   font-variant-numeric, so a reply full of figures lost its tabular alignment. */
-.playground-user-message p {
-  font-family: var(--font-body);
+/* ── The inspector body ──────────────────────────────────────────────────────
+   Four blocks, each separated from the next by the same hairline, because the
+   panel is one scroll and the operator needs to know where one subject ends. */
+
+.mdl-inspector__notice {
+  padding: var(--space-5) var(--space-5) 0;
 }
 
-/* The reply is unparsed text in a <pre> — whitespace is significant and it may
-   be code — so it belongs in the data face. */
-.playground-model-message pre {
-  font-family: var(--font-data);
-}
-
-.playground-composer {
-  position: relative;
-  padding: var(--space-4);
-  background: var(--surface-raised);
-  border-top: 1px solid var(--edge);
-}
-
-.playground-composer:focus-within::before {
-  position: absolute;
-  z-index: 0;
-  inset: 8px;
-  content: "";
-  pointer-events: none;
-  border: 1px solid color-mix(in srgb, var(--iris) 65%, transparent);
-  border-radius: var(--radius-fitting);
-}
-
-.playground-composer > label,
-.playground-composer details {
-  position: relative;
-  z-index: 1;
-}
-
-.playground-composer textarea {
-  width: 100%;
-  resize: vertical;
-}
-
-.playground-composer > label textarea {
-  min-height: 88px;
-  /* The right inset is the gutter the send button is positioned into, so it is
-     the one padding here that is not a spacing decision — but it is still a
-     length the scale has a name for. */
-  padding: var(--space-4) var(--space-11) var(--space-4) var(--space-4);
-  color: var(--text-strong);
-  background: var(--surface-sunken);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-fitting);
-  font-size: var(--text-mini);
-  line-height: var(--leading-snug);
-}
-
-.playground-composer details {
-  margin-bottom: var(--space-3);
-  color: var(--text-muted);
-  font-size: var(--text-micro);
-}
-
-.playground-composer summary {
-  margin-bottom: var(--space-2);
-  cursor: pointer;
-}
-
-.playground-composer details > label,
-.playground-composer details > div > label {
+/* Two columns of facts, and a value that ellipsises rather than widening the
+   pane — every one of them carries its full text on a title. */
+.mdl-facts {
   display: grid;
+  margin: 0;
+  padding: var(--space-5);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4) var(--space-5);
+}
+
+.mdl-facts__item {
+  display: grid;
+  min-width: 0;
   gap: var(--space-1);
 }
 
-.playground-composer details > div {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3);
-  margin-top: var(--space-3);
+.mdl-facts__item > dt {
+  color: var(--text-muted);
+  font-size: var(--text-micro);
 }
 
-.playground-composer details textarea,
-.playground-composer details input {
-  min-height: var(--control-h-md);
-  padding: var(--space-2) var(--space-3);
+.mdl-facts__item > dd {
+  margin: 0;
+  overflow: hidden;
   color: var(--text-strong);
+  font-size: var(--text-mini);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mdl-facts__item > dd.is-mono {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+/* What Rotakey has taught itself about this route, which lives in Redis for a
+   day and was invisible until now. */
+.mdl-learned {
+  padding: var(--space-5);
+  border-top: 1px solid var(--edge);
+}
+
+.mdl-learned__empty {
+  margin: var(--space-3) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-mini);
+  line-height: var(--leading-normal);
+}
+
+.mdl-learned__list {
+  display: grid;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  gap: var(--space-3);
+  list-style: none;
+}
+
+.mdl-learned__list > li {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
   background: var(--surface-sunken);
   border: 1px solid var(--edge);
   border-radius: var(--radius-fitting);
-  font-size: var(--text-micro);
+  font-size: var(--text-mini);
+  line-height: var(--leading-normal);
 }
 
-.playground-send {
-  position: absolute;
-  z-index: 2;
-  right: 27px;
-  bottom: 27px;
+.mdl-learned__list p {
+  margin: 0;
+}
+
+/* The expiry, which is what makes the line above it a fact rather than a
+   setting. Tabular because "in 21 hours" and "in 9 hours" sit under each other. */
+.mdl-learned__list span {
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.mdl-pool {
+  padding: var(--space-5) 0 0;
+  border-top: 1px solid var(--edge);
+}
+
+.mdl-pool > .rotor {
+  padding: 0 var(--space-5) var(--space-5);
+}
+
+/* The pool in order, one row per key. Four columns: the state, the label the
+   operator gave it, what that state means in words, and the limit it runs
+   under — with the acronyms expanded on the title, because the summary has to
+   fit a 300px column and "20K TPM" does not explain itself. */
+.mdl-keys {
   display: grid;
-  width: var(--control-h-sm);
-  height: var(--control-h-sm);
-  place-items: center;
-  color: var(--surface-sunken);
-  background: var(--iris);
-  border: 0;
-  border-radius: var(--radius-fitting);
-  cursor: pointer;
+  margin: 0;
+  padding: 0 var(--space-5) var(--space-5);
+  gap: var(--space-2);
+  list-style: none;
 }
 
-.playground-send:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+.mdl-keys > li {
+  display: grid;
+  align-items: center;
+  min-height: var(--row-h-md);
+  grid-template-columns: var(--icon-dot) minmax(0, 1fr) auto;
+  gap: 0 var(--space-3);
 }
 
-.playground-settings-form {
-  padding: var(--space-5);
+.mdl-keys strong {
+  overflow: hidden;
+  font-size: var(--text-mini);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.playground-settings-form .form-stack {
-  gap: var(--space-4);
-}
-
-.playground-settings-form .field-pair,
-.playground-settings-form .pricing-fields {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.playground-settings-form .field > span {
+.mdl-keys small {
+  grid-column: 2;
+  overflow: hidden;
+  color: var(--text-muted);
   font-size: var(--text-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.playground-settings-form input,
-.playground-settings-form select {
-  min-height: var(--control-h-md);
+.mdl-keys > li > span {
+  display: grid;
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  gap: var(--space-1);
+  justify-items: end;
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
 }
 
-.playground-settings-actions {
-  position: sticky;
-  bottom: 0;
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-3);
-  margin: var(--space-6) calc(var(--space-5) * -1) calc(var(--space-5) * -1);
-  padding: var(--space-4) var(--space-5);
-  background: var(--surface-raised);
-  border-top: 1px solid var(--edge);
-}
-
-@media (min-width: 1200px) {
-.playground-page {
-    display: flex;
-    height: calc(100dvh - var(--shell-chrome));
-    min-height: 680px;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-.playground-page > .page-header {
-    flex: 0 0 auto;
-  }
-
-.playground-workbench {
-    flex: 1;
-    min-height: 0;
-  }
-}
-
-@media (max-width: 1199px) {
-.playground-workbench {
-    grid-template-columns: minmax(230px, 0.7fr) minmax(360px, 1.4fr) minmax(280px, 0.85fr);
-  }
-}
-
-@media (max-width: 1050px) {
-.playground-tabs {
-    display: flex;
-    min-height: var(--control-h-lg);
-    padding: 0 var(--space-3);
-    border: 1px solid var(--edge);
-    border-bottom: 0;
-    border-radius: var(--radius-panel) var(--radius-panel) 0 0;
-  }
-
-.playground-tabs button {
-    flex: 1;
-  }
-
-.playground-workbench {
-    display: block;
-    min-height: 650px;
-    border-radius: 0 0 var(--radius-panel) var(--radius-panel);
-  }
-
-/* The two list panes scroll internally, so a fixed height is what keeps them
-     from running the page to thousands of pixels. */
-  .playground-models,
-  .playground-settings {
-    display: none;
-    height: 650px;
-    border: 0;
-  }
-
-/* The runner cannot take the same treatment. Its last grid row is the composer
-     and the Send button, so anything the fixed height cannot fit is cut off by
-     the workbench's overflow: hidden with no scrollbar to reach it — at 1024x768
-     that is the one control the page exists for. A floor instead of a height
-     lets the pane grow by exactly the composer's height; the transcript row
-     keeps its own 240px minimum and scrolls, so nothing else moves. */
-  .playground-runner {
-    display: none;
-    min-height: 650px;
-    border: 0;
-  }
-
-.playground-models.is-active {
-    display: flex;
-  }
-
-.playground-runner.is-active {
-    display: grid;
-  }
-
-.playground-settings.is-active {
-    display: block;
-  }
-}
-
-@media (max-width: 600px) {
-.playground-models,
-  .playground-settings {
-    height: calc(100vh - 180px);
-    min-height: 560px;
-  }
-
-/* Same reason as the 1050px block: the runner and the frame around it size to
-     the composer rather than clipping it. max() keeps the 560px floor that the
-     height/min-height pair gave the other two panes on a short viewport. */
-  .playground-workbench,
-  .playground-runner {
-    height: auto;
-    min-height: max(calc(100vh - 180px), 560px);
-  }
-
-.playground-pane-title {
-    padding-inline: var(--space-4);
-  }
-
-.playground-protocols {
-    overflow-x: auto;
-    padding: 0 var(--space-2);
-  }
-
-.playground-protocols button {
-    flex: 0 0 auto;
-    padding-inline: var(--space-3);
-  }
-
-.playground-live-status {
-    grid-template-columns: 9px minmax(0, 1fr) auto;
-    padding-inline: var(--space-4);
-  }
-
-.playground-live-status button {
-    grid-column: 2 / -1;
-    justify-self: start;
-  }
-
-.playground-transcript {
-    padding: var(--space-3);
-  }
-
-.playground-user-message,
-  .playground-model-message {
-    grid-template-columns: minmax(0, 1fr);
-    gap: var(--space-2);
-  }
-}
-
-.model-limit-editor {
+.mdl-limits {
   padding: var(--space-5);
   border-top: 1px solid var(--edge);
 }
 
-.model-limit-editor > header {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: var(--space-5);
-  margin-bottom: var(--space-5);
+/* The sentence that says what Save is about to write, and to how many keys. It
+   is the whole answer to the old editor's problem: the same-looking button
+   changed one key or rewrote the pool, and nothing on screen said which. */
+.mdl-limits__preview {
+  margin: var(--space-4) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  line-height: var(--leading-normal);
 }
-
-.model-limit-editor > header span,
-.model-limit-editor > header strong { display: block; }
-
-.model-limit-editor > header span { color: var(--iris); font-family: var(--font-label); font-size: var(--text-micro); letter-spacing: var(--track-label); text-transform: uppercase; }
-
-.model-limit-editor > header strong { margin-top: var(--space-1); font-size: var(--text-sm); }
-
-.model-limit-editor > header code { color: var(--text-muted); font-family: var(--font-data); font-size: var(--text-micro); font-variant-numeric: tabular-nums; }
-
-.model-limit-editor > p { margin: var(--space-4) 0; color: var(--text-muted); font-size: var(--text-micro); line-height: var(--leading-snug); }
-
-.model-limit-editor .rate-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
-
-.model-limit-editor .field { gap: var(--space-1); }
-
-.model-limit-editor .field > span { min-height: auto; font-size: var(--text-micro); }
-
-.model-limit-editor .field input,
-.model-limit-editor .field select { min-height: var(--control-h-md); }
-
-.model-limit-editor .button-row { margin-top: var(--space-5); }
-
-.model-limit-editor .button { min-height: var(--control-h-md); padding: var(--space-3) var(--space-4); font-size: var(--text-mini); }
 
 .inspector-disclosure {
   border-top: 1px solid var(--edge);
@@ -4121,14 +4184,6 @@ fieldset legend {
 .inspector-disclosure > button strong { font-size: var(--text-mini); }
 
 .inspector-disclosure > button small { margin-top: var(--space-1); color: var(--text-muted); font-size: var(--text-micro); }
-
-.inspector-disclosure__body > div { display: grid; min-height: var(--row-h-md); grid-template-columns: 8px minmax(0, 1fr) auto minmax(80px, auto); align-items: center; gap: var(--space-4); padding: var(--space-3) var(--space-5); border-top: 1px solid var(--edge); font-variant-numeric: tabular-nums; }
-
-.inspector-disclosure__body > div.has-warning { box-shadow: inset 2px 0 var(--fault-mark); }
-
-.inspector-disclosure__body strong { font-size: var(--text-mini); }
-
-.inspector-disclosure__body small { color: var(--text-muted); font-size: var(--text-micro); }
 
 .status-code {
   display: inline-flex;
@@ -4203,44 +4258,6 @@ fieldset legend {
 
 .resource-page .resource-inspector > .inspector-header,
   .resource-page .ide-resource-inspector > header { position: sticky; z-index: var(--layer-pane-sticky); top: 0; background: var(--surface-raised); }
-}
-
-.ide-inspector-section {
-  border-top: 1px solid var(--edge);
-}
-
-.ide-inspector-section > span {
-  display: block;
-  padding: var(--space-4) var(--space-5);
-  color: var(--text-muted);
-  font-family: var(--font-label);
-  font-size: var(--text-micro);
-  letter-spacing: var(--track-label);
-  text-transform: uppercase;
-}
-
-.ide-inspector-section > div {
-  display: grid;
-  min-height: var(--row-h-md);
-  grid-template-columns: 8px minmax(0, 1fr) auto minmax(80px, auto);
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-3) var(--space-5);
-  border-top: 1px solid var(--edge);
-  font-variant-numeric: tabular-nums;
-}
-
-.ide-inspector-section > div.has-warning {
-  box-shadow: inset 2px 0 var(--fault-mark);
-}
-
-.ide-inspector-section strong {
-  font-size: var(--text-mini);
-}
-
-.ide-inspector-section small {
-  color: var(--text-muted);
-  font-size: var(--text-micro);
 }
 
 /* A 560px floor on the list column is wider than the pane once the inspector takes
@@ -4611,11 +4628,8 @@ fieldset legend {
   .copy-base-url { min-width: var(--control-h-lg); min-height: var(--control-h-lg); }
 
 .inspector-actions .button,
-  .model-limit-editor .button,
-  .model-limit-editor .field input,
-  .model-limit-editor .field select,
   .ide-filter input,
-  .model-filter select,
+  .mdl-filter select,
   .log-status-filter button,
   .log-status-filter input { min-height: var(--control-h-lg); }
 
@@ -4695,10 +4709,7 @@ fieldset legend {
 
 /* The status filter drops below the search box: side by side, neither one has
      room for its own longest option. */
-  .model-filter,
   .log-filter { grid-template-columns: 14px minmax(0, 1fr); }
-
-.model-filter label:last-child { grid-column: 2; }
 
 /* The segmented control spreads to fill the row it now has to itself. */
   .log-status-filter { grid-column: 2; }
@@ -4708,14 +4719,6 @@ fieldset legend {
 .console-actionbar { position: static; align-items: stretch; flex-direction: column; }
 
 .console-actionbar .button { width: 100%; }
-
-.model-sweep { grid-template-columns: minmax(0, 1fr); }
-
-.model-sweep__track { grid-column: 1; grid-row: auto; }
-
-.model-sweep .button-row { flex-wrap: wrap; justify-content: flex-start; }
-
-.model-sweep .button { flex: 1; }
 
 /* Every resource row becomes two lines here instead of shedding a column: the
      alias leads, and whatever the page put in the second cell — the provider name
@@ -4788,7 +4791,7 @@ fieldset legend {
     animation: none !important;
   }
 
-.model-sweep__track > span {
+.mdl-sweep > span {
     transition: none !important;
   }
 }

@@ -1145,6 +1145,167 @@
   border-color: var(--edge);
 }
 
+/* ── Markdown ────────────────────────────────────────────────────────────────
+   A model's reply, set as prose rather than as data.
+
+   This is the one place in the console where the text was not written by the
+   product, and it is styled to read like a document: body face, normal leading,
+   a measure that stops before the line gets tiring. Everywhere else the console
+   is a panel of readouts; a paragraph of prose set in the same dense way as a
+   table row is what made the old playground unreadable. */
+
+/* A grid of single-column rows rather than a block flow, and the column is
+   `minmax(0, 1fr)`, because a fenced line of code never wraps: in normal flow its
+   width becomes the width the whole reply asks for, and the transcript — or, at
+   375px, the entire page — grows sideways to fit one long string a model
+   happened to print. The column refuses to grow, and the code block scrolls
+   inside itself instead. */
+.ui-md {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  color: var(--text-strong);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
+.ui-md > * + *,
+.ui-md__quote > * + * {
+  margin-top: var(--space-5);
+}
+
+.ui-md__p {
+  margin: 0;
+}
+
+.ui-md__h {
+  margin: 0;
+  color: var(--text-strong);
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: var(--track-tight);
+  line-height: var(--leading-snug);
+}
+
+/* A heading that opens a new idea needs air above it, but not when it is the
+   first thing in the reply. */
+.ui-md__h:not(:first-child) {
+  margin-top: var(--space-7);
+}
+
+.ui-md__ul,
+.ui-md__ol {
+  margin: 0;
+  padding-left: var(--space-7);
+}
+
+.ui-md__li + .ui-md__li {
+  margin-top: var(--space-3);
+}
+
+.ui-md__link {
+  color: var(--iris);
+  text-underline-offset: 2px;
+}
+
+/* Marked out by an edge and a shift in face, not by a background: an inline span
+   with its own fill breaks the line's rhythm every time it appears, and models
+   name identifiers constantly. */
+.ui-md__inline-code {
+  padding: 0 var(--space-2);
+  color: var(--text-strong);
+  background: var(--surface-inset);
+  border-radius: var(--radius-fitting);
+  font-family: var(--font-data);
+  font-size: 0.9em;
+}
+
+/* Same column treatment as the reply itself: a quote can hold a fenced block,
+   and it must not be the thing that widens the page either. */
+.ui-md__quote {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  margin: 0;
+  padding-left: var(--space-6);
+  color: var(--text-muted);
+  border-left: 2px solid var(--edge-strong);
+}
+
+.ui-md__rule {
+  height: 1px;
+  margin: 0;
+  background: var(--edge);
+  border: 0;
+}
+
+/* Code stays dark in both themes for the same reason the rail does: a
+   terminal-coloured block is recognisably a thing you copy, not page prose. */
+.ui-md__code {
+  margin: 0;
+  overflow: hidden;
+  background: var(--rail);
+  border: 1px solid var(--rail-edge);
+  border-radius: var(--radius-panel);
+}
+
+.ui-md__code-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-6);
+  border-bottom: 1px solid var(--rail-edge);
+}
+
+.ui-md__code-lang {
+  color: var(--rail-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
+.ui-md__code-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--control-h-xs);
+  padding: 0 var(--space-5);
+  color: var(--rail-text);
+  background: var(--rail-raised);
+  border: 1px solid var(--rail-edge);
+  border-radius: var(--radius-fitting);
+  font-family: var(--font-body);
+  font-size: var(--text-mini);
+  cursor: pointer;
+}
+
+.ui-md__code-copy:hover {
+  border-color: var(--rail-muted);
+}
+
+.ui-md__pre {
+  overflow: auto;
+  margin: 0;
+  padding: var(--space-6);
+  color: var(--rail-text);
+  /* Not the `font` shorthand: it resets font-variant-numeric, and the tabular
+     figures are wanted here as much as anywhere else in the console. */
+  font-family: var(--font-data);
+  font-size: var(--text-mini);
+  line-height: var(--leading-normal);
+  white-space: pre;
+}
+
+.ui-md__code-note {
+  margin: 0;
+  padding: var(--space-3) var(--space-6);
+  color: var(--rail-muted);
+  border-top: 1px solid var(--rail-edge);
+  font-size: var(--text-mini);
+}
+
 /* Below 1050px the inspector is still a column but a narrower one: a fraction of
    the remaining width leaves it too thin to hold a labelled figure, so it takes a
    fixed 300px and the list gives up what it must. */

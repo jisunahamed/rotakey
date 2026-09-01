@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -339,10 +340,14 @@ func (s *Server) servePooled(
 		result.ErrorCode, result.ErrorMessage = outcome.ErrorCode, outcome.ErrorMessage
 
 		if len(outcome.LearnedStrip) > 0 || len(outcome.LearnedReplace) > 0 ||
+			outcome.LearnedItemStrip.Field != "" ||
 			outcome.NativeResponsesMissing || outcome.NativeResponsesPreferred {
 			state.Removed = appendUniqueStrings(state.Removed, outcome.LearnedStrip...)
 			for from, to := range outcome.LearnedReplace {
 				state.Replaced[from] = to
+			}
+			if outcome.LearnedItemStrip.Field != "" && !slices.Contains(state.RemovedItemFields, outcome.LearnedItemStrip) {
+				state.RemovedItemFields = append(state.RemovedItemFields, outcome.LearnedItemStrip)
 			}
 			if outcome.NativeResponsesMissing {
 				state.NativeResponsesUnavailable[candidate.Route.Model.ID] = true
@@ -551,6 +556,8 @@ func (s *Server) runAttempt(
 			replacement    compatibilityReplacement
 			hasReplacement bool
 			parameters     []string
+			itemStrip      itemFieldStrip
+			hasItemStrip   bool
 		)
 		if readErr == nil && !wasTruncated {
 			// A provider that names /responses in its rejection is answered by moving
@@ -563,6 +570,13 @@ func (s *Server) runAttempt(
 				if replacement, hasReplacement = unsupportedCompatibilityReplacement(errorBody, plan.Payload); !hasReplacement {
 					parameters = unsupportedCompatibilityParameters(errorBody, plan.Payload)
 				}
+			}
+			// Last, because the two passes above answer a parameter the gateway or
+			// the operator put on the request, and this one answers a field the
+			// caller's client hung off a turn. The names cannot collide: a path with
+			// an index in it is never an allowlisted top-level parameter.
+			if !switchEndpoint && !hasReplacement && len(parameters) == 0 {
+				itemStrip, hasItemStrip = unsupportedItemField(errorBody, plan.Payload)
 			}
 		}
 		if allowCompatibility {
@@ -604,6 +618,18 @@ func (s *Server) runAttempt(
 					UpstreamRequestID: upstreamRequestID, Compatibility: true, ResetSkips: true,
 					LearnedStrip: parameters,
 				}
+			case hasItemStrip:
+				record.Retryable = true
+				record.RemovedParameters = []string{itemStrip.String()}
+				s.rememberItemFieldStrip(r.Context(), candidate.Route.Model.ID, itemStrip)
+				s.logger.Info("learned unsupported field inside the caller's turns",
+					"request_id", req.RequestID, "model", candidate.Route.Model.PublicAlias,
+					"provider", candidate.Route.Provider.Name, "field", itemStrip.String())
+				return attemptOutcome{
+					Record: record, Status: response.StatusCode,
+					UpstreamRequestID: upstreamRequestID, Compatibility: true, ResetSkips: true,
+					LearnedItemStrip: itemStrip,
+				}
 			}
 		}
 		// A 400 the gateway can name is already excluded above. So is a 400 on an
@@ -612,7 +638,7 @@ func (s *Server) runAttempt(
 		// so striking this one only shrinks the rotation over the gateway's own
 		// mistake. A route that publishes /responses natively is not covered —
 		// there the configuration is the operator's and the 400 is real evidence.
-		if !switchEndpoint && !hasReplacement && len(parameters) == 0 && !plan.SwitchedToResponses {
+		if !switchEndpoint && !hasReplacement && len(parameters) == 0 && !hasItemStrip && !plan.SwitchedToResponses {
 			s.markUpstreamFailure(r.Context(), credential.ID, response.StatusCode, response.Header, errorBody)
 		}
 		return s.writeAttemptFailure(w, r, req, plan, response, errorBody, wasTruncated, record, credential, upstreamRequestID)
@@ -872,6 +898,10 @@ func (s *Server) streamAttempt(
 			writeStreamFailure(w, capture, req.Endpoint, record.Error, record.ErrorMessage, req.Alias)
 		}
 	}
+	// A stream that reported its own input count is the only measurement anyone
+	// has; the estimate is what the tokenizer guessed before the request left.
+	// The limiter was already being corrected with the real number while the log
+	// kept the guess, so the same value now reaches both.
 	actualInput := inputTokens
 	if actualInput == 0 {
 		actualInput = plan.InputEstimate
@@ -882,7 +912,7 @@ func (s *Server) streamAttempt(
 	outcome := attemptOutcome{
 		Done: true, Record: record, Status: response.StatusCode,
 		ErrorCode: record.Error, ErrorMessage: record.ErrorMessage,
-		InputTokens: plan.InputEstimate, OutputTokens: outputTokens,
+		InputTokens: actualInput, OutputTokens: outputTokens,
 		UpstreamRequestID: upstreamRequestID,
 	}
 	if capture != nil {

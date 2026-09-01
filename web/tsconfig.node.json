@@ -3,9 +3,14 @@
     "composite": true,
     "skipLibCheck": true,
     "noEmit": true,
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "allowImportingTsExtensions": true
   },
-  "include": ["vite.config.ts"]
+  "//lib": "DOM is here for the WHATWG globals Node implements — URL and setTimeout — which have no other declaration in this project. @types/node is not a dependency and a dev fixture is not a reason to make it one.",
+  "//": "src/types.ts is listed because dev-api/fixtures.ts is typed against it. That is the point of the fixture: a field the gateway renames breaks the fixture's typecheck too, so it cannot quietly drift into describing an API that no longer exists.",
+  "include": ["vite.config.ts", "dev-api", "src/types.ts"]
 }

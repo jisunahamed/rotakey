@@ -30,6 +30,11 @@ type dispatchRequest struct {
 type dispatchState struct {
 	Removed  []string
 	Replaced map[string]string
+	// RemovedItemFields holds fields rejected from inside a turn rather than from
+	// the top level of the request — see compat_item_fields.go. Kept apart from
+	// Removed because the two are applied by different code: one deletes a key
+	// from the payload, the other from every item of an array inside it.
+	RemovedItemFields []itemFieldStrip
 	// NativeResponsesUnavailable holds the model IDs whose provider answered 404
 	// at /responses during this request. A provider that never implemented the
 	// endpoint rejects every model the same way, so the retry translates to Chat
@@ -81,6 +86,10 @@ type attemptOutcome struct {
 	// candidate's plan, so the repair survives a switch to another provider.
 	LearnedStrip   []string
 	LearnedReplace map[string]string
+	// LearnedItemStrip carries a field the provider rejected from inside a turn.
+	// Its zero value means nothing was learned, which is why it is a value rather
+	// than a slice: at most one path is named per rejection.
+	LearnedItemStrip itemFieldStrip
 	// ResetSkips clears the per-request skip set, because a request-shape
 	// failure is not the credential's fault.
 	ResetSkips bool
@@ -193,6 +202,11 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 	plan.Removed = appendUniqueStrings(plan.Removed, stripTopLevelParameters(payload, route.Model.StripParameters)...)
 	plan.Removed = appendUniqueStrings(plan.Removed, stripTopLevelParameters(payload, s.learnedCompatibilityParameters(ctx, route.Model.ID))...)
 	plan.Removed = appendUniqueStrings(plan.Removed, stripTopLevelParameters(payload, state.Removed)...)
+	// Nested strips run after the translations above, because a translated plan
+	// builds its own turn objects and the caller's extension never reaches them —
+	// there is nothing to delete, and stripItemFields says so by removing nothing.
+	plan.Removed = appendUniqueStrings(plan.Removed, stripItemFields(payload, s.learnedItemFieldStrips(ctx, route.Model.ID))...)
+	plan.Removed = appendUniqueStrings(plan.Removed, stripItemFields(payload, state.RemovedItemFields)...)
 	learned := s.learnedCompatibilityReplacements(ctx, route.Model.ID, plan.wireEndpoint())
 	if learned == nil {
 		// A Redis outage returns no learned repairs at all, and writing this

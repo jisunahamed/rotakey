@@ -49,6 +49,8 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	mux.Handle("PUT /api/admin/models/{id}", admin(s.handleUpdateModel))
 	mux.Handle("POST /api/admin/models/{id}/probe", admin(s.handleProbeModel))
 	mux.Handle("DELETE /api/admin/models/{id}", admin(s.handleDeleteModel))
+	mux.Handle("GET /api/admin/models/{id}/learned", admin(s.handleModelLearned))
+	mux.Handle("DELETE /api/admin/models/{id}/learned", admin(s.handleForgetModelLearned))
 	mux.Handle("POST /api/admin/playground/run", admin(s.handlePlaygroundRun))
 	mux.Handle("POST /api/admin/providers/{id}/credentials", admin(s.handleCreateCredentials))
 	mux.Handle("POST /api/admin/providers/{id}/credentials/inspect", admin(s.handleInspectProviderCredential))
@@ -58,6 +60,7 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	mux.Handle("PUT /api/admin/credentials/{id}/model-limits/{model_id}", admin(s.handleModelLimits))
 	mux.Handle("DELETE /api/admin/credentials/{id}/model-limits/{model_id}", admin(s.handleDeleteModelLimits))
 	mux.Handle("GET /api/admin/logs", admin(s.handleLogs))
+	mux.Handle("GET /api/admin/logs/{id}", admin(s.handleLog))
 	mux.Handle("GET /api/admin/logs/{id}/bodies", admin(s.handleLogBodies))
 	mux.Handle("POST /api/admin/access/rotate", admin(s.handleRotateGatewayKey))
 	mux.Handle("GET /api/admin/settings", admin(s.handleGetSettings))
@@ -1427,6 +1430,27 @@ func (s *Server) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// requestLogColumns is written once because two handlers select the same row and
+// a column added to one list but not the other is a scan mismatch at runtime,
+// not a compile error.
+const requestLogColumns = `id, request_id, model_alias, provider_name, credential_label, endpoint,
+	       attempts, routing_decisions, status_code, latency_ms, input_tokens, output_tokens,
+	       COALESCE(error_code,''), COALESCE(error_message,''), request_body_cipher IS NOT NULL,
+	       body_truncated, public_protocol, upstream_protocol, upstream_request_id, created_at`
+
+func scanRequestLog(row interface{ Scan(...any) error }) (RequestLog, error) {
+	var log RequestLog
+	err := row.Scan(
+		&log.ID, &log.RequestID, &log.ModelAlias, &log.ProviderName,
+		&log.CredentialLabel, &log.Endpoint, &log.Attempts, &log.RoutingDecisions, &log.StatusCode,
+		&log.LatencyMS, &log.InputTokens, &log.OutputTokens, &log.ErrorCode, &log.ErrorMessage,
+		&log.BodyCaptured, &log.BodyTruncated,
+		&log.PublicProtocol, &log.UpstreamProtocol, &log.UpstreamRequestID,
+		&log.CreatedAt,
+	)
+	return log, err
+}
+
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 200 {
@@ -1445,15 +1469,17 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"logs": activeLogs})
 		return
 	}
+	// A stream that dies after the headers are sent is written down as HTTP 200
+	// with an error code, because 200 is genuinely what the caller received. The
+	// errors view asks a different question — "which requests went wrong" — so it
+	// reads the error code as well as the status. Without this, the one failure
+	// mode streaming introduces is the one the errors filter cannot show.
 	rows, err := s.db.Query(r.Context(), `
-		SELECT id, request_id, model_alias, provider_name, credential_label, endpoint,
-		       attempts, routing_decisions, status_code, latency_ms, input_tokens, output_tokens,
-		       COALESCE(error_code,''), COALESCE(error_message,''), request_body_cipher IS NOT NULL,
-		       body_truncated, public_protocol, upstream_protocol, upstream_request_id, created_at
+		SELECT `+requestLogColumns+`
 		FROM request_logs
 		WHERE ($1 = '' OR model_alias ILIKE '%' || $1 || '%' OR request_id ILIKE '%' || $1 || '%')
 		  AND ($2 = 0 OR status_code = $2)
-		  AND (NOT $3 OR status_code >= 400)
+		  AND (NOT $3 OR status_code >= 400 OR COALESCE(error_code,'') <> '')
 		ORDER BY created_at DESC LIMIT $4
 	`, query, status, errorsOnly, limit)
 	if err != nil {
@@ -1463,15 +1489,8 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	logs := []RequestLog{}
 	for rows.Next() {
-		var log RequestLog
-		if err := rows.Scan(
-			&log.ID, &log.RequestID, &log.ModelAlias, &log.ProviderName,
-			&log.CredentialLabel, &log.Endpoint, &log.Attempts, &log.RoutingDecisions, &log.StatusCode,
-			&log.LatencyMS, &log.InputTokens, &log.OutputTokens, &log.ErrorCode, &log.ErrorMessage,
-			&log.BodyCaptured, &log.BodyTruncated,
-			&log.PublicProtocol, &log.UpstreamProtocol, &log.UpstreamRequestID,
-			&log.CreatedAt,
-		); err != nil {
+		log, err := scanRequestLog(rows)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "logs_unavailable", "Request logs could not be decoded.")
 			return
 		}
@@ -1484,6 +1503,30 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"logs": logs})
+}
+
+// handleLog answers for one request by either identifier. The list endpoint only
+// reaches back through its newest rows, so a link to a request from anywhere else
+// in the console — a playground reply, a bookmark, a copied id — needs a lookup
+// that does not depend on how much traffic has passed since.
+func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if value, ok := s.activeRequests.Load(id); ok {
+		if log, ok := value.(RequestLog); ok {
+			writeJSON(w, http.StatusOK, map[string]any{"log": log})
+			return
+		}
+	}
+	log, err := scanRequestLog(s.db.QueryRow(r.Context(),
+		`SELECT `+requestLogColumns+` FROM request_logs WHERE id = $1 OR request_id = $1`, id))
+	if err != nil {
+		// Retention sweeps rows away on the operator's own schedule, so a missing
+		// record is an ordinary outcome and the caller is expected to say
+		// "no longer recorded" rather than treat this as a failure.
+		writeError(w, http.StatusNotFound, "log_not_found", "This request is no longer in the log.")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"log": log})
 }
 
 func (s *Server) handleLogBodies(w http.ResponseWriter, r *http.Request) {
