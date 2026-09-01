@@ -79,12 +79,12 @@
 
 /* Each state gets the hue it has everywhere else in the console, so the band is
    readable with the same vocabulary as the status dots beside the rows below. */
-.rotor__segment--healthy { background: var(--live); }
-.rotor__segment--cooldown { background: var(--hold); }
-.rotor__segment--throttled { background: var(--hold); }
-.rotor__segment--quarantined { background: var(--fault); }
-.rotor__segment--exhausted { background: var(--fault); }
-.rotor__segment--failed { background: var(--fault); }
+.rotor__segment--healthy { background: var(--live-mark); }
+.rotor__segment--cooldown { background: var(--hold-mark); }
+.rotor__segment--throttled { background: var(--hold-mark); }
+.rotor__segment--quarantined { background: var(--fault-mark); }
+.rotor__segment--exhausted { background: var(--fault-mark); }
+.rotor__segment--failed { background: var(--fault-mark); }
 .rotor__segment--disabled { background: var(--idle-wash); }
 
 /* A key whose upstream state has not been read yet is not a state — it is the
@@ -136,7 +136,7 @@
    so along its whole length rather than leaving the operator to notice a missing
    tick. */
 .rotor--stalled .rotor__track {
-  border-color: color-mix(in srgb, var(--fault) 45%, var(--edge));
+  border-color: color-mix(in srgb, var(--fault-mark) 45%, var(--edge));
 }
 
 .rotor__stalled-note {

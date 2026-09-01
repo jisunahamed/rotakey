@@ -53,7 +53,7 @@
 }
 
 @media (min-width: 901px) {
-  .nav-item { min-height: 40px; }
+  .nav-item { min-height: var(--control-h-md); }
 }
 
 /* The rail keeps its own dark surfaces in both themes, and the active item is
@@ -64,7 +64,7 @@
 .nav-item.is-active {
   background: var(--rail-raised);
   border-color: var(--rail-edge);
-  box-shadow: inset 3px 0 var(--iris);
+  box-shadow: var(--select-bar);
 }
 
 .workspace {
@@ -120,8 +120,8 @@
    to 2px here made "this is the row you are looking at" the one marker in the
    console thinner than the rest. */
 .resource-item.is-selected {
-  background: color-mix(in srgb, var(--iris) 11%, var(--surface-raised));
-  box-shadow: inset 3px 0 var(--iris);
+  background: var(--select-wash);
+  box-shadow: var(--select-bar);
 }
 
 .dense-row,
@@ -157,7 +157,7 @@
    splitting the instrument in half rather than as depth. */
 .ops-commandbar {
   display: flex;
-  min-height: 58px;
+  min-height: var(--row-h-lg);
   align-items: center;
   justify-content: space-between;
   gap: var(--space-6);
@@ -215,23 +215,23 @@
 }
 
 .gateway-pulse {
-  width: 8px;
-  height: 8px;
+  width: var(--icon-dot);
+  height: var(--icon-dot);
   flex: 0 0 auto;
-  background: var(--live);
+  background: var(--live-mark);
   border-radius: var(--radius-pill);
   box-shadow: 0 0 0 3px var(--live-wash);
 }
 
 .gateway-pulse.is-warning {
-  background: var(--hold);
+  background: var(--hold-mark);
   box-shadow: 0 0 0 3px var(--hold-wash);
 }
 
 .console-icon {
   display: inline-grid;
-  width: 30px;
-  height: 30px;
+  width: var(--icon-box);
+  height: var(--icon-box);
   flex: 0 0 auto;
   place-items: center;
   color: var(--text-muted);
@@ -273,7 +273,7 @@
 
 .range-switcher button,
 .console-refresh {
-  min-height: 30px;
+  min-height: var(--control-h-xs);
   color: var(--text-muted);
   background: transparent;
   border: 1px solid transparent;
@@ -305,7 +305,7 @@
 .console-refresh {
   display: inline-flex;
   height: 100%;
-  min-height: 56px;
+  min-height: var(--row-h-lg);
   align-items: center;
   gap: var(--space-3);
   padding: 0 var(--space-5);
@@ -377,9 +377,9 @@
 
 /* The state hue sits in a bottom accent bar rather than tinting the cell, so
    seven metrics side by side stay readable. */
-.ledger-metric--healthy { box-shadow: inset 0 -2px var(--live); }
-.ledger-metric--warning { box-shadow: inset 0 -2px var(--hold); }
-.ledger-metric--danger { box-shadow: inset 0 -2px var(--fault); }
+.ledger-metric--healthy { box-shadow: inset 0 -2px var(--live-mark); }
+.ledger-metric--warning { box-shadow: inset 0 -2px var(--hold-mark); }
+.ledger-metric--danger { box-shadow: inset 0 -2px var(--fault-mark); }
 
 .ops-console__workspace {
   display: grid;
@@ -423,7 +423,7 @@
 .console-panel__header,
 .overview-inspector > header {
   display: flex;
-  min-height: 54px;
+  min-height: var(--row-h-lg);
   align-items: center;
   justify-content: space-between;
   gap: var(--space-6);
@@ -497,7 +497,7 @@
   gap: var(--space-5);
 }
 .model-ranking__head {
-  min-height: 31px;
+  min-height: var(--row-h-sm);
   color: var(--text-muted);
   border-bottom: 1px solid var(--edge);
   font-family: var(--font-label);
@@ -505,12 +505,12 @@
   letter-spacing: var(--track-label);
   text-transform: uppercase;
 }
-.model-ranking__row { min-height: 39px; border-bottom: 1px solid color-mix(in srgb, var(--edge) 72%, transparent); font-family: var(--font-data); font-size: var(--text-mini); font-variant-numeric: tabular-nums; }
+.model-ranking__row { min-height: var(--row-h-md); border-bottom: 1px solid color-mix(in srgb, var(--edge) 72%, transparent); font-family: var(--font-data); font-size: var(--text-mini); font-variant-numeric: tabular-nums; }
 .model-ranking__row:last-child { border-bottom: 0; }
 .model-ranking__row > span, .model-ranking__head > span:not(:first-child) { text-align: right; }
 .model-ranking__row strong { display: flex; min-width: 0; align-items: center; gap: var(--space-4); font-weight: 500; }
 .model-ranking__row code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-ranking__row i { display: grid; width: 18px; height: 18px; flex: 0 0 auto; place-items: center; border: 1px solid var(--edge); color: var(--iris); font-size: var(--text-micro); font-style: normal; }
+.model-ranking__row i { display: grid; width: var(--icon-mark); height: var(--icon-mark); flex: 0 0 auto; place-items: center; border: 1px solid var(--edge); color: var(--iris); font-size: var(--text-micro); font-style: normal; }
 
 .signal-path {
   fill: none;
@@ -527,14 +527,14 @@
 }
 
 .signal-path--latency {
-  stroke: var(--hold);
+  stroke: var(--hold-mark);
   stroke-width: 1.4;
   stroke-dasharray: 4 4;
   opacity: 0.85;
 }
 
 .signal-error-tick {
-  stroke: var(--fault);
+  stroke: var(--fault-mark);
   stroke-width: 2;
   vector-effect: non-scaling-stroke;
 }
@@ -561,8 +561,8 @@
   background: var(--iris);
 }
 
-.signal-legend .is-latency { background: var(--hold); }
-.signal-legend .is-error { background: var(--fault); }
+.signal-legend .is-latency { background: var(--hold-mark); }
+.signal-legend .is-error { background: var(--fault-mark); }
 
 .attention-list {
   display: grid;
@@ -581,7 +581,7 @@
 .attention-item {
   display: grid;
   width: 100%;
-  min-height: 54px;
+  min-height: var(--row-h-lg);
   grid-template-columns: 15px minmax(0, 1fr) 14px;
   align-items: center;
   gap: var(--space-4);
@@ -658,13 +658,13 @@
 }
 
 .provider-debug-head.is-selected {
-  background: color-mix(in srgb, var(--iris) 10%, var(--surface-raised));
+  background: var(--select-wash);
 }
 
 .provider-debug-toggle {
   display: grid;
   min-width: 0;
-  min-height: 46px;
+  min-height: var(--control-h-lg);
   grid-template-columns: 18px 9px minmax(0, 1fr);
   align-items: center;
   gap: var(--space-4);
@@ -711,7 +711,7 @@
 }
 
 .provider-inspect {
-  min-height: 30px;
+  min-height: var(--control-h-xs);
   padding: 0 var(--space-4);
   color: var(--text-muted);
   background: transparent;
@@ -746,7 +746,7 @@
 /* Anthropic-protocol providers translate rather than pass through, so they are
    marked with the warning hue: it is a caveat, not a fault. */
 .protocol-badge.is-anthropic {
-  border-color: color-mix(in srgb, var(--hold) 55%, var(--edge));
+  border-color: color-mix(in srgb, var(--hold-mark) 55%, var(--edge));
   color: var(--hold);
 }
 
@@ -789,15 +789,15 @@
   min-width: 0;
   padding: var(--space-3) var(--space-3);
   border-right: 1px solid var(--edge);
-  box-shadow: inset 0 -2px var(--live);
+  box-shadow: inset 0 -2px var(--live-mark);
 }
 
 .limit-cell:last-child { border-right: 0; }
-.limit-cell--warning { box-shadow: inset 0 -2px var(--hold); }
-.limit-cell--critical { box-shadow: inset 0 -2px var(--fault); }
+.limit-cell--warning { box-shadow: inset 0 -2px var(--hold-mark); }
+.limit-cell--critical { box-shadow: inset 0 -2px var(--fault-mark); }
 /* An unmeasured limit is inactive rather than healthy, so it takes the idle hue
    instead of borrowing the muted text colour. */
-.limit-cell--unknown { box-shadow: inset 0 -2px var(--idle); }
+.limit-cell--unknown { box-shadow: inset 0 -2px var(--idle-mark); }
 
 .limit-cell small,
 .limit-cell strong {
@@ -845,7 +845,7 @@
 }
 
 .route-debug-columns {
-  min-height: 30px;
+  min-height: var(--row-h-sm);
   padding: 0 var(--space-5);
   color: var(--text-muted);
   background: color-mix(in srgb, var(--surface-raised) 82%, var(--surface-sunken));
@@ -858,7 +858,7 @@
 
 .route-debug-row {
   width: 100%;
-  min-height: 52px;
+  min-height: var(--control-h-xl);
   padding: var(--space-3) var(--space-5);
   color: var(--text-strong);
   background: transparent;
@@ -878,8 +878,8 @@
    same "the row you are looking at" marker as .resource-item.is-selected, and at 2px
    it was visibly thinner than the identical marker one panel away. */
 .route-debug-row.is-selected {
-  background: color-mix(in srgb, var(--iris) 7%, var(--surface-raised));
-  box-shadow: inset 3px 0 var(--iris);
+  background: var(--select-wash);
+  box-shadow: var(--select-bar);
 }
 
 .route-debug-row__identity {
@@ -1019,7 +1019,7 @@
   border-top: 2px solid var(--iris);
 }
 
-.trace-node--danger { border-top-color: var(--fault); }
+.trace-node--danger { border-top-color: var(--fault-mark); }
 
 .trace-node small,
 .trace-node strong {
@@ -1111,11 +1111,11 @@
   padding: var(--space-5);
   background: var(--surface-sunken);
   border: 1px solid var(--edge);
-  border-left: 2px solid var(--live);
+  border-left: 2px solid var(--live-mark);
 }
 
-.headroom-readout.is-warning { border-left-color: var(--hold); }
-.headroom-readout.is-critical { border-left-color: var(--fault); }
+.headroom-readout.is-warning { border-left-color: var(--hold-mark); }
+.headroom-readout.is-critical { border-left-color: var(--fault-mark); }
 /* No ceiling to report against is not a state, so the unlimited case falls back
    to the interactive hue rather than claiming health. */
 .headroom-readout.is-unlimited { border-left-color: var(--iris); }
@@ -1150,11 +1150,11 @@
 .headroom-readout > div i {
   display: block;
   height: 100%;
-  background: var(--live);
+  background: var(--live-mark);
 }
 
-.headroom-readout.is-warning > div i { background: var(--hold); }
-.headroom-readout.is-critical > div i { background: var(--fault); }
+.headroom-readout.is-warning > div i { background: var(--hold-mark); }
+.headroom-readout.is-critical > div i { background: var(--fault-mark); }
 
 /* The reset line is a countdown that re-renders once a second, which is six times
    the rate of the page's own poll, so it is the one place proportional digits were
@@ -1196,7 +1196,7 @@
 .inspector-key-list button {
   display: grid;
   width: 100%;
-  min-height: 40px;
+  min-height: var(--control-h-md);
   grid-template-columns: 8px minmax(0, 1fr) auto 13px;
   align-items: center;
   gap: var(--space-4);
@@ -1223,7 +1223,7 @@
 }
 
 .inspector-actions .button {
-  min-height: 40px;
+  min-height: var(--control-h-md);
   font-size: var(--text-mini);
 }
 
@@ -1255,7 +1255,7 @@
   place-items: center;
   color: var(--fault);
   background: var(--fault-wash);
-  border: 1px solid color-mix(in srgb, var(--fault) 28%, var(--edge));
+  border: 1px solid color-mix(in srgb, var(--fault-mark) 28%, var(--edge));
   font-family: var(--font-data);
   font-size: var(--text-micro);
   font-variant-numeric: tabular-nums;
@@ -1317,7 +1317,7 @@
 
 .ide-filter {
   display: flex;
-  min-height: 48px;
+  min-height: var(--control-h-xl);
   align-items: center;
   gap: var(--space-4);
   padding: var(--space-3) var(--space-5);
@@ -1327,7 +1327,7 @@
 
 .ide-filter input {
   width: 100%;
-  min-height: 40px;
+  min-height: var(--control-h-md);
   color: var(--text-strong);
   background: var(--surface-sunken);
   border: 1px solid var(--edge);
@@ -1348,7 +1348,7 @@
 }
 
 .ide-resource-list > header {
-  min-height: 30px;
+  min-height: var(--row-h-sm);
   padding: var(--space-2) var(--space-5);
   color: var(--text-muted);
   background: var(--surface-sunken);
@@ -1361,7 +1361,7 @@
 
 .ide-resource-list > div > button {
   width: 100%;
-  min-height: 58px;
+  min-height: var(--row-h-lg);
   padding: var(--space-3) var(--space-5);
   color: var(--text-strong);
   background: transparent;
@@ -1373,17 +1373,14 @@
 }
 
 .ide-resource-list > div > button:hover,
+/* The hover and the selected state share one wash on purpose — the row a pointer
+   is over and the row that is open are the same colour — so the bar is the only
+   thing that tells them apart. */
 .ide-resource-list > div > button.is-selected {
-  background: color-mix(in srgb, var(--iris) 8%, var(--surface-raised));
+  background: var(--select-wash);
+  box-shadow: var(--select-bar);
 }
 
-/* Same marker again, so the same 3px. The hover and the selected state share one
-   wash on purpose — the row a pointer is over and the row that is open are the same
-   colour — and the bar is the only thing that distinguishes them, which is why it
-   cannot be the thinnest one in the console. */
-.ide-resource-list > div > button.is-selected {
-  box-shadow: inset 3px 0 var(--iris);
-}
 
 .ide-resource-list button > span:first-child {
   display: grid;
@@ -1463,7 +1460,7 @@
 
 .resource-disclosure > header {
   display: grid;
-  min-height: 68px;
+  min-height: var(--row-h-xl);
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-5);
@@ -1474,7 +1471,7 @@
 .resource-disclosure__toggle {
   display: grid;
   min-width: 0;
-  min-height: 40px;
+  min-height: var(--control-h-md);
   grid-template-columns: 18px minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-4);
@@ -1542,7 +1539,7 @@
 
 .model-filter select {
   width: 100%;
-  min-height: 40px;
+  min-height: var(--control-h-md);
   padding: var(--space-2) var(--space-4);
   color: var(--text-strong);
   background: var(--surface-sunken);
@@ -1563,7 +1560,7 @@
 }
 
 .log-status-filter button {
-  min-height: 40px;
+  min-height: var(--control-h-md);
   padding: var(--space-2) var(--space-3);
   color: var(--text-muted);
   background: var(--surface-sunken);
@@ -1585,7 +1582,7 @@
 /* It holds three digits and never more, so it is sized to what it holds. */
 .log-status-filter input {
   width: 62px;
-  min-height: 40px;
+  min-height: var(--control-h-md);
   padding: var(--space-2) var(--space-3);
   color: var(--text-strong);
   background: var(--surface-sunken);
@@ -1692,7 +1689,7 @@
 
 .playground-pane-title {
   display: flex;
-  min-height: 68px;
+  min-height: var(--row-h-xl);
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-4);
@@ -1738,7 +1735,7 @@
 
 .playground-pane-title .button {
   flex: 0 0 auto;
-  min-height: 36px;
+  min-height: var(--control-h-md);
   padding: var(--space-2) var(--space-3);
   font-size: var(--text-micro);
 }
@@ -1772,7 +1769,7 @@
 .playground-filters select {
   width: 100%;
   min-width: 0;
-  min-height: 38px;
+  min-height: var(--control-h-md);
   color: var(--text-strong);
   background: var(--surface-sunken);
   border: 1px solid var(--edge);
@@ -1803,7 +1800,7 @@
 
 .playground-model-list > div {
   display: grid;
-  min-height: 58px;
+  min-height: var(--row-h-lg);
   grid-template-columns: minmax(0, 1fr) 36px;
   align-items: center;
   border-bottom: 1px solid var(--edge);
@@ -1811,18 +1808,15 @@
 
 .playground-model-list > div:hover,
 .playground-model-list > div.is-selected {
-  background: color-mix(in srgb, var(--iris) 7%, var(--surface-raised));
-}
-
-.playground-model-list > div.is-selected {
-  box-shadow: inset 3px 0 var(--iris);
+  background: var(--select-wash);
+  box-shadow: var(--select-bar);
 }
 
 .playground-model-select {
   display: grid;
   width: 100%;
   min-width: 0;
-  min-height: 57px;
+  min-height: var(--row-h-lg);
   grid-template-columns: 9px minmax(0, 1fr);
   align-items: center;
   gap: var(--space-3);
@@ -1836,26 +1830,26 @@
 
 .playground-model-dot {
   display: inline-block;
-  width: 8px;
-  height: 8px;
+  width: var(--icon-dot);
+  height: var(--icon-dot);
   flex: 0 0 auto;
-  background: var(--idle);
+  background: var(--idle-mark);
   border-radius: var(--radius-pill);
 }
 
 .playground-model-dot.is-live {
-  background: var(--live);
+  background: var(--live-mark);
   box-shadow: 0 0 0 3px var(--live-wash);
 }
 
 .playground-model-dot.is-failed {
-  background: var(--fault);
+  background: var(--fault-mark);
   box-shadow: 0 0 0 3px var(--fault-wash);
 }
 
 .playground-model-dot.is-checking,
 .playground-model-dot.is-waiting {
-  background: var(--hold);
+  background: var(--hold-mark);
   box-shadow: 0 0 0 3px var(--hold-wash);
 }
 
@@ -1894,8 +1888,8 @@
 }
 
 .playground-model-list .console-icon {
-  width: 30px;
-  height: 30px;
+  width: var(--icon-box);
+  height: var(--icon-box);
 }
 
 .playground-runner {
@@ -1914,13 +1908,13 @@
 }
 
 .playground-protocols {
-  min-height: 42px;
+  min-height: var(--row-h-md);
   padding: 0 var(--space-4);
 }
 
 .playground-protocols button,
 .playground-tabs button {
-  min-height: 34px;
+  min-height: var(--control-h-sm);
   padding: 0 var(--space-4);
   color: var(--text-muted);
   background: transparent;
@@ -1938,7 +1932,7 @@
 
 .playground-live-status {
   display: grid;
-  min-height: 48px;
+  min-height: var(--row-h-md);
   grid-template-columns: 9px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: var(--space-3);
@@ -1948,31 +1942,31 @@
 }
 
 .playground-live-status__dot {
-  width: 8px;
-  height: 8px;
-  background: var(--idle);
+  width: var(--icon-dot);
+  height: var(--icon-dot);
+  background: var(--idle-mark);
   border-radius: var(--radius-pill);
 }
 
 .playground-live-status.is-sending .playground-live-status__dot,
 .playground-live-status.is-waiting .playground-live-status__dot {
-  background: var(--hold);
+  background: var(--hold-mark);
   box-shadow: 0 0 0 3px var(--hold-wash);
   animation: playground-status-pulse 1.25s ease-in-out infinite;
 }
 
 .playground-live-status.is-completed .playground-live-status__dot {
-  background: var(--live);
+  background: var(--live-mark);
   box-shadow: 0 0 0 3px var(--live-wash);
 }
 
 .playground-live-status.is-failed .playground-live-status__dot {
-  background: var(--fault);
+  background: var(--fault-mark);
   box-shadow: 0 0 0 3px var(--fault-wash);
 }
 
 .playground-live-status.is-cancelled .playground-live-status__dot {
-  background: var(--hold);
+  background: var(--hold-mark);
 }
 
 .playground-live-status strong,
@@ -2004,7 +1998,7 @@
 
 .playground-live-status button {
   display: inline-flex;
-  min-height: 28px;
+  min-height: var(--control-h-xs);
   align-items: center;
   gap: var(--space-2);
   padding: 0 var(--space-3);
@@ -2100,12 +2094,12 @@
 }
 
 .playground-transcript article.has-error {
-  border-left: 3px solid var(--fault);
+  border-left: 3px solid var(--fault-mark);
 }
 
 .playground-transcript article > header {
   display: flex;
-  min-height: 34px;
+  min-height: var(--control-h-sm);
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
@@ -2227,7 +2221,7 @@
 
 .playground-composer details textarea,
 .playground-composer details input {
-  min-height: 38px;
+  min-height: var(--control-h-md);
   padding: var(--space-2) var(--space-3);
   color: var(--text-strong);
   background: var(--surface-sunken);
@@ -2242,8 +2236,8 @@
   right: 27px;
   bottom: 27px;
   display: grid;
-  width: 34px;
-  height: 34px;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
   place-items: center;
   color: var(--surface-sunken);
   background: var(--iris);
@@ -2277,7 +2271,7 @@
 
 .playground-settings-form input,
 .playground-settings-form select {
-  min-height: 40px;
+  min-height: var(--control-h-md);
 }
 
 .playground-settings-actions {
@@ -2333,7 +2327,7 @@
 @media (max-width: 1050px) {
   .playground-tabs {
     display: flex;
-    min-height: 44px;
+    min-height: var(--control-h-lg);
     padding: 0 var(--space-3);
     border: 1px solid var(--edge);
     border-bottom: 0;
@@ -2458,9 +2452,9 @@
 .model-limit-editor .field { gap: var(--space-1); }
 .model-limit-editor .field > span { min-height: auto; font-size: var(--text-micro); }
 .model-limit-editor .field input,
-.model-limit-editor .field select { min-height: 40px; }
+.model-limit-editor .field select { min-height: var(--control-h-md); }
 .model-limit-editor .button-row { margin-top: var(--space-5); }
-.model-limit-editor .button { min-height: 40px; padding: var(--space-3) var(--space-4); font-size: var(--text-mini); }
+.model-limit-editor .button { min-height: var(--control-h-md); padding: var(--space-3) var(--space-4); font-size: var(--text-mini); }
 
 .inspector-disclosure {
   border-top: 1px solid var(--edge);
@@ -2469,7 +2463,7 @@
 .inspector-disclosure > button {
   display: grid;
   width: 100%;
-  min-height: 52px;
+  min-height: var(--control-h-xl);
   grid-template-columns: 17px minmax(0, 1fr);
   align-items: center;
   gap: var(--space-3);
@@ -2485,8 +2479,8 @@
 .inspector-disclosure > button small { display: block; }
 .inspector-disclosure > button strong { font-size: var(--text-mini); }
 .inspector-disclosure > button small { margin-top: var(--space-1); color: var(--text-muted); font-size: var(--text-micro); }
-.inspector-disclosure__body > div { display: grid; min-height: 43px; grid-template-columns: 8px minmax(0, 1fr) auto minmax(80px, auto); align-items: center; gap: var(--space-4); padding: var(--space-3) var(--space-5); border-top: 1px solid var(--edge); font-variant-numeric: tabular-nums; }
-.inspector-disclosure__body > div.has-warning { box-shadow: inset 2px 0 var(--fault); }
+.inspector-disclosure__body > div { display: grid; min-height: var(--row-h-md); grid-template-columns: 8px minmax(0, 1fr) auto minmax(80px, auto); align-items: center; gap: var(--space-4); padding: var(--space-3) var(--space-5); border-top: 1px solid var(--edge); font-variant-numeric: tabular-nums; }
+.inspector-disclosure__body > div.has-warning { box-shadow: inset 2px 0 var(--fault-mark); }
 .inspector-disclosure__body strong { font-size: var(--text-mini); }
 .inspector-disclosure__body small { color: var(--text-muted); font-size: var(--text-micro); }
 
@@ -2498,6 +2492,11 @@
   align-items: center;
   justify-content: center;
   padding: var(--space-1) var(--space-3);
+  /* A code with none of the modifiers below is a code the console has no opinion
+     about — a redirect, or a request that never got one. It takes the idle hue so
+     that it reads as unclassified rather than as body text that happens to sit in
+     a box beside four coloured siblings. */
+  color: var(--idle);
   border: 1px solid var(--edge);
   border-radius: var(--radius-fitting);
   font-family: var(--font-data);
@@ -2507,9 +2506,9 @@
 
 /* The tint is deliberately weak: the code text itself carries the state colour,
    and a solid fill at this size would fight the rows around it. */
-.status-code--healthy { color: var(--live); background: color-mix(in srgb, var(--live) 8%, transparent); }
-.status-code--warning { color: var(--hold); background: color-mix(in srgb, var(--hold) 9%, transparent); }
-.status-code--fault { color: var(--fault); background: color-mix(in srgb, var(--fault) 8%, transparent); }
+.status-code--healthy { color: var(--live); background: color-mix(in srgb, var(--live-mark) 8%, transparent); }
+.status-code--warning { color: var(--hold); background: color-mix(in srgb, var(--hold-mark) 9%, transparent); }
+.status-code--fault { color: var(--fault); background: color-mix(in srgb, var(--fault-mark) 8%, transparent); }
 .status-code--running { color: var(--iris); background: color-mix(in srgb, var(--iris) 10%, transparent); }
 
 .log-resource-rows > button.is-running {
@@ -2566,7 +2565,7 @@
 
 .ide-inspector-section > div {
   display: grid;
-  min-height: 43px;
+  min-height: var(--row-h-md);
   grid-template-columns: 8px minmax(0, 1fr) auto minmax(80px, auto);
   align-items: center;
   gap: var(--space-4);
@@ -2576,7 +2575,7 @@
 }
 
 .ide-inspector-section > div.has-warning {
-  box-shadow: inset 2px 0 var(--fault);
+  box-shadow: inset 2px 0 var(--fault-mark);
 }
 
 .ide-inspector-section strong {
@@ -2688,7 +2687,7 @@
    it carries the hold hue in an accent bar rather than the fault red. */
 .log-diagnosis {
   border-bottom: 1px solid var(--edge);
-  box-shadow: inset 3px 0 var(--hold);
+  box-shadow: inset 3px 0 var(--hold-mark);
 }
 
 .log-diagnosis > header {
@@ -2696,9 +2695,9 @@
   grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-4);
-  min-height: 54px;
+  min-height: var(--row-h-lg);
   padding: var(--space-4) var(--space-5);
-  background: color-mix(in srgb, var(--hold) 7%, var(--surface-raised));
+  background: color-mix(in srgb, var(--hold-mark) 7%, var(--surface-raised));
 }
 
 .log-diagnosis > header > svg { color: var(--hold); }
@@ -2720,11 +2719,11 @@
 
 .log-diagnosis__marker {
   display: grid;
-  width: 18px;
-  height: 18px;
+  width: var(--icon-mark);
+  height: var(--icon-mark);
   place-items: center;
   color: var(--hold);
-  border: 1px solid color-mix(in srgb, var(--hold) 55%, var(--edge));
+  border: 1px solid color-mix(in srgb, var(--hold-mark) 55%, var(--edge));
   border-radius: var(--radius-pill);
   font-family: var(--font-data);
   font-size: var(--text-micro);
@@ -2931,18 +2930,18 @@
      being a pointer-driven dense grid. Height alone is not enough for the
      icon-only and single-glyph controls: a 30px-wide square or a "1h" range button
      is still a miss at arm's length, so each one gets a min-width too. */
-  .console-refresh { min-height: 44px; }
+  .console-refresh { min-height: var(--control-h-lg); }
   /* The rail's own denser height only applies from 901px up now, so the drawer
      keeps the 44px floor from styles.css without needing to be raised here. */
   .console-icon {
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
-    min-height: 44px;
+    width: var(--control-h-lg);
+    height: var(--control-h-lg);
+    min-width: var(--control-h-lg);
+    min-height: var(--control-h-lg);
   }
   .range-switcher button,
   .provider-inspect,
-  .copy-base-url { min-width: 44px; min-height: 44px; }
+  .copy-base-url { min-width: var(--control-h-lg); min-height: var(--control-h-lg); }
   .inspector-actions .button,
   .model-limit-editor .button,
   .model-limit-editor .field input,
@@ -2950,12 +2949,12 @@
   .ide-filter input,
   .model-filter select,
   .log-status-filter button,
-  .log-status-filter input { min-height: 44px; }
+  .log-status-filter input { min-height: var(--control-h-lg); }
   /* The rows are the buttons on these three lists, so the row minimum is the
      touch target and there is no separate control to grow. */
   .inspector-key-list button,
   .resource-disclosure__toggle,
-  .provider-debug-toggle { min-height: 44px; }
+  .provider-debug-toggle { min-height: var(--control-h-lg); }
   /* Two columns, and the same column-keyed hairlines as the 1050px step: right
      edge cleared at the end of each row, top rule on every row but the first.
      The old rules restored a border on the third cell, which the odd-child base

@@ -249,7 +249,7 @@ h3 {
 .rail-search {
   display: flex;
   width: 100%;
-  min-height: 34px;
+  min-height: var(--control-h-sm);
   align-items: center;
   gap: var(--space-4);
   margin-bottom: var(--space-7);
@@ -328,7 +328,7 @@ h3 {
 .nav-item {
   display: flex;
   width: 100%;
-  min-height: 44px;
+  min-height: var(--control-h-lg);
   align-items: center;
   gap: var(--space-5);
   padding: 0 var(--space-5);
@@ -353,7 +353,7 @@ h3 {
 .nav-item.is-active {
   color: var(--rail-text);
   background: var(--rail-raised);
-  box-shadow: inset 2px 0 var(--iris);
+  box-shadow: var(--select-bar);
 }
 
 .nav-item.is-active svg {
@@ -375,7 +375,7 @@ h3 {
 .account__trigger {
   display: flex;
   width: 100%;
-  min-height: 46px;
+  min-height: var(--control-h-lg);
   align-items: center;
   gap: var(--space-4);
   padding: 0 var(--space-4);
@@ -406,8 +406,8 @@ h3 {
 
 .account__avatar {
   display: grid;
-  width: 30px;
-  height: 30px;
+  width: var(--icon-box);
+  height: var(--icon-box);
   flex: 0 0 auto;
   place-items: center;
   color: var(--text-inverse);
@@ -443,8 +443,8 @@ h3 {
 /* A new release is the one thing behind this menu worth interrupting for, so it
    leaves a mark on the closed control. */
 .account__badge {
-  width: 7px;
-  height: 7px;
+  width: var(--icon-dot);
+  height: var(--icon-dot);
   flex: 0 0 auto;
   background: var(--iris);
   border-radius: var(--radius-pill);
@@ -495,7 +495,7 @@ h3 {
 }
 
 .account__theme {
-  min-height: 30px;
+  min-height: var(--control-h-xs);
   padding: 0 var(--space-2);
   color: var(--rail-muted);
   background: transparent;
@@ -518,7 +518,7 @@ h3 {
 .account__item {
   display: flex;
   width: 100%;
-  min-height: 36px;
+  min-height: var(--control-h-md);
   align-items: center;
   gap: var(--space-4);
   padding: 0 var(--space-4);
@@ -650,7 +650,7 @@ a.account__version:hover {
 
 .button {
   display: inline-flex;
-  min-height: 38px;
+  min-height: var(--control-h-md);
   align-items: center;
   justify-content: center;
   gap: var(--space-3);
@@ -691,20 +691,21 @@ a.account__version:hover {
 .button--danger {
   color: var(--fault);
   background: transparent;
-  border-color: color-mix(in srgb, var(--fault) 40%, var(--edge));
+  border-color: color-mix(in srgb, var(--fault-mark) 40%, var(--edge));
 }
 
 .button--danger:hover:not(:disabled) {
   background: var(--fault-wash);
-  border-color: var(--fault);
+  border-color: var(--fault-mark);
 }
 
-/* Icon-only controls are 36px on the desktop rail but pad out to a 44px touch
-   target on small screens, where nothing is being clicked with a mouse. */
+/* Square, and the same height as a labelled button, so the two line up when they
+   sit in the same strip — they used to differ by two pixels. On small screens it
+   grows to the touch floor, where nothing is being clicked with a mouse. */
 .icon-button {
   display: inline-grid;
-  width: 36px;
-  height: 36px;
+  width: var(--control-h-md);
+  height: var(--control-h-md);
   flex: 0 0 auto;
   place-items: center;
   color: inherit;
@@ -834,32 +835,32 @@ a.account__version:hover {
    a wash halo: the ring is what makes an 8px dot legible in peripheral vision. */
 .status-dot {
   display: inline-block;
-  width: 8px;
-  height: 8px;
+  width: var(--icon-dot);
+  height: var(--icon-dot);
   flex: 0 0 auto;
-  background: var(--idle);
+  background: var(--idle-mark);
   border-radius: var(--radius-pill);
 }
 
 .status-dot--healthy {
-  background: var(--live);
+  background: var(--live-mark);
   box-shadow: 0 0 0 3px var(--live-wash);
 }
 
 .status-dot--partial,
 .status-dot--cooldown {
-  background: var(--hold);
+  background: var(--hold-mark);
   box-shadow: 0 0 0 3px var(--hold-wash);
 }
 
 .status-dot--exhausted,
 .status-dot--quarantined {
-  background: var(--fault);
+  background: var(--fault-mark);
   box-shadow: 0 0 0 3px var(--fault-wash);
 }
 
 .status-dot--disabled {
-  background: var(--idle);
+  background: var(--idle-mark);
   opacity: 0.55;
 }
 
@@ -913,7 +914,7 @@ a.account__version:hover {
   display: grid;
   width: 100%;
   grid-template-columns: 10px minmax(0, 1fr) auto 15px;
-  min-height: 70px;
+  min-height: var(--row-h-xl);
   align-items: center;
   gap: var(--space-5);
   padding: var(--space-5);
@@ -930,8 +931,8 @@ a.account__version:hover {
 }
 
 .resource-item.is-selected {
-  background: var(--iris-wash);
-  box-shadow: inset 3px 0 var(--iris);
+  background: var(--select-wash);
+  box-shadow: var(--select-bar);
 }
 
 .resource-item strong,
@@ -999,7 +1000,7 @@ a.account__version:hover {
 }
 
 .inspector-stats span {
-  min-height: 55px;
+  min-height: var(--row-h-lg);
   padding: var(--space-5) var(--space-6);
   color: var(--text-muted);
   border-right: 1px solid var(--edge);
@@ -1027,7 +1028,7 @@ a.account__version:hover {
 
 .pool-capacity > header {
   display: flex;
-  min-height: 58px;
+  min-height: var(--row-h-lg);
   align-items: center;
   justify-content: space-between;
   gap: var(--space-6);
@@ -1104,7 +1105,7 @@ a.account__version:hover {
 /* A key that failed validation gets a fault bar down its left edge, the same
    marker the rail uses for the active page, so "look here" reads one way. */
 .dense-row.has-warning {
-  box-shadow: inset 3px 0 0 var(--fault);
+  box-shadow: inset 3px 0 0 var(--fault-mark);
 }
 
 .dense-row.has-warning small {
@@ -1112,7 +1113,7 @@ a.account__version:hover {
 }
 
 .inline-empty {
-  min-height: 70px;
+  min-height: var(--row-h-xl);
   margin: 0;
   padding: var(--space-8) var(--space-5);
   color: var(--text-muted);
@@ -1129,7 +1130,7 @@ a.account__version:hover {
   display: grid;
   width: 100%;
   grid-template-columns: 9px minmax(170px, 1.2fr) minmax(120px, 1fr) 14px;
-  min-height: 59px;
+  min-height: var(--row-h-lg);
   align-items: center;
   gap: var(--space-5);
   padding: var(--space-4) var(--space-5);
@@ -1268,7 +1269,7 @@ a.account__version:hover {
   padding: var(--space-8);
   background: var(--surface-raised);
   border: 1px solid var(--edge);
-  border-radius: var(--radius-sheet);
+  border-radius: var(--radius-dialog);
   box-shadow: var(--lift-float);
   animation: confirm-in var(--dur-state) var(--ease);
 }
@@ -1277,7 +1278,7 @@ a.account__version:hover {
    whole panel: the operator has to read the consequence, and a red field behind it
    makes the text harder to read at the moment it matters most. */
 .confirm-dialog--danger {
-  border-top: 3px solid var(--fault);
+  border-top: 3px solid var(--fault-mark);
 }
 
 .confirm-dialog__head {
@@ -1394,7 +1395,7 @@ a.account__version:hover {
    already in it and nothing else on this layer can take it. */
 .palette__field input {
   flex: 1;
-  min-height: 52px;
+  min-height: var(--control-h-xl);
   padding: 0;
   background: transparent;
   border: 0;
@@ -1465,8 +1466,8 @@ a.account__version:hover {
    this is what Enter opens. The pointer moving over a row makes it the active one,
    so the two can never disagree. */
 .palette__hit.is-active {
-  background: var(--iris-wash);
-  box-shadow: inset 2px 0 var(--iris);
+  background: var(--select-wash);
+  box-shadow: var(--select-bar);
 }
 
 .palette__hit.is-active svg:last-child {
@@ -1588,7 +1589,7 @@ fieldset legend {
 .settings-row input,
 .settings-row select {
   width: 100%;
-  min-height: 40px;
+  min-height: var(--control-h-md);
   padding: var(--space-4);
   color: var(--text-strong);
   background: var(--surface-raised);
@@ -1619,7 +1620,7 @@ fieldset legend {
 
 .toggle-row {
   display: flex;
-  min-height: 58px;
+  min-height: var(--row-h-lg);
   align-items: center;
   justify-content: space-between;
   gap: var(--space-7);
@@ -1660,8 +1661,8 @@ fieldset legend {
    themes because the rail itself never changes. */
 .toggle-input::before {
   display: block;
-  width: 16px;
-  height: 16px;
+  width: var(--icon-check);
+  height: var(--icon-check);
   margin: 1px;
   background: var(--rail-text);
   border-radius: var(--radius-pill);
@@ -1861,7 +1862,7 @@ fieldset legend {
    rule, because the magnifier icon has to sit inside that frame. */
 .catalog-search {
   display: flex;
-  min-height: 38px;
+  min-height: var(--control-h-md);
   align-items: center;
   gap: var(--space-4);
   padding: 0 var(--space-4);
@@ -1880,7 +1881,7 @@ fieldset legend {
 
 .catalog-select-all {
   display: flex;
-  min-height: 44px;
+  min-height: var(--control-h-lg);
   align-items: center;
   gap: var(--space-4);
   padding: var(--space-3) var(--space-5);
@@ -1890,8 +1891,8 @@ fieldset legend {
 }
 
 .catalog-select-all input {
-  width: 16px;
-  height: 16px;
+  width: var(--icon-check);
+  height: var(--icon-check);
 }
 
 .catalog-select-all span,
@@ -1912,7 +1913,7 @@ fieldset legend {
   grid-template-columns: minmax(0, 1fr) minmax(210px, 0.7fr);
   align-items: center;
   gap: var(--space-6);
-  min-height: 54px;
+  min-height: var(--row-h-lg);
   padding: var(--space-4) var(--space-5);
   background: var(--surface-raised);
   border-bottom: 1px solid var(--edge);
@@ -1935,8 +1936,8 @@ fieldset legend {
 }
 
 .catalog-model input[type="checkbox"] {
-  width: 15px;
-  height: 15px;
+  width: var(--icon-check);
+  height: var(--icon-check);
   margin: var(--space-1) 0 0;
   accent-color: var(--iris);
 }
@@ -1971,7 +1972,7 @@ fieldset legend {
 
 .catalog-alias input {
   width: 100%;
-  min-height: 32px;
+  min-height: var(--control-h-sm);
   padding: var(--space-2) var(--space-3);
   font-family: var(--font-data);
   font-size: var(--text-micro);
@@ -2009,7 +2010,7 @@ fieldset legend {
 }
 
 .credential-entry > header {
-  min-height: 28px;
+  min-height: var(--control-h-xs);
   padding-bottom: var(--space-4);
   border-bottom: 1px solid var(--edge);
 }
@@ -2022,7 +2023,7 @@ fieldset legend {
 }
 
 .credential-entry > header .button {
-  min-height: 28px;
+  min-height: var(--control-h-xs);
   padding: var(--space-2) var(--space-4);
 }
 
@@ -2035,8 +2036,8 @@ fieldset legend {
 }
 
 .primary-choice input {
-  width: 16px;
-  height: 16px;
+  width: var(--icon-check);
+  height: var(--icon-check);
   margin: var(--space-1) 0 0;
   accent-color: var(--iris);
 }
@@ -2062,7 +2063,7 @@ fieldset legend {
 
 .review-list > div {
   display: grid;
-  min-height: 74px;
+  min-height: var(--row-h-xl);
   grid-template-columns: 120px 1fr;
   align-items: center;
   gap: var(--space-5);
@@ -2105,19 +2106,19 @@ fieldset legend {
 
 .notice--danger {
   background: var(--fault-wash);
-  border-color: var(--fault);
+  border-color: var(--fault-mark);
 }
 
 /* A warning is a lower rung than a fault, not a second fault: something to look
    at, on a key that is still carrying traffic. */
 .notice--warning {
   background: var(--hold-wash);
-  border-color: var(--hold);
+  border-color: var(--hold-mark);
 }
 
 .notice--success {
   background: var(--live-wash);
-  border-color: var(--live);
+  border-color: var(--live-mark);
 }
 
 /* A notice that carries its own action puts the sentence and the button on one
@@ -2160,7 +2161,7 @@ fieldset legend {
 }
 
 .log-detail-grid > div {
-  min-height: 67px;
+  min-height: var(--row-h-xl);
   padding: var(--space-5);
   border-right: 1px solid var(--edge);
   border-bottom: 1px solid var(--edge);
@@ -2196,7 +2197,7 @@ fieldset legend {
 .attempt-list > div {
   display: grid;
   grid-template-columns: 25px minmax(0, 1fr) 140px 80px;
-  min-height: 44px;
+  min-height: var(--row-h-md);
   align-items: center;
   gap: var(--space-4);
   padding: var(--space-3) var(--space-4);
@@ -2247,7 +2248,7 @@ fieldset legend {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 30px;
+  min-height: var(--row-h-sm);
   margin: 0;
   font-size: var(--text-mini);
 }
@@ -2431,7 +2432,7 @@ fieldset legend {
   margin-top: var(--space-9);
   padding: var(--space-6);
   background: var(--live-wash);
-  border-left: 3px solid var(--live);
+  border-left: 3px solid var(--live-mark);
 }
 
 .security-baseline svg {
@@ -2491,8 +2492,8 @@ fieldset legend {
 }
 
 .confirmation-check input {
-  width: 16px;
-  height: 16px;
+  width: var(--icon-check);
+  height: var(--icon-check);
 }
 
 /* Notifications are anchored once, here, rather than each one pinning itself to the
@@ -2530,7 +2531,7 @@ fieldset legend {
   color: var(--text-strong);
   background: var(--surface-raised);
   border: 1px solid var(--edge-strong);
-  border-left: 3px solid var(--live);
+  border-left: 3px solid var(--live-mark);
   box-shadow: var(--lift-float);
   font-size: var(--text-mini);
   pointer-events: auto;
@@ -2545,7 +2546,7 @@ fieldset legend {
 }
 
 .toast--danger {
-  border-left-color: var(--fault);
+  border-left-color: var(--fault-mark);
 }
 
 /* The message takes the width; the close button never shrinks or wraps under it. */
@@ -2570,7 +2571,7 @@ fieldset legend {
 .field input[aria-invalid="true"],
 .field textarea[aria-invalid="true"],
 .field select[aria-invalid="true"] {
-  border-color: var(--fault);
+  border-color: var(--fault-mark);
 }
 
 /* The crash panel is the last thing the console can show, so it says what still
@@ -2582,7 +2583,7 @@ fieldset legend {
   padding: var(--space-9);
   background: var(--surface-raised);
   border: 1px solid var(--edge-strong);
-  border-top: 3px solid var(--fault);
+  border-top: 3px solid var(--fault-mark);
   box-shadow: var(--lift-panel);
 }
 
@@ -2734,8 +2735,8 @@ fieldset legend {
   position: absolute;
   top: -4px;
   left: 0;
-  width: 7px;
-  height: 7px;
+  width: var(--icon-dot);
+  height: var(--icon-dot);
   background: var(--rail-edge);
   border-radius: var(--radius-pill);
   content: "";
@@ -3005,14 +3006,14 @@ fieldset legend {
   .nav-item,
   .rail-search,
   .palette__hit {
-    min-height: 44px;
+    min-height: var(--control-h-lg);
   }
 
   .icon-button {
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
-    min-height: 44px;
+    width: var(--control-h-lg);
+    height: var(--control-h-lg);
+    min-width: var(--control-h-lg);
+    min-height: var(--control-h-lg);
   }
 
   /* These are labels wrapping a 16px box, so they have no height of their own to
@@ -3022,7 +3023,7 @@ fieldset legend {
   .primary-choice,
   .confirmation-check,
   .config-transfer__secrets {
-    min-height: 44px;
+    min-height: var(--control-h-lg);
     align-items: center;
     padding: var(--space-3) 0;
   }

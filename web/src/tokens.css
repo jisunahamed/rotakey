@@ -39,15 +39,44 @@
   --iris-edge: #b3adf7;
 
   /* Operational states. Distinct hues, not shades of one accent, because an
-     operator reads these peripherally. */
-  --live: #0f8a5f;
+     operator reads these peripherally.
+
+     Each state is two colours, and which one to reach for is decided by the
+     property, not by taste: `color` takes the plain name, everything else — a
+     background, a border, a chart stroke, a marker bar — takes `--*-mark`.
+
+     They are two colours because the same hue cannot do both jobs. These states
+     are set as *text* at 11px in every status readout in the console, and at that
+     size the eye needs 4.5:1; a dot or a 2px bar is a graphic and needs 3:1. The
+     old single values were tuned for the dot and then used for the word, so all
+     four fell short — the worst of them, `--idle` on `--surface-inset`, at
+     3.65:1. The plain names below now clear 4.5:1 on every one of the four
+     surfaces *and* on the state's own wash; the `--*-mark` values are the
+     original hues, kept because they are the right weight for a mark. */
+  --live: #087049;
+  --live-mark: #0f8a5f;
   --live-wash: #daf0e6;
-  --hold: #b06a00;
+  --hold: #8d5500;
+  --hold-mark: #b06a00;
   --hold-wash: #fbeed5;
-  --fault: #c8362f;
+  --fault: #b8302a;
+  --fault-mark: #c8362f;
   --fault-wash: #fbe4e2;
-  --idle: #6c7683;
+  --idle: #5c6572;
+  --idle-mark: #6c7683;
   --idle-wash: #e5e8ed;
+
+  /* Selection. One wash and one bar, so that a selected provider, a selected
+     model route, a selected request and the highlighted row in the search palette
+     are all the same thing on screen. There used to be eight washes at seven
+     strengths and two bar widths, which is why no two lists in the console looked
+     alike when something was chosen in them.
+
+     The wash is translucent rather than mixed into a named surface because the
+     same row appears on the canvas, on a raised panel and inside the dark rail,
+     and a wash mixed with the wrong surface goes flat against two of the three. */
+  --select-wash: color-mix(in srgb, var(--iris) 9%, transparent);
+  --select-bar: inset 3px 0 var(--iris);
 
   /* The navigation rail stays dark in both themes: it is chrome, not content,
      and a constant anchor makes the theme switch feel like lighting rather than
@@ -101,11 +130,52 @@
   --space-11: 48px;
   --space-12: 64px;
 
-  /* Three radii: fittings, panels, and the sheet. The console previously mixed
-     4px and 7px for the same kind of object, which reads as an accident. */
+  /* Heights. The console had 45 different `min-height` values for what is really
+     five control sizes and four row densities: buttons at 36, 38 and 40 sitting in
+     the same toolbar, list rows at 50, 52, 54, 55, 57, 58 and 59 on pages an
+     operator moves between. Nothing looked the same twice because nothing was the
+     same twice.
+
+     A control is something the operator acts on — a button, an input, a select, a
+     tab. Its height is chosen by how much room it has, not by which page it is on.
+     A row is a line in a list, and its height is chosen by how many lines of
+     content it holds. The two scales are separate because a row that happens to be
+     clickable is still a row. */
+  --control-h-xs: 28px;
+  --control-h-sm: 34px;
+  /* The default. A button, an input and a select set to this line up with each
+     other, which they did not when they were 38, 40 and 40. */
+  --control-h-md: 38px;
+  /* Also the touch floor: below 650px every control an operator taps is raised to
+     this, so the number the phone needs and the number the desktop uses for its
+     largest control are deliberately the same one. */
+  --control-h-lg: 44px;
+  --control-h-xl: 52px;
+
+  --row-h-sm: 30px;
+  --row-h-md: 44px;
+  --row-h-lg: 58px;
+  --row-h-xl: 70px;
+
+  /* Square things. A dot is a state; a check is something the operator toggles; a
+     mark is a numeral or a glyph inside a hairline square; a box holds an icon
+     that stands for a provider, a page or an account. */
+  --icon-dot: 8px;
+  --icon-check: 16px;
+  --icon-mark: 18px;
+  --icon-box: 30px;
+
+  /* Three radii: fittings, panels, and the dialog. The console previously mixed
+     4px and 7px for the same kind of object, which reads as an accident.
+
+     The third one was called --radius-sheet and the sheet does not use it — the
+     sheet is square-cornered like every other fitting, and the only rule that ever
+     read this was the confirmation dialog. A token named after something it does
+     not apply to is worse than no token, because the next person to reach for it
+     rounds the wrong corner. */
   --radius-fitting: 3px;
   --radius-panel: 7px;
-  --radius-sheet: 12px;
+  --radius-dialog: 12px;
   --radius-pill: 999px;
 
   /* Elevation is used sparingly: hairlines separate things inside the page, and
@@ -158,12 +228,16 @@
 }
 
 /* One dark block, not two. `data-theme` on <html> is always a literal `light` or
- * `dark`: the inline script in index.html resolves the operator's stored choice —
- * including "match my system" — before the first stylesheet loads, and the console
- * writes the same resolved value whenever the choice or the system preference
- * changes. There used to be a second, byte-identical copy of everything below
- * under `@media (prefers-color-scheme: dark) { :root[data-theme="system"] }`, kept
- * in sync by hand; it had already drifted once. */
+ * `dark`: public/theme.js resolves the operator's stored choice — including "match
+ * my system" — before the first stylesheet loads, and the console writes the same
+ * resolved value whenever the choice or the system preference changes. There used
+ * to be a second, byte-identical copy of everything below under
+ * `@media (prefers-color-scheme: dark) { :root[data-theme="system"] }`, kept in
+ * sync by hand; it had already drifted once.
+ *
+ * Only colour is overridden here. Every size, radius and duration above is the
+ * same in both themes, because a theme is lighting — it is not a different
+ * application. */
 :root[data-theme="dark"] {
   color-scheme: dark;
   --surface-canvas: #0d1015;
@@ -186,13 +260,21 @@
   --iris-wash: #1e1b3d;
   --iris-edge: #3d3673;
 
+  /* On a dark canvas a bright hue is already legible as text, so three of the four
+     states are one colour doing both jobs. Only --idle needed separating: at
+     #7d8797 it fell to 4.36:1 on --surface-inset, which is where the capacity
+     grid puts it. */
   --live: #3ecf8e;
+  --live-mark: #3ecf8e;
   --live-wash: #102b21;
   --hold: #e0a34a;
+  --hold-mark: #e0a34a;
   --hold-wash: #33260f;
   --fault: #f0736b;
+  --fault-mark: #f0736b;
   --fault-wash: #391f1e;
-  --idle: #7d8797;
+  --idle: #8891a1;
+  --idle-mark: #7d8797;
   --idle-wash: #1c222b;
 
   --rail: #090c11;
