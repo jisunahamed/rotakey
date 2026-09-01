@@ -672,13 +672,6 @@ h3 {
   box-shadow: var(--lift-panel);
 }
 
-.empty-state__line {
-  width: 130px;
-  height: 10px;
-  margin-bottom: var(--space-8);
-  background: repeating-linear-gradient(90deg, var(--iris) 0 17px, transparent 17px 22px);
-}
-
 .empty-state h3 {
   font-size: var(--text-md);
 }
@@ -902,30 +895,6 @@ h3 {
 
 .dense-row.has-warning small {
   color: var(--fault);
-}
-
-.inspector-section {
-  padding: var(--space-8) var(--space-8) var(--space-1);
-}
-
-.inspector-section > header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-7);
-  margin-bottom: var(--space-5);
-}
-
-.inspector-section > header h3,
-.inspector-section > header p {
-  margin-bottom: 0;
-}
-
-.inspector-section > header p {
-  margin-top: var(--space-2);
-  color: var(--text-muted);
-  font-size: var(--text-mini);
-  line-height: var(--leading-snug);
 }
 
 .inline-empty {
@@ -2190,7 +2159,7 @@ fieldset legend {
   background: var(--surface-raised);
   border: 1px solid var(--edge-strong);
   border-top: 3px solid var(--fault);
-  box-shadow: var(--lift-float);
+  box-shadow: var(--lift-panel);
 }
 
 .crash-panel p {
@@ -2255,6 +2224,9 @@ fieldset legend {
   background-size: 48px 48px;
 }
 
+/* The card is the only thing on the canvas — it is not floating over anything,
+   so it takes the slab elevation the rest of the console uses rather than the
+   drop reserved for sheets, dialogs and toasts. */
 .auth-panel {
   display: grid;
   width: min(100%, 960px);
@@ -2262,15 +2234,14 @@ fieldset legend {
   overflow: hidden;
   background: var(--surface-raised);
   border: 1px solid var(--edge-strong);
-  box-shadow: var(--lift-float);
+  box-shadow: var(--lift-panel);
 }
 
 /* First-run setup asks for a bootstrap token, so it is the one screen where the
    panel must look like part of the server rather than part of the product: the
-   dark half widens and the whole card sits on the rail's elevation. */
+   dark half widens. */
 .auth-panel--setup {
   grid-template-columns: 1.15fr 0.85fr;
-  box-shadow: var(--lift-rail);
 }
 
 /* The intro half is the dark side of the card in both themes, which is what
@@ -2357,7 +2328,7 @@ fieldset legend {
   overflow: hidden;
   background: var(--surface-raised);
   border: 1px solid var(--edge-strong);
-  box-shadow: var(--lift-float);
+  box-shadow: var(--lift-panel);
 }
 
 .wordmark--auth {
@@ -2412,15 +2383,6 @@ fieldset legend {
 @media (max-width: 1280px) {
   .resource-layout {
     grid-template-columns: 260px minmax(0, 1fr);
-  }
-
-  .access-key-panel {
-    grid-template-columns: 1fr auto;
-  }
-
-  .access-key-panel > div:nth-child(2) {
-    grid-column: 1;
-    grid-row: 2;
   }
 
   .log-detail-grid {

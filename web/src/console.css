@@ -1598,10 +1598,6 @@
   transition: width var(--dur-move) linear;
 }
 
-.model-sweep.is-running .model-sweep__track > span {
-  box-shadow: 7px 0 10px color-mix(in srgb, var(--iris) 55%, transparent);
-}
-
 /* Playground is a three-pane operator surface: model selection, live evidence and
    route configuration remain visible together on a workstation. The separators,
    rather than floating cards, carry the hierarchy. */
@@ -1621,6 +1617,7 @@
   background: var(--surface-raised);
   border: 1px solid var(--edge);
   border-radius: var(--radius-panel);
+  box-shadow: var(--lift-panel);
 }
 
 .playground-models,
@@ -1738,9 +1735,14 @@
   font-size: var(--text-micro);
 }
 
+/* The border goes because the label around it already draws one, and a second
+   line 3px inside the first reads as a seam. The outline stays: the global focus
+   rule is written with :where() so it carries zero specificity, which means a
+   plain `outline: 0` here beat it and left the model search as the one control
+   in the console a keyboard could reach without seeing where it had landed. The
+   label's iris border on :focus-within is a colour-only cue and not a substitute. */
 .playground-filters input {
   border: 0;
-  outline: 0;
 }
 
 .playground-filters select {
@@ -2062,11 +2064,14 @@
   border-bottom: 0;
 }
 
+/* No `font: inherit` here. The shorthand resets every font longhand it does not
+   name, and the one it silently took out was font-variant-numeric: tabular-nums,
+   which the element rule for `pre` sets and which every figure in an error
+   payload wants. The three longhands below say what this block actually needs. */
 .playground-error-detail pre {
   min-width: 0;
   margin: 0;
   color: var(--text-strong);
-  font: inherit;
   font-family: var(--font-data);
   font-size: var(--text-micro);
   line-height: var(--leading-snug);
@@ -2168,11 +2173,24 @@
   min-width: 0;
   margin: 0;
   color: var(--text-strong);
-  font: inherit;
   font-size: var(--text-mini);
   line-height: var(--leading-normal);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+/* The two turns want different faces, which is why the shared block above no
+   longer sets one. It used to say `font: inherit`, and the shorthand did two
+   things nobody asked for: it put the model's reply in Archivo, and it reset
+   font-variant-numeric, so a reply full of figures lost its tabular alignment. */
+.playground-user-message p {
+  font-family: var(--font-body);
+}
+
+/* The reply is unparsed text in a <pre> — whitespace is significant and it may
+   be code — so it belongs in the data face. */
+.playground-model-message pre {
+  font-family: var(--font-data);
 }
 
 .playground-composer {
@@ -2305,11 +2323,26 @@
   border-top: 1px solid var(--edge);
 }
 
+/* The workbench is a fixed-height frame whose panes scroll on their own, so the
+   page has to know how much of the viewport the shell already spends. That total
+   is --shell-chrome, declared on .app-shell beside the paddings it adds up; the
+   two properties this block used to subtract, --main-pad-top and
+   --main-pad-bottom, were never declared anywhere. An invalid calc() makes the
+   whole declaration invalid, so height fell back to auto while min-height: 0
+   below still cancelled the workbench's 680px floor — the frame had neither a
+   height nor a floor and collapsed to its content.
+
+   min-height on the page, not on the workbench, is what restores the floor: the
+   workbench must be free to shrink inside the flex column, so the floor has to
+   live on the parent that flex is measuring against. dvh rather than vh so a
+   browser toolbar eats into the frame instead of pushing it off-screen. */
 @media (min-width: 1200px) {
   .playground-page {
     display: flex;
-    height: calc(100vh - var(--main-pad-top) - var(--main-pad-bottom));
+    height: calc(100dvh - var(--shell-chrome));
+    min-height: 680px;
     flex-direction: column;
+    overflow: hidden;
   }
 
   .playground-page > .page-header {
@@ -2348,11 +2381,24 @@
     border-radius: 0 0 var(--radius-panel) var(--radius-panel);
   }
 
+  /* The two list panes scroll internally, so a fixed height is what keeps them
+     from running the page to thousands of pixels. */
   .playground-models,
-  .playground-runner,
   .playground-settings {
     display: none;
     height: 650px;
+    border: 0;
+  }
+
+  /* The runner cannot take the same treatment. Its last grid row is the composer
+     and the Send button, so anything the fixed height cannot fit is cut off by
+     the workbench's overflow: hidden with no scrollbar to reach it — at 1024x768
+     that is the one control the page exists for. A floor instead of a height
+     lets the pane grow by exactly the composer's height; the transcript row
+     keeps its own 240px minimum and scrolls, so nothing else moves. */
+  .playground-runner {
+    display: none;
+    min-height: 650px;
     border: 0;
   }
 
@@ -2370,12 +2416,19 @@
 }
 
 @media (max-width: 600px) {
-  .playground-workbench,
   .playground-models,
-  .playground-runner,
   .playground-settings {
     height: calc(100vh - 180px);
     min-height: 560px;
+  }
+
+  /* Same reason as the 1050px block: the runner and the frame around it size to
+     the composer rather than clipping it. max() keeps the 560px floor that the
+     height/min-height pair gave the other two panes on a short viewport. */
+  .playground-workbench,
+  .playground-runner {
+    height: auto;
+    min-height: max(calc(100vh - 180px), 560px);
   }
 
   .playground-pane-title {
@@ -2845,7 +2898,8 @@
 }
 
 @media (max-width: 900px) {
-  .workspace { margin-left: 0; }
+  /* .workspace reclaims its left inset here too — the rule is in styles.css at the
+     same width, and repeating it only made the pair drift apart. */
   .signal-grid { grid-template-columns: 1fr; }
   .provider-debug-head {
     grid-template-columns: minmax(0, 1fr) auto;

@@ -4065,7 +4065,7 @@ function PlaygroundPage({
         </section>
 
         <section className={`playground-runner${activePanel === "run" ? " is-active" : ""}`}>
-          <header className="playground-pane-title"><div><span>Test target</span><strong title={selected?.public_alias}>{selected?.public_alias}</strong><small>{selected?.provider.name} · {selected ? modelState(selected) : "unavailable"}</small></div>{selected && <Button variant="quiet" onClick={() => setActivePanel("settings")}>Settings</Button>}</header>
+          <header className="playground-pane-title"><div><span>Test target</span><strong title={selected?.public_alias}>{selected?.public_alias}</strong><small>{selected?.provider.name} · {selected ? modelState(selected) : "unavailable"}</small></div></header>
             <div className="playground-protocols" role="group" aria-label="Request protocol">{(["auto", "chat", "responses", "messages"] as PlaygroundProtocol[]).map((item) => <button key={item} className={protocol === item ? "is-active" : ""} onClick={() => setProtocol(item)}>{item === "messages" ? "Messages" : item[0].toUpperCase() + item.slice(1)}</button>)}</div>
           <div className={`playground-live-status is-${requestState.phase}`} role="status" aria-live="polite">
             <span className="playground-live-status__dot" aria-hidden="true" />

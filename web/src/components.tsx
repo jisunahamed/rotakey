@@ -56,7 +56,6 @@ export function EmptyState({
   const Heading = level === 2 ? "h2" : "h3";
   return (
     <div className="empty-state">
-      <div className="empty-state__line" aria-hidden="true" />
       <Heading>{title}</Heading>
       <p>{description}</p>
       {action}
