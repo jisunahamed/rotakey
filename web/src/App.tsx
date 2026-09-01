@@ -47,6 +47,19 @@ import {
 } from "./components";
 import { useConfirm, type ConfirmRequest } from "./ConfirmDialog";
 import {
+  documentTitle,
+  pages,
+  pathFor,
+  readRoute,
+  useCurrentTitleDetail,
+  useTitleDetail,
+  useURLChange,
+  useURLState,
+  writeURL,
+  type Page,
+  type Route as ConsoleRoute
+} from "./routes";
+import {
   emptyCreditTotals,
   emptyPolicy,
   type Credential,
@@ -64,22 +77,19 @@ import {
   type SettingsUpdateResult
 } from "./types";
 
-type Page = "overview" | "providers" | "models" | "playground" | "logs" | "access" | "settings";
 type AuthPhase = "loading" | "setup" | "login" | "app";
 
-const navItems: Array<{ id: Page; label: string; icon: typeof Activity }> = [
-  { id: "overview", label: "Overview", icon: CircleGauge },
-  { id: "providers", label: "Providers", icon: Database },
-  { id: "models", label: "Model routes", icon: Route },
-  { id: "playground", label: "Playground", icon: FlaskConical },
-  { id: "logs", label: "Request logs", icon: FileClock },
-  { id: "access", label: "Gateway key", icon: KeyRound },
-  { id: "settings", label: "Settings", icon: SettingsIcon }
-];
-
-const pageFromLocation = (): Page => {
-  const segment = location.pathname.replace(/^\/admin\/?/, "").split("/")[0] as Page;
-  return navItems.some((item) => item.id === segment) ? segment : "overview";
+/** The rail is the page list from `routes.ts` with an icon on each row. The list
+ *  itself lives there because the URL, the label and the tab title all read from
+ *  it; only the picture is a shell decision. */
+const pageIcons: Record<Page, typeof Activity> = {
+  overview: CircleGauge,
+  requests: FileClock,
+  providers: Database,
+  models: Route,
+  playground: FlaskConical,
+  connect: KeyRound,
+  settings: SettingsIcon
 };
 
 // The routing mode decides whether a new public alias carries the provider slug,
@@ -137,7 +147,7 @@ const toastLimit = 4;
 function App() {
   const [phase, setPhase] = useState<AuthPhase>("loading");
   const [username, setUsername] = useState("");
-  const [page, setPage] = useState<Page>(pageFromLocation);
+  const [route, setRoute] = useState<ConsoleRoute>(readRoute);
   const [menuOpen, setMenuOpen] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark" | "system">(() => {
     const stored = localStorage.getItem("relay-theme");
@@ -274,18 +284,50 @@ function App() {
     return () => window.clearInterval(timer);
   }, []);
 
-  useEffect(() => {
-    const onPopState = () => setPage(pageFromLocation());
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
+  // The address bar is the state, and this reads it back after every change to it
+  // — Back and Forward, a nav click, or a selection inside a page writing its own
+  // search parameter. The previous object is returned unchanged when the page is
+  // the same, so a provider selection on Providers does not re-render the shell
+  // and every other page along with it.
+  const syncRoute = useCallback(() => {
+    setRoute((current) => {
+      const next = readRoute();
+      return next.page === current.page && next.notFound === current.notFound && next.canonicalPath === current.canonicalPath
+        ? current
+        : next;
+    });
   }, []);
+  useURLChange(syncRoute);
+
+  // A path this console can serve but spelled another way — bare /admin, one of
+  // the two slugs that were renamed, a stray trailing segment — is corrected in
+  // place. A replace, not a push: the operator never chose the other spelling, so
+  // Back must not walk them into it.
+  useEffect(() => {
+    if (route.canonicalPath) writeURL(route.canonicalPath, "replace");
+  }, [route.canonicalPath]);
+
+  const titleDetail = useCurrentTitleDetail();
+  // Every tab read "Rotakey", so four windows onto the same console named none of
+  // them. The signed-out phases get a title too: a browser restoring a session
+  // should say what the tab is going to ask for.
+  useEffect(() => {
+    document.title =
+      phase === "loading"
+        ? "Rotakey"
+        : phase === "setup"
+          ? "Set up Rotakey"
+          : phase === "login"
+            ? "Sign in · Rotakey"
+            : route.notFound
+              ? "Page not found · Rotakey"
+              : documentTitle(route.page, titleDetail);
+  }, [phase, route.page, route.notFound, titleDetail]);
 
   const navigate = (next: Page, query?: Record<string, string>) => {
     if (menuOpen) navigated.current = true;
-    setPage(next);
     setMenuOpen(false);
-    const search = query ? `?${new URLSearchParams(query).toString()}` : "";
-    history.pushState({}, "", `/admin/${next}${search}`);
+    writeURL(pathFor(next, query), "push");
   };
 
   // Navigation entries are links, not buttons: an operator can middle-click a
@@ -406,18 +448,23 @@ function App() {
           </span>
         </div>
         <nav aria-label="Primary navigation">
-          {navItems.map(({ id, label, icon: Icon }) => (
-            <a
-              key={id}
-              className={`nav-item ${page === id ? "is-active" : ""}`}
-              href={`/admin/${id}`}
-              onClick={(event) => navigateFromLink(event, id)}
-              aria-current={page === id ? "page" : undefined}
-            >
-              <Icon size={17} aria-hidden="true" />
-              <span>{label}</span>
-            </a>
-          ))}
+          {pages.map(({ id, label, summary }) => {
+            const Icon = pageIcons[id];
+            const active = !route.notFound && route.page === id;
+            return (
+              <a
+                key={id}
+                className={`nav-item ${active ? "is-active" : ""}`}
+                href={pathFor(id)}
+                title={summary}
+                onClick={(event) => navigateFromLink(event, id)}
+                aria-current={active ? "page" : undefined}
+              >
+                <Icon size={17} aria-hidden="true" />
+                <span>{label}</span>
+              </a>
+            );
+          })}
         </nav>
         <div className="sidebar__bottom">
           {/* latest_version is optional in the payload, so both readouts are gated
@@ -476,19 +523,24 @@ function App() {
           <ThemeButton theme={theme} setTheme={setTheme} />
         </header>
         <main className="main-pane" id="workspace" tabIndex={-1} ref={workspace}>
-          {page === "overview" && <OverviewPage navigate={navigate} notify={notify} />}
-          {page === "providers" && <ProvidersPage notify={notify} />}
-          {page === "models" && <ModelsPage navigate={navigate} notify={notify} />}
-          {page === "playground" && <PlaygroundPage navigate={navigate} notify={notify} />}
-          {page === "logs" && <LogsPage />}
-          {page === "access" && (
-            <AccessPage
-              gatewayKey={gatewayKey}
-              onNewKey={setGatewayKey}
-              notify={notify}
-            />
+          {route.notFound && <NotFoundPage navigate={navigate} />}
+          {!route.notFound && (
+            <>
+              {route.page === "overview" && <OverviewPage navigate={navigate} notify={notify} />}
+              {route.page === "providers" && <ProvidersPage notify={notify} />}
+              {route.page === "models" && <ModelsPage navigate={navigate} notify={notify} />}
+              {route.page === "playground" && <PlaygroundPage navigate={navigate} notify={notify} />}
+              {route.page === "requests" && <LogsPage />}
+              {route.page === "connect" && (
+                <AccessPage
+                  gatewayKey={gatewayKey}
+                  onNewKey={setGatewayKey}
+                  notify={notify}
+                />
+              )}
+              {route.page === "settings" && <SettingsPage notify={notify} />}
+            </>
           )}
-          {page === "settings" && <SettingsPage notify={notify} />}
         </main>
         <div className="desktop-theme">
           <ThemeButton theme={theme} setTheme={setTheme} />
@@ -756,6 +808,29 @@ function PageHeader({
   );
 }
 
+/** /admin/typo used to render the Overview, so a wrong link looked like a working
+ *  one and the operator went looking for the section they thought they had opened.
+ *  The path is quoted back because a mistyped or truncated address is usually
+ *  obvious the moment it is read aloud. */
+function NotFoundPage({ navigate }: { navigate: (page: Page, query?: Record<string, string>) => void }) {
+  return (
+    <div className="resource-page">
+      <header className="page-header">
+        <div>
+          <h1>Page not found</h1>
+          <p>Rotakey has no page at <code>{location.pathname}</code>.</p>
+        </div>
+      </header>
+      <EmptyState
+        level={2}
+        title="This address does not name anything"
+        description="The link may be from an older version of Rotakey, or a character may be missing from it. Every page Rotakey has is listed in the navigation."
+        action={<Button onClick={() => navigate("overview")}><ArrowRight size={14} aria-hidden="true" /> Go to Overview</Button>}
+      />
+    </div>
+  );
+}
+
 function OverviewPage({
   navigate,
   notify
@@ -766,10 +841,12 @@ function OverviewPage({
   type InspectTarget = { type: "provider" | "route" | "credential"; id: string };
   const [overview, setOverview] = useState<Overview | null>(null);
   const [error, setError] = useState("");
-  const [range, setRange] = useState<Overview["range"]>(() => {
-    const value = new URLSearchParams(location.search).get("range");
-    return value === "1h" || value === "24h" || value === "7d" || value === "all" ? value : "all";
-  });
+  // The range lives in the address bar, so "the last hour" is a link an operator
+  // can send. Back returns to the range they were reading a moment ago, which the
+  // old replaceState write silently refused to do.
+  const [rangeParam, setRange] = useURLState("range");
+  const range: Overview["range"] =
+    rangeParam === "1h" || rangeParam === "24h" || rangeParam === "7d" || rangeParam === "all" ? rangeParam : "all";
   const [selected, setSelected] = useState<InspectTarget | null>(null);
   const [expandedProviders, setExpandedProviders] = useState<Set<string>>(() => new Set());
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -888,10 +965,7 @@ function OverviewPage({
                     className={range === value ? "is-active" : ""}
                     aria-pressed={range === value}
                     aria-label={rangeLabel(value)}
-                    onClick={() => {
-                      setRange(value);
-                      history.replaceState({}, "", `/admin/overview?range=${value}`);
-                    }}
+                    onClick={() => setRange(value)}
                   >{value}</button>
                 ))}
               </div>
@@ -973,7 +1047,7 @@ function OverviewPage({
                       <button
                         key={failure.request_id}
                         aria-label={`HTTP ${failure.status_code} on ${failure.model_alias} via ${failure.provider_name}, ${formatRelativeTime(failure.created_at)}. Open in request logs.`}
-                        onClick={() => navigate("logs", { q: failure.request_id, status: String(failure.status_code) })}
+                        onClick={() => navigate("requests", { q: failure.request_id, status: String(failure.status_code) })}
                       >
                         <span className="failure-code" aria-hidden="true">{failure.status_code}</span>
                         <span aria-hidden="true"><code title={failure.model_alias}>{failure.model_alias}</code><small title={failure.error_code || failure.provider_name}>{failure.error_code || failure.provider_name}</small></span>
@@ -1453,7 +1527,7 @@ function OverviewInspector({
         ) : null}
         {provider && <Button variant="quiet" onClick={() => navigate("providers", { provider: provider.id })}>Open provider</Button>}
         {route && <Button variant="quiet" onClick={() => navigate("providers", { provider: route.provider_id })}>Manage model limits</Button>}
-        {route && <Button variant="quiet" onClick={() => navigate("logs", { q: route.alias })}>View route logs</Button>}
+        {route && <Button variant="quiet" onClick={() => navigate("requests", { q: route.alias })}>View route logs</Button>}
       </div>
     </aside>
   );
@@ -1638,7 +1712,9 @@ function formatRelativeTime(value: string) {
 function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" | "danger") => void }) {
   const ask = useConfirm();
   const [providers, setProviders] = useState<Provider[]>([]);
-  const [selectedID, setSelectedID] = useState(() => new URLSearchParams(location.search).get("provider") || "");
+  // The open provider is held in the address bar, so a reload or a link pasted to
+  // someone else comes back to the same one.
+  const [selectedID, setSelectedID] = useURLState("provider");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [openSection, setOpenSection] = useState<"models" | "credentials" | null>(null);
@@ -1678,14 +1754,14 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
       if (mine !== generation.current) return;
       const normalized = normalizeProviders(result.providers);
       setProviders(normalized);
-      setSelectedID((current) => normalized.some((provider) => provider.id === current) ? current : normalized[0]?.id || "");
+      setSelectedID((current) => normalized.some((provider) => provider.id === current) ? current : normalized[0]?.id || "", "replace");
     } catch (caught) {
       if (mine !== generation.current) return;
       setError(caught instanceof Error ? caught.message : "Providers could not be loaded.");
     } finally {
       if (mine === generation.current) setLoading(false);
     }
-  }, []);
+  }, [setSelectedID]);
   useEffect(() => {
     void load();
     const refresh = window.setInterval(() => void load(), 10_000);
@@ -1693,21 +1769,13 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
   }, [load]);
 
   const selected = providers.find((provider) => provider.id === selectedID);
+  useTitleDetail(selected?.name ?? "");
   // Sheets read their provider out of the live list, so the ten-second reload
   // keeps them current instead of leaving them on a snapshot.
   const panelProvider = panel && panel.type !== "wizard"
     ? providers.find((provider) => provider.id === panel.providerID)
     : undefined;
   useEffect(() => setOpenSection(null), [selectedID]);
-  // The selected provider lives in the address bar, so a reload or a shared link
-  // reopens the same upstream instead of dropping the operator on the first one.
-  useEffect(() => {
-    if (!selectedID) return;
-    const url = new URL(location.href);
-    if (url.searchParams.get("provider") === selectedID) return;
-    url.searchParams.set("provider", selectedID);
-    history.replaceState(history.state, "", url);
-  }, [selectedID]);
   const complete = (message: string) => {
     setPanel(null);
     notify(message);
@@ -3879,7 +3947,9 @@ function PlaygroundPage({
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [selectedID, setSelectedID] = useState(() => new URLSearchParams(location.search).get("model") || "");
+  // The route being tested is in the address bar, so a link to the playground
+  // arrives with the same route already picked.
+  const [selectedID, setSelectedID] = useURLState("model");
   const [query, setQuery] = useState("");
   const [providerFilter, setProviderFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -3926,21 +3996,15 @@ function PlaygroundPage({
       setProviders(normalized);
       setLoadError("");
       const available = normalized.flatMap((provider) => provider.models);
-      setSelectedID((current) => available.some((model) => model.id === current) ? current : available[0]?.id || "");
+      setSelectedID((current) => available.some((model) => model.id === current) ? current : available[0]?.id || "", "replace");
     } catch (caught) {
       if (mounted.current) setLoadError(errorMessage(caught));
     } finally {
       if (mounted.current) setLoading(false);
     }
-  }, []);
+  }, [setSelectedID]);
 
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => {
-    if (!selectedID) return;
-    const url = new URL(location.href);
-    url.searchParams.set("model", selectedID);
-    history.replaceState(history.state, "", url);
-  }, [selectedID]);
 
   const models: PlaygroundModel[] = providers.flatMap((provider) => provider.models.map((model) => ({ ...model, provider, credentials: provider.credentials })));
   const modelState = (model: PlaygroundModel) => {
@@ -3956,6 +4020,7 @@ function PlaygroundPage({
     return "unverified";
   };
   const selected = models.find((model) => model.id === selectedID);
+  useTitleDetail(selected?.public_alias ?? "");
   const filtered = models.filter((model) => {
     const needle = query.trim().toLowerCase();
     return (!providerFilter || model.provider.id === providerFilter) &&
@@ -4158,7 +4223,7 @@ function PlaygroundSettings({
   // below it. That form already carries "Enable public route", which does the same
   // job against a Save button the operator can see.
   return <>
-    <header className="playground-pane-title"><div><span>Route settings</span><strong>{model.provider.name}</strong><small>{model.upstream_model}</small></div><div className="button-row"><button className="console-icon" onClick={() => navigate("logs", { q: model.public_alias })} aria-label="Open request logs" title="Open request logs"><FileClock size={14} aria-hidden="true" /></button></div></header>
+    <header className="playground-pane-title"><div><span>Route settings</span><strong>{model.provider.name}</strong><small>{model.upstream_model}</small></div><div className="button-row"><button className="console-icon" onClick={() => navigate("requests", { q: model.public_alias })} aria-label="Open request logs" title="Open request logs"><FileClock size={14} aria-hidden="true" /></button></div></header>
     <form className="playground-settings-form" onSubmit={(event) => { event.preventDefault(); void save(); }}>
       <ModelFields value={draft} onChange={setDraft} />
       <div className="playground-settings-actions"><Button variant="danger" type="button" disabled={saving || deleting} onClick={() => void remove()}><Trash2 size={13} aria-hidden="true" /> {deleting ? "Deleting…" : "Delete"}</Button><Button type="submit" disabled={saving || deleting}>{saving ? "Saving…" : "Save settings"}</Button></div>
@@ -4213,7 +4278,9 @@ function ModelsPage({
   const [deletingFailed, setDeletingFailed] = useState(false);
   const [rechecking, setRechecking] = useState(false);
   const [deletingRoute, setDeletingRoute] = useState(false);
-  const [selectedID, setSelectedID] = useState(() => new URLSearchParams(location.search).get("model") || "");
+  // The open route lives in the address bar for the same reason the provider does:
+  // a reload, or a link pasted to someone else, comes back to the same route.
+  const [selectedID, setSelectedID] = useURLState("model");
   const routingMode = useRoutingMode();
   // Loads are versioned so a slow reply cannot overwrite a newer one. A route
   // deleted from the inspector triggers an immediate reload while a background one
@@ -4233,7 +4300,7 @@ function ModelsPage({
       setProviders(normalized);
       setError("");
       const available = normalized.flatMap((provider) => provider.models);
-      setSelectedID((current) => available.some((model) => model.id === current) ? current : available[0]?.id || "");
+      setSelectedID((current) => available.some((model) => model.id === current) ? current : available[0]?.id || "", "replace");
     } catch (caught) {
       if (mine !== generation.current) return;
       setError(errorMessage(caught));
@@ -4241,21 +4308,12 @@ function ModelsPage({
     } finally {
       if (mine === generation.current) setLoading(false);
     }
-  }, [notify]);
+  }, [notify, setSelectedID]);
   const reload = useCallback(() => load(true), [load]);
   useEffect(() => {
     void load();
   }, [load]);
   useEffect(() => setCredentialsOpen(false), [selectedID]);
-  // The open route lives in the address bar for the same reason the provider does:
-  // a reload, or a link pasted to someone else, comes back to the same route.
-  useEffect(() => {
-    if (!selectedID) return;
-    const url = new URL(location.href);
-    if (url.searchParams.get("model") === selectedID) return;
-    url.searchParams.set("model", selectedID);
-    history.replaceState(history.state, "", url);
-  }, [selectedID]);
   const models = providers.flatMap((provider) => provider.models.map((model) => ({ ...model, provider, credentials: provider.credentials })));
   const filtered = models.filter((model) => {
     const needle = query.trim().toLowerCase();
@@ -4265,6 +4323,7 @@ function ModelsPage({
     return matchesProvider && matchesQuery;
   });
   const selected = models.find((model) => model.id === selectedID);
+  useTitleDetail(selected?.public_alias ?? "");
   const poolSizes = poolSizeByAlias(providers);
   const failedProbeIDs = models.filter((model) => readyKeyCount(model) > 0 && (probeResults[model.id]?.state === "failed" || (!probeResults[model.id] && model.capability_status === "failed"))).map((model) => model.id);
 
@@ -4375,7 +4434,7 @@ function ModelsPage({
 
   return (
     <div className="resource-page model-page">
-      <PageHeader eyebrow="Public contract" title="Model routes" description={routingMode === "model" ? "Model-wise routing: aliases sharing a name are served as one pool, rotating across providers and API keys. Callers see the name once." : "Inspect aliases, apply one model limit to one or every API key, and open only the credential detail you need."} />
+      <PageHeader eyebrow="Public contract" title="Models" description={routingMode === "model" ? "Model-wise routing: aliases sharing a name are served as one pool, rotating across providers and API keys. Callers see the name once." : "Inspect aliases, apply one model limit to one or every API key, and open only the credential detail you need."} />
       {loading ? <PageSkeleton /> : error && models.length === 0 ? (
         <EmptyState
           level={2}
@@ -4542,7 +4601,7 @@ function ModelsPage({
               </section>
               <div className="inspector-actions">
                 <Button variant="quiet" onClick={() => navigate("providers", { provider: selected.provider.id })}>Manage model limits</Button>
-                <Button variant="quiet" onClick={() => navigate("logs", { q: selected.public_alias })}>View request logs</Button>
+                <Button variant="quiet" onClick={() => navigate("requests", { q: selected.public_alias })}>View request logs</Button>
               </div>
             </aside>
           )}
@@ -4652,14 +4711,16 @@ const statusPresets: ReadonlyArray<readonly [string, string]> = [
 
 function LogsPage() {
   const [logs, setLogs] = useState<RequestLog[]>([]);
-  const initialParams = useMemo(() => new URLSearchParams(location.search), []);
-  const [query, setQuery] = useState(() => initialParams.get("q") || "");
-  const [status, setStatus] = useState(() => initialParams.get("status") || "");
+  // Both filters live in the address bar so a filtered view is a link. They
+  // replace rather than push: a filter is refined by typing, and one history
+  // entry per keystroke would bury the page the operator arrived from.
+  const [query, setQuery] = useURLState("q", "replace");
+  const [status, setStatus] = useURLState("status", "replace");
   // What the code box shows, which is not the same as what the list is filtered
   // on: a deep link arrives with the code already applied, and a half-typed one
   // is not applied at all.
   const [codeDraft, setCodeDraft] = useState(() => {
-    const initial = initialParams.get("status") || "";
+    const initial = new URLSearchParams(location.search).get("status") || "";
     return /^\d{3}$/.test(initial) ? initial : "";
   });
   const [loading, setLoading] = useState(true);
@@ -4746,16 +4807,11 @@ function LogsPage() {
   // list. `detached` is only consulted for the id currently selected, so it cannot
   // resurrect a previous selection.
   const selected = listed ?? (detached && detached.id === selectedID ? detached : null);
+  useTitleDetail(selected?.request_id ?? "");
   const agedOut = selected !== null && listed === null;
   useEffect(() => {
     if (listed) setDetached(listed);
   }, [listed]);
-  useEffect(() => {
-    const params = new URLSearchParams();
-    if (query) params.set("q", query);
-    if (status) params.set("status", status);
-    history.replaceState({}, "", `/admin/logs${params.size ? `?${params}` : ""}`);
-  }, [query, status]);
   useEffect(() => {
     setBodies(null);
     setBodiesError("");
@@ -4779,7 +4835,7 @@ function LogsPage() {
 
   return (
     <div className="resource-page log-page">
-      <PageHeader eyebrow="Live request evidence" title="Request logs" description="Running requests update every two seconds. Completed metadata is retained; bodies appear only where encrypted capture is enabled." actions={<Button variant="quiet" onClick={() => void load()}><RefreshCw size={15} aria-hidden="true" /> Refresh</Button>} />
+      <PageHeader eyebrow="Live request evidence" title="Requests" description="Running requests update every two seconds. Completed metadata is retained; bodies appear only where encrypted capture is enabled." actions={<Button variant="quiet" onClick={() => void load()}><RefreshCw size={15} aria-hidden="true" /> Refresh</Button>} />
       {error && (
         <InlineNotice tone="danger">
           {error} The list keeps retrying every two seconds.{" "}
@@ -5163,7 +5219,7 @@ function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNe
   const openAIURL = `${rootURL}/v1`;
   return (
     <>
-      <PageHeader eyebrow="Unified authentication" title="Gateway key" description="One active key works with OpenAI SDKs, Anthropic SDKs and Claude Code. Upstream provider secrets never leave Rotakey." />
+      <PageHeader eyebrow="Unified authentication" title="Connect" description="One active key works with OpenAI SDKs, Anthropic SDKs and Claude Code. Upstream provider secrets never leave Rotakey." />
       {error && (
         <InlineNotice tone="danger">
           {error} The examples below use this page's own address until the settings load.{" "}

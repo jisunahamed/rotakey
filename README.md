@@ -120,7 +120,7 @@ Overview is the single-owner routing control surface. It refreshes every 10 seco
 - Selecting a provider, model, or key opens the contextual inspector. On mobile it opens as a full-screen sheet.
 - Overview exposes only safe actions: copy the unified URL, test a provider, recheck a key, or open filtered provider and request-log views.
 
-Providers, Model routes, and Request logs use the same dense resource/inspector navigation. Deep links are supported with `/admin/providers?provider=<id>`, `/admin/models?model=<id>`, and `/admin/logs?q=<model-or-request>&status=<code>`.
+Providers, Models, and Requests use the same dense resource/inspector navigation. Deep links are supported with `/admin/providers?provider=<id>`, `/admin/models?model=<id>`, `/admin/playground?model=<id>`, `/admin/overview?range=<1h|24h|7d|all>`, and `/admin/requests?q=<model-or-request>&status=<running|errors|code>`. The earlier `/admin/logs` and `/admin/access` addresses still resolve and redirect to `/admin/requests` and `/admin/connect`.
 
 ## Add a provider
 
