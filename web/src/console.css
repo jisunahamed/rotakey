@@ -324,20 +324,17 @@
   to { transform: rotate(360deg); }
 }
 
+/* Eight tracks, always. The balance cell used to appear only once some key tracked
+   one, so adding a balance re-flowed all seven other metrics under the operator's
+   eye — and the ledger's own width silently answered a question it never asked.
+   The cell is always there and says "Not tracked" when that is the truth. */
 .status-ledger {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   background: var(--surface-raised);
   border-right: 1px solid var(--edge);
   border-bottom: 1px solid var(--edge);
   border-left: 1px solid var(--edge);
-}
-
-/* Eight metrics rather than seven when some API key tracks a balance. The narrower
-   breakpoints below re-declare .status-ledger after this rule, so they win at the
-   same specificity and both counts collapse to the same mobile grid. */
-.status-ledger--credit {
-  grid-template-columns: repeat(8, minmax(0, 1fr));
 }
 
 .ledger-metric {
@@ -1532,15 +1529,16 @@
   grid-template-columns: 14px minmax(0, 1fr) 126px;
 }
 
+/* The log page's third column is a segmented control and a three-digit box, so it
+   takes the width it needs rather than the slot a dropdown used to sit in. */
 .log-filter {
-  grid-template-columns: 14px minmax(0, 1fr) 118px;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
 }
 
 .model-filter label,
 .log-filter label { min-width: 0; }
 
-.model-filter select,
-.log-filter select {
+.model-filter select {
   width: 100%;
   min-height: 40px;
   padding: var(--space-2) var(--space-4);
@@ -1549,6 +1547,51 @@
   border: 1px solid var(--edge);
   border-radius: var(--radius-fitting);
   font-size: var(--text-mini);
+}
+
+/* Three states and a code box, not a list of twelve codes. A provider can return
+   any status, and a dropdown that only knew twelve of them showed "All statuses"
+   while quietly filtering on the one it had been handed in the URL. The buttons
+   carry the same treatment as the overview's range switcher, which is the
+   console's one existing segmented control. */
+.log-status-filter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.log-status-filter button {
+  min-height: 40px;
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-fitting);
+  cursor: pointer;
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
+  transition: color var(--dur-state) var(--ease), border-color var(--dur-state) var(--ease);
+}
+
+.log-status-filter button:hover { color: var(--text-strong); }
+
+.log-status-filter button.is-active {
+  color: var(--iris);
+  border-color: color-mix(in srgb, var(--iris) 45%, var(--edge));
+}
+
+/* It holds three digits and never more, so it is sized to what it holds. */
+.log-status-filter input {
+  width: 62px;
+  min-height: 40px;
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-fitting);
+  font-family: var(--font-data);
+  font-size: var(--text-mini);
+  font-variant-numeric: tabular-nums;
 }
 
 .model-sweep {
@@ -2786,12 +2829,9 @@
 }
 
 @media (max-width: 1050px) {
-  /* Three columns whether the ledger carries seven metrics or eight. Declared
-     after .status-ledger--credit so it wins at equal specificity. The hairlines
-     are keyed to the column count rather than to a metric count: the right edge
-     is cleared at the end of every row, and every row after the first carries a
-     top rule. Keyed to fixed child numbers, row two lost its separator as soon
-     as the balance cell appeared. */
+  /* Three columns, so the eight metrics become three rows. The hairlines are keyed
+     to the column count rather than to a metric count: the right edge is cleared
+     at the end of every row, and every row after the first carries a top rule. */
   .status-ledger { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .ledger-metric:nth-child(3n) { border-right: 0; }
   .ledger-metric:nth-child(n+4) { border-top: 1px solid var(--edge); }
@@ -2907,7 +2947,8 @@
   .model-limit-editor .field select,
   .ide-filter input,
   .model-filter select,
-  .log-filter select { min-height: 44px; }
+  .log-status-filter button,
+  .log-status-filter input { min-height: 44px; }
   /* The rows are the buttons on these three lists, so the row minimum is the
      touch target and there is no separate control to grow. */
   .inspector-key-list button,
@@ -2974,8 +3015,10 @@
      room for its own longest option. */
   .model-filter,
   .log-filter { grid-template-columns: 14px minmax(0, 1fr); }
-  .model-filter label:last-child,
-  .log-filter label:last-child { grid-column: 2; }
+  .model-filter label:last-child { grid-column: 2; }
+  /* The segmented control spreads to fill the row it now has to itself. */
+  .log-status-filter { grid-column: 2; }
+  .log-status-filter button { flex: 1; }
 
   .console-actionbar { position: static; align-items: stretch; flex-direction: column; }
   .console-actionbar .button { width: 100%; }

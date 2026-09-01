@@ -144,6 +144,9 @@ function App() {
     return stored === "light" || stored === "dark" ? stored : "system";
   });
   const [gatewayKey, setGatewayKey] = useState("");
+  // Why the operator is looking at the login card. A toast cannot answer that: the
+  // card replaces the whole screen, so the sentence has to live on the card.
+  const [signedOutReason, setSignedOutReason] = useState("");
   const [version, setVersion] = useState<VersionInfo | null>(null);
   const [toasts, setToasts] = useState<Note[]>([]);
   // One timer per message, keyed by id. A timer that outlives its message — because
@@ -216,11 +219,11 @@ function App() {
     const expired = () => {
       setCSRF("");
       setPhase("login");
-      notify("Your session expired. Sign in again.", "danger");
+      setSignedOutReason("Your session expired, so Rotakey signed you out. Anything you had not saved was not sent.");
     };
     window.addEventListener("relay:session-expired", expired);
     return () => window.removeEventListener("relay:session-expired", expired);
-  }, [checkSession, notify]);
+  }, [checkSession]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -303,33 +306,6 @@ function App() {
     }
   };
 
-  if (phase === "loading") {
-    return <LoadingScreen />;
-  }
-  if (phase === "setup") {
-    return (
-      <SetupScreen
-        onComplete={(name, key, csrf) => {
-          setUsername(name);
-          setGatewayKey(key);
-          setCSRF(csrf);
-          setPhase("app");
-        }}
-      />
-    );
-  }
-  if (phase === "login") {
-    return (
-      <LoginScreen
-        onLogin={(name, csrf) => {
-          setUsername(name);
-          setCSRF(csrf);
-          setPhase("app");
-        }}
-      />
-    );
-  }
-
   const noteRow = (note: Note) => (
     <div className={`toast toast--${note.tone}`} key={note.id}>
       {note.tone === "success" ? (
@@ -349,6 +325,64 @@ function App() {
   );
   const failures = toasts.filter((note) => note.tone === "danger");
   const confirmations = toasts.filter((note) => note.tone !== "danger");
+
+  // Two regions, each with a fixed role, and a message renders into whichever one
+  // matches its tone. One shared wrapper that swapped role and aria-live at the
+  // same moment its text arrived was no better than inserting the region late: a
+  // screen reader that had already registered the node as polite could announce an
+  // error quietly, or miss it. Failures sit above confirmations so an error is
+  // never pushed off-screen by a success.
+  const toastDock = (
+    <div className="toast-dock">
+      <div className="toast-stack" role="alert" aria-live="assertive">
+        {failures.map(noteRow)}
+      </div>
+      <div className="toast-stack" role="status" aria-live="polite">
+        {confirmations.map(noteRow)}
+      </div>
+    </div>
+  );
+
+  // The dock is mounted in every phase, not only in the signed-in shell. It used
+  // to render after the login branch had already returned, so "Your session
+  // expired" was queued while the login card was on screen and then delivered
+  // the moment the operator signed back in — announcing the one thing that was
+  // no longer true. The login card states the reason itself; the dock carries
+  // whatever else was already on screen when the session dropped.
+  if (phase === "loading") {
+    return <>{toastDock}<LoadingScreen /></>;
+  }
+  if (phase === "setup") {
+    return (
+      <>
+        {toastDock}
+        <SetupScreen
+          onComplete={(name, key, csrf) => {
+            setUsername(name);
+            setGatewayKey(key);
+            setCSRF(csrf);
+            setPhase("app");
+          }}
+        />
+      </>
+    );
+  }
+  if (phase === "login") {
+    return (
+      <>
+        {toastDock}
+        <LoginScreen
+          notice={signedOutReason}
+          onLogin={(name, csrf) => {
+            setSignedOutReason("");
+            setUsername(name);
+            setCSRF(csrf);
+            setPhase("app");
+          }}
+        />
+      </>
+    );
+  }
 
   return (
     <div className="app-shell">
@@ -426,10 +460,7 @@ function App() {
               <LogOut size={17} aria-hidden="true" />
             </button>
           </div>
-          <div className="sidebar__version" title={version?.commit ? `Commit ${version.commit}` : undefined}>
-            Rotakey v{version?.current_version ?? "0.2.7"}
-            {version?.update_available && version.latest_version ? <span>new v{version.latest_version}</span> : <span>up to date</span>}
-          </div>
+          <VersionBadge version={version} />
         </div>
       </aside>
 
@@ -473,20 +504,7 @@ function App() {
           notify={notify}
         />
       )}
-      <div className="toast-dock">
-        {/* Two regions, each with a fixed role, and a message renders into whichever
-            one matches its tone. One shared wrapper that swapped role and aria-live
-            at the same moment its text arrived was no better than inserting the
-            region late: a screen reader that had already registered the node as
-            polite could announce an error quietly, or miss it. Failures sit above
-            confirmations so an error is never pushed off-screen by a success. */}
-        <div className="toast-stack" role="alert" aria-live="assertive">
-          {failures.map(noteRow)}
-        </div>
-        <div className="toast-stack" role="status" aria-live="polite">
-          {confirmations.map(noteRow)}
-        </div>
-      </div>
+      {toastDock}
     </div>
   );
 }
@@ -499,7 +517,34 @@ type VersionInfo = {
   update_available: boolean;
   release_url: string;
   published_at?: string;
+  /** Why the release check could not answer. The server sends this instead of a
+   * latest version when GitHub is unreachable, rate-limits it, or has published
+   * nothing to compare against. */
+  check_error?: string;
 };
+
+/** The version line, which used to state two things it did not know. The number
+ *  fell back to a hardcoded "0.2.7" whenever the request had not landed — three
+ *  releases stale the day it was written — and the badge read "up to date"
+ *  unconditionally, including when the release check had failed or had never run.
+ *  Every branch below is something the payload actually says. */
+function VersionBadge({ version }: { version: VersionInfo | null }) {
+  const badge = !version
+    ? { text: "checking…", title: "Reading this install's version." }
+    : version.update_available && version.latest_version
+      ? { text: `new v${version.latest_version}`, title: `Version ${version.latest_version} has been released.` }
+      : version.check_error
+        ? { text: "check failed", title: version.check_error }
+        : version.latest_version
+          ? { text: "up to date", title: `v${version.latest_version} is the newest release.` }
+          : { text: "no release found", title: "There is no published release to compare this build against." };
+  return (
+    <div className="sidebar__version" title={version?.commit ? `Commit ${version.commit}` : undefined}>
+      {version ? `Rotakey v${version.current_version}` : "Rotakey"}
+      <span title={badge.title}>{badge.text}</span>
+    </div>
+  );
+}
 
 function LoadingScreen() {
   return (
@@ -608,9 +653,13 @@ function SetupScreen({
 }
 
 function LoginScreen({
-  onLogin
+  onLogin,
+  notice
 }: {
   onLogin: (username: string, csrf: string) => void;
+  /** Why the operator is here, when they did not choose to be. Empty on a normal
+   * visit; set when the session expired under them. */
+  notice?: string;
 }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -647,6 +696,8 @@ function LoginScreen({
             <h1>Sign in to Rotakey.</h1>
             <p>Configure providers, API keys, model routes and limits.</p>
           </div>
+          {/* The reason first, then whatever this attempt went wrong with. */}
+          {notice && !error && <InlineNotice tone="danger">{notice}</InlineNotice>}
           {error && <InlineNotice tone="danger">{error}</InlineNotice>}
           <label className="field">
             <span>Username</span>
@@ -850,7 +901,7 @@ function OverviewPage({
             </div>
           </header>
 
-          <section className={`status-ledger${overview.summary.credit.tracked_keys > 0 ? " status-ledger--credit" : ""}`} aria-label={`${rangeLabel(range)} gateway status`}>
+          <section className="status-ledger" aria-label={`${rangeLabel(range)} gateway status`}>
             <LedgerMetric label="Routes ready" value={`${overview.summary.routes_ready}/${overview.summary.routes_total}`} tone={overview.summary.routes_ready < overview.summary.routes_total ? "danger" : "healthy"} />
             <LedgerMetric label="API keys ready" value={`${overview.summary.keys_ready}/${overview.summary.keys_total}`} tone={overview.summary.keys_warning ? "warning" : "healthy"} />
             <LedgerMetric label="Requests" value={formatNumber(overview.summary.requests)} />
@@ -858,13 +909,15 @@ function OverviewPage({
             <LedgerMetric label="P95 latency" value={`${formatNumber(overview.summary.latency_p95_ms)} ms`} />
             <LedgerMetric label="Tokens" value={formatCompact(overview.summary.tokens)} />
             <LedgerMetric label="Estimated cost" value={formatUSD(overview.summary.estimated_cost_usd)} />
-            {overview.summary.credit.tracked_keys > 0 && (
-              <LedgerMetric
-                label="Balance left"
-                value={formatUSD(overview.summary.credit.remaining_usd)}
-                tone={creditTone(overview.summary.credit)}
-              />
-            )}
+            {/* Always the eighth cell. It used to appear the moment a key started
+                tracking a balance, which re-flowed the seven metrics beside it and
+                left "does Rotakey know my credit?" answered only by the ledger's
+                width. Untracked is a state, so it is stated. */}
+            <LedgerMetric
+              label="Balance left"
+              value={overview.summary.credit.tracked_keys > 0 ? formatUSD(overview.summary.credit.remaining_usd) : "Not tracked"}
+              tone={overview.summary.credit.tracked_keys > 0 ? creditTone(overview.summary.credit) : "default"}
+            />
           </section>
 
           <div className={`ops-console__workspace${selected ? " has-inspector" : ""}`}>
@@ -1968,6 +2021,28 @@ function credentialPoolState(credential: Credential) {
   if (!credential.enabled) return "disabled";
   if (credential.balance_usd != null && credential.balance_usd - credential.balance_spent_usd <= 0) return "exhausted";
   return credential.status;
+}
+
+/** How many keys the router would actually reach for on this route — the one
+ *  definition of "ready", used by every count, dot and label that claims it.
+ *  Two contradictory ones used to sit a hundred lines apart on the same page, and
+ *  neither asked whether the provider itself was switched on, so a route on a
+ *  turned-off provider was drawn green with "3/3 keys ready" beside it. */
+function readyKeyCount(route: { provider: { enabled: boolean }; credentials: Credential[] }) {
+  if (!route.provider.enabled) return 0;
+  return route.credentials.filter((credential) => credentialPoolState(credential) === "healthy").length;
+}
+
+/** The single sentence explaining why a route cannot serve, or "" when it can.
+ *  Kept beside `readyKeyCount` because a count of zero always needs the reason:
+ *  "waiting for a healthy API key" is wrong when the provider is off, and wrong
+ *  again when no key was ever added. */
+function routeBlockReason(route: { provider: { enabled: boolean; name: string }; credentials: Credential[]; enabled: boolean }) {
+  if (!route.enabled) return "route turned off";
+  if (!route.provider.enabled) return `${route.provider.name} is turned off`;
+  if (route.credentials.length === 0) return `no API key on ${route.provider.name}`;
+  if (readyKeyCount(route) === 0) return "no API key is ready";
+  return "";
 }
 
 /** A key that cannot serve and will not recover on its own, which is the exact set
@@ -3868,13 +3943,15 @@ function PlaygroundPage({
   }, [selectedID]);
 
   const models: PlaygroundModel[] = providers.flatMap((provider) => provider.models.map((model) => ({ ...model, provider, credentials: provider.credentials })));
-  const readyKeys = (model: PlaygroundModel) => model.credentials.filter((credential) => credentialPoolState(credential) === "healthy").length;
   const modelState = (model: PlaygroundModel) => {
     const probe = probeResults[model.id];
-    if (!model.enabled) return "disabled";
+    // A route on a provider the operator switched off is off, whatever the route's
+    // own flag says. The playground used to call it "waiting", which reads as
+    // "add a key" — and adding one would have changed nothing.
+    if (!model.enabled || !model.provider.enabled) return "disabled";
     if (probe?.state === "checking") return "checking";
     if (probe?.state === "failed" || model.capability_status === "failed") return "failed";
-    if (readyKeys(model) === 0 || probe?.state === "blocked") return "waiting";
+    if (readyKeyCount(model) === 0 || probe?.state === "blocked") return "waiting";
     if (probe?.state === "passed" || probe?.state === "warning" || model.capability_status === "probe_verified" || model.capability_status === "catalog_verified") return "live";
     return "unverified";
   };
@@ -3991,7 +4068,7 @@ function PlaygroundPage({
               return <div key={model.id} className={selectedID === model.id ? "is-selected" : ""}>
                 <button className="playground-model-select" onClick={() => { setSelectedID(model.id); if (compact) setActivePanel("run"); }} aria-current={selectedID === model.id}>
                   <span className={`playground-model-dot is-${state}`} role="img" aria-label={state === "live" ? "Live" : state === "failed" ? "Failed" : state === "checking" ? "Checking" : state === "waiting" ? "Waiting for a key" : state === "disabled" ? "Disabled" : "Unverified"} />
-                  <span><code title={model.public_alias}>{model.public_alias}</code><small>{model.provider.name} · {state} · {readyKeys(model)}/{model.credentials.length} keys</small></span>
+                  <span><code title={model.public_alias}>{model.public_alias}</code><small>{model.provider.name} · {state} · {readyKeyCount(model)}/{model.credentials.length} keys</small></span>
                 </button>
                 <button className="console-icon" disabled={checkingID === model.id} onClick={() => void checkModel(model)} aria-label={`Check ${model.public_alias}`} title="Check model"><RefreshCw size={13} aria-hidden="true" /></button>
               </div>;
@@ -4014,7 +4091,7 @@ function PlaygroundPage({
           </div>
           <div className="playground-transcript" aria-live="polite">
             {runs.length === 0 ? <div className="playground-empty"><FlaskConical size={22} aria-hidden="true" /><strong>Ready for a real gateway request</strong><p>The selected route uses its configured provider, key rotation, failover, translation and cost tracking.</p></div> : runs.map((run) => <article key={run.id} className={run.error ? "has-error" : ""}>
-              <header><span>{run.protocol}</span><small>{run.latencyMS} ms · {run.inputTokens} in · {run.outputTokens} out</small></header>
+              <header><span>{run.protocol}</span><small>{run.latencyMS} ms{run.inputTokens || run.outputTokens ? ` · ${run.inputTokens} in · ${run.outputTokens} out` : " · tokens not reported"}</small></header>
               <div className="playground-user-message"><strong>You</strong><p>{run.prompt}</p></div>
               <div className="playground-model-message"><strong>{run.error ? `${run.modelAlias} error` : run.modelAlias}</strong><pre>{run.error || run.response}</pre></div>
             </article>)}
@@ -4189,16 +4266,17 @@ function ModelsPage({
   });
   const selected = models.find((model) => model.id === selectedID);
   const poolSizes = poolSizeByAlias(providers);
-  const healthyKeyCount = (model: (typeof models)[number]) => model.credentials.filter((item) => credentialPoolState(item) === "healthy").length;
-  const failedProbeIDs = models.filter((model) => healthyKeyCount(model) > 0 && (probeResults[model.id]?.state === "failed" || (!probeResults[model.id] && model.capability_status === "failed"))).map((model) => model.id);
+  const failedProbeIDs = models.filter((model) => readyKeyCount(model) > 0 && (probeResults[model.id]?.state === "failed" || (!probeResults[model.id] && model.capability_status === "failed"))).map((model) => model.id);
 
   const checkAllModels = async () => {
     if (bulkChecking || models.length === 0) return;
-    const targets = models.filter((model) => healthyKeyCount(model) > 0);
-    const blockedModels = models.filter((model) => healthyKeyCount(model) === 0);
-    setProbeResults(Object.fromEntries(models.map((model) => [model.id, healthyKeyCount(model) > 0
+    const targets = models.filter((model) => readyKeyCount(model) > 0);
+    const blockedModels = models.filter((model) => readyKeyCount(model) === 0);
+    // A blocked route states its own reason: "waiting for a healthy API key" is a
+    // lie when the provider is switched off or the provider has no keys at all.
+    setProbeResults(Object.fromEntries(models.map((model) => [model.id, readyKeyCount(model) > 0
       ? { state: "checking" as const }
-      : { state: "blocked" as const, error: "waiting for a healthy API key" }])));
+      : { state: "blocked" as const, error: routeBlockReason(model) }])));
     setProbeProgress({ completed: blockedModels.length, total: models.length, passed: 0, listed: 0, blocked: blockedModels.length, failed: 0 });
     setBulkChecking(true);
     stopSweep.current = false;
@@ -4327,7 +4405,7 @@ function ModelsPage({
                   sentence instead. */}
               <div className="model-sweep__readout" aria-hidden="true">
                 <span>Live model sweep</span>
-                <strong>{bulkChecking ? `${probeProgress.completed}/${probeProgress.total} checked` : probeProgress.total ? `${probeProgress.passed} live${probeProgress.listed ? ` · ${probeProgress.listed} listed` : ""} · ${probeProgress.blocked} waiting${probeProgress.failed ? ` · ${probeProgress.failed} unavailable` : ""}` : `${models.filter((model) => healthyKeyCount(model) > 0).length} routes ready · ${models.filter((model) => healthyKeyCount(model) === 0).length} waiting for keys`}</strong>
+                <strong>{bulkChecking ? `${probeProgress.completed}/${probeProgress.total} checked` : probeProgress.total ? `${probeProgress.passed} live${probeProgress.listed ? ` · ${probeProgress.listed} listed` : ""} · ${probeProgress.blocked} waiting${probeProgress.failed ? ` · ${probeProgress.failed} unavailable` : ""}` : `${models.filter((model) => readyKeyCount(model) > 0).length} routes ready · ${models.filter((model) => readyKeyCount(model) === 0).length} waiting for keys`}</strong>
               </div>
               <p className="sr-only" role="status" aria-live="polite">{sweepNote}</p>
               <div className="model-sweep__track" role="progressbar" aria-label="Model check progress" aria-valuemin={0} aria-valuemax={probeProgress.total || models.length} aria-valuenow={probeProgress.completed}>
@@ -4347,12 +4425,32 @@ function ModelsPage({
             {/* Column labels for the eye only: each row below is a button, not a
                 table row, so the labels cannot be associated as headers. Every
                 row states its own values in its accessible name instead. */}
-            <header aria-hidden="true"><span>Public alias</span><span>Provider</span><span>Keys</span></header>
+            {filtered.length > 0 && <header aria-hidden="true"><span>Public alias</span><span>Provider</span><span>Keys</span></header>}
             <div>
+              {/* A filter that matches nothing used to leave a blank rectangle under a
+                  row of column labels, which reads as a failed load rather than as an
+                  answer. Both empties say which one it is and offer the way out. */}
+              {!loading && filtered.length === 0 && (models.length === 0 ? (
+                <EmptyState
+                  title="No model routes yet"
+                  description="A route gives one model a public name your callers ask for. Add the first one on the provider that serves it."
+                  action={<Button onClick={() => navigate("providers")}>Go to Providers</Button>}
+                />
+              ) : (
+                <EmptyState
+                  title="No route matches"
+                  description={`${models.length} route${models.length === 1 ? "" : "s"} exist, and none match the current search or provider filter.`}
+                  action={<Button variant="quiet" onClick={() => { setQuery(""); setProviderFilter(""); }}>Clear filters</Button>}
+                />
+              ))}
               {filtered.map((model) => {
-                const ready = model.credentials.filter((item) => item.enabled && item.status === "healthy").length;
+                const ready = readyKeyCount(model);
                 const probe = probeResults[model.id];
-                const capabilityLabel = ready === 0 ? "waiting for a healthy API key" : probe?.state === "checking" ? "checking now" : probe?.state === "passed" ? "live" : probe?.state === "warning" ? `listed by provider · check inconclusive: ${probe.error || "try a request to use another key"}` : probe?.state === "blocked" ? `waiting · ${probe.error || "healthy API key required"}` : probe?.state === "failed" ? `unavailable · ${probe.error || "probe failed"}` : model.capability_status === "probe_verified" ? "probe verified" : model.capability_status === "catalog_verified" ? "catalog verified" : model.capability_status === "failed" ? `unavailable · ${model.capability_error || "probe failed"}` : "unverified";
+                // Why it cannot serve outranks what the last probe said: a route on a
+                // provider the operator switched off is not "live", however well it
+                // answered an hour ago.
+                const blocked = routeBlockReason(model);
+                const capabilityLabel = blocked ? `cannot serve · ${blocked}` : probe?.state === "checking" ? "checking now" : probe?.state === "passed" ? "live" : probe?.state === "warning" ? `listed by provider · check inconclusive: ${probe.error || "try a request to use another key"}` : probe?.state === "blocked" ? `waiting · ${probe.error || "healthy API key required"}` : probe?.state === "failed" ? `unavailable · ${probe.error || "probe failed"}` : model.capability_status === "probe_verified" ? "probe verified" : model.capability_status === "catalog_verified" ? "catalog verified" : model.capability_status === "failed" ? `unavailable · ${model.capability_error || "probe failed"}` : "unverified";
                 const pooled = routingMode === "model" && poolSizes[model.public_alias] > 1;
                 return (
                   <button
@@ -4362,7 +4460,7 @@ function ModelsPage({
                     aria-current={selectedID === model.id}
                     aria-label={`${model.public_alias}, ${capabilityLabel}, on ${model.provider.name}${pooled ? ` in a pool of ${poolSizes[model.public_alias]} providers` : ""}, ${ready} of ${model.credentials.length} key${model.credentials.length === 1 ? "" : "s"} ready`}
                   >
-                    <span aria-hidden="true"><StatusDot state={probe?.state === "passed" || probe?.state === "warning" ? "healthy" : !model.enabled || ready === 0 || probe?.state === "blocked" ? "disabled" : probe?.state === "failed" || model.capability_status === "failed" ? "exhausted" : "healthy"} /><code title={model.public_alias}>{model.public_alias}</code><small title={`${model.upstream_model === model.public_alias ? (model.supports_responses ? "Chat + Responses" : "Chat Completions") : model.upstream_model} · ${capabilityLabel}`}>{model.upstream_model === model.public_alias ? (model.supports_responses ? "Chat + Responses" : "Chat Completions") : model.upstream_model} · {capabilityLabel}</small></span>
+                    <span aria-hidden="true"><StatusDot state={blocked || probe?.state === "blocked" ? "disabled" : probe?.state === "passed" || probe?.state === "warning" ? "healthy" : probe?.state === "failed" || model.capability_status === "failed" ? "exhausted" : "healthy"} /><code title={model.public_alias}>{model.public_alias}</code><small title={`${model.upstream_model === model.public_alias ? (model.supports_responses ? "Chat + Responses" : "Chat Completions") : model.upstream_model} · ${capabilityLabel}`}>{model.upstream_model === model.public_alias ? (model.supports_responses ? "Chat + Responses" : "Chat Completions") : model.upstream_model} · {capabilityLabel}</small></span>
                     <span aria-hidden="true" title={pooled ? `${model.provider.name} · pool of ${poolSizes[model.public_alias]}` : model.provider.name}>{pooled ? `${model.provider.name} · pool of ${poolSizes[model.public_alias]}` : model.provider.name}</span>
                     <span aria-hidden="true">{ready}/{model.credentials.length}</span>
                     <ChevronRight size={13} aria-hidden="true" />
@@ -4406,7 +4504,7 @@ function ModelsPage({
                 <Definition label="Provider" value={selected.provider.name} />
                 {routingMode === "model" && poolSizes[selected.public_alias] > 1 && <Definition label="Pooled with" value={`${poolSizes[selected.public_alias] - 1} other provider route${poolSizes[selected.public_alias] === 2 ? "" : "s"}`} />}
                 <Definition label="Route" value={selected.enabled ? "On" : "Off"} />
-                <Definition label="Capability check" value={healthyKeyCount(selected) === 0 ? "Waiting for a healthy API key" : capabilityLabelFor(selected.capability_status)} />
+                <Definition label="Capability check" value={readyKeyCount(selected) === 0 ? `Cannot serve — ${routeBlockReason(selected)}` : capabilityLabelFor(selected.capability_status)} />
                 <Definition label="Chat endpoint" value={protocolLabelFor(selected.capability_profile?.chat || (selected.supports_chat ? "native" : "off"))} />
                 <Definition label="Responses" value={protocolLabelFor(selected.capability_profile?.responses || (selected.supports_responses ? "native" : "translated"))} />
                 <Definition label="Messages" value={protocolLabelFor(selected.capability_profile?.messages || (selected.supports_messages ? "native" : "off"))} />
@@ -4544,11 +4642,26 @@ function ModelLimitEditor({
   );
 }
 
+/** The three states the server understands by name. Every other value it accepts
+ *  is a status code, which is typed rather than picked. */
+const statusPresets: ReadonlyArray<readonly [string, string]> = [
+  ["", "All"],
+  ["running", "Running"],
+  ["errors", "Errors"]
+];
+
 function LogsPage() {
   const [logs, setLogs] = useState<RequestLog[]>([]);
   const initialParams = useMemo(() => new URLSearchParams(location.search), []);
   const [query, setQuery] = useState(() => initialParams.get("q") || "");
   const [status, setStatus] = useState(() => initialParams.get("status") || "");
+  // What the code box shows, which is not the same as what the list is filtered
+  // on: a deep link arrives with the code already applied, and a half-typed one
+  // is not applied at all.
+  const [codeDraft, setCodeDraft] = useState(() => {
+    const initial = initialParams.get("status") || "";
+    return /^\d{3}$/.test(initial) ? initial : "";
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   // Only the id is state. Holding the whole record meant the two-second poll
@@ -4681,12 +4794,43 @@ function LogsPage() {
               <span className="sr-only">Search logs</span>
               <input aria-label="Search logs" placeholder="Request ID or model alias" value={query} onChange={(e) => setQuery(e.target.value)} />
             </label>
-            <label>
-              <span className="sr-only">Status</span>
-              <select aria-label="Status" value={status} onChange={(e) => setStatus(e.target.value)}>
-                <option value="">All statuses</option><option value="running">Running</option><option value="errors">All errors</option><option value="200">200</option><option value="400">400</option><option value="401">401</option><option value="403">403</option><option value="404">404</option><option value="429">429</option><option value="500">500</option><option value="502">502</option><option value="503">503</option><option value="504">504</option>
-              </select>
-            </label>
+            {/* The picker used to be a dropdown listing twelve status codes, and a
+                provider can return any of them. A link to ?status=409 selected
+                nothing, so the control read "All statuses" while the list was in
+                fact filtered — and there was no way to pick 409 by hand. The three
+                states a request can be in are buttons; every code is typed. */}
+            <div className="log-status-filter" role="group" aria-label="Filter by status">
+              {statusPresets.map(([value, label]) => (
+                <button
+                  key={value || "all"}
+                  type="button"
+                  className={status === value ? "is-active" : ""}
+                  aria-pressed={status === value}
+                  onClick={() => { setCodeDraft(""); setStatus(value); }}
+                >
+                  {label}
+                </button>
+              ))}
+              <label>
+                <span className="sr-only">HTTP status code</span>
+                <input
+                  inputMode="numeric"
+                  maxLength={3}
+                  placeholder="Code"
+                  aria-label="HTTP status code"
+                  value={codeDraft}
+                  onChange={(e) => {
+                    const digits = e.target.value.replace(/\D/g, "").slice(0, 3);
+                    setCodeDraft(digits);
+                    // A half-typed "4" is not a status code. The list keeps showing
+                    // what it has until three digits are in, or until the box is
+                    // emptied — which means "no code filter", not "filter on zero".
+                    if (digits === "") setStatus("");
+                    else if (digits.length === 3) setStatus(digits);
+                  }}
+                />
+              </label>
+            </div>
           </div>
           {/* Column labels for the eye only. Each row below is a button, not a
               table row, so the labels cannot be associated as real headers —
@@ -4701,7 +4845,7 @@ function LogsPage() {
                   level={2}
                   title="No requests match these filters"
                   description="Nothing in the retained window matches the search or status you picked."
-                  action={<Button variant="quiet" onClick={() => { setQuery(""); setStatus(""); }}>Clear filters</Button>}
+                  action={<Button variant="quiet" onClick={() => { setQuery(""); setStatus(""); setCodeDraft(""); }}>Clear filters</Button>}
                 />
               ) : (
                 <EmptyState level={2} title="No requests yet" description="Send a request through /v1 and it appears here within two seconds." />
@@ -4740,7 +4884,13 @@ function LogsPage() {
               <div role="listitem"><span>Provider</span><strong>{selected.provider_name}</strong></div>
               <div role="listitem"><span>Served by</span><strong>{routingStageLabel(selected)}</strong></div>
               <div role="listitem"><span>Latency</span><strong>{selected.latency_ms} ms</strong></div>
-              <div role="listitem"><span>Tokens</span><strong title={`${selected.input_tokens} input · ${selected.output_tokens} output`}>{formatCompact(selected.input_tokens)} in · {formatCompact(selected.output_tokens)} out</strong></div>
+              {/* A request that reported no usage is not a request that used no
+                  tokens: a streamed reply carries a count only when the provider
+                  sends a usage frame, and a request that failed never got one.
+                  "0 in · 0 out" states a measurement that was never taken. */}
+              <div role="listitem"><span>Tokens</span>{selected.input_tokens || selected.output_tokens
+                ? <strong title={`${selected.input_tokens} input · ${selected.output_tokens} output`}>{formatCompact(selected.input_tokens)} in · {formatCompact(selected.output_tokens)} out</strong>
+                : <strong title="The provider reported no token usage for this request.">Not reported</strong>}</div>
             </div>
             {agedOut && (
               <InlineNotice>
@@ -4809,6 +4959,17 @@ function LogDiagnosis({ log }: { log: RequestLog }) {
             <span className="log-diagnosis__marker">!</span>
             <span><strong>Gateway decision</strong><p>{log.error_message || humanizeErrorCode(log.error_code || `http_${log.status_code}`)}</p></span>
             <small>metadata</small>
+          </div>
+        )}
+        {/* The message the caller actually received. It used to appear only when
+            there were no attempts and no routing decisions to list, so on every
+            failure with a cause the one sentence the operator is being asked about
+            — the text in their own application's error — was the one thing missing. */}
+        {log.error_message && (decisions.length > 0 || failedAttempts.length > 0) && (
+          <div>
+            <span className="log-diagnosis__marker">→</span>
+            <span><strong>Reply sent to the caller</strong><p>{log.error_message}</p></span>
+            <small>HTTP {log.status_code}</small>
           </div>
         )}
       </div>
