@@ -1,0 +1,113 @@
+/* Layout for the kitchen sink, and nothing else. These rules exist to put the
+ * primitives side by side; they are not part of the console and no page may use
+ * them.
+ *
+ * Deliberately plain: a bench that styled its contents would hide the thing it is
+ * meant to show. Everything visible on that page comes from the primitives —
+ * these rules only decide where the benches sit. */
+
+/* The sink is its own page rather than a page inside the shell: it renders before
+   the console has a session, because nothing on it needs one. So it draws the
+   canvas itself instead of inheriting it from the shell. */
+.sink {
+  display: grid;
+  width: min(100%, 1100px);
+  min-height: 100dvh;
+  margin: 0 auto;
+  gap: var(--space-9);
+  padding: var(--space-11) clamp(var(--space-8), 4vw, var(--space-12)) var(--space-12);
+}
+
+.sink-bench {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.sink-bench__body {
+  display: grid;
+  gap: var(--space-5);
+}
+
+/* A bench's specimens sit in a row that wraps, so the same page can be read at
+   1440px and at 375px without a horizontal scrollbar deciding what is visible. */
+.sink-row {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+}
+
+.sink-row > * {
+  min-width: 240px;
+  flex: 1 1 240px;
+}
+
+.sink-row--tight > * {
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.sink-row p {
+  margin: var(--space-3) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-mini);
+  line-height: var(--leading-snug);
+}
+
+/* The state table is the one bench that is also a document: it is the list of
+   every state the console can draw next to the sentence that explains it, which is
+   how "no word on screen that cannot be understood" gets checked. */
+.sink-states > div {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.4fr) minmax(0, 1fr);
+  gap: var(--space-6);
+  padding: var(--space-5);
+  border-top: 1px solid var(--edge);
+}
+
+.sink-states > div:first-child {
+  border-top: 0;
+}
+
+.sink-states dt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
+  color: var(--text-muted);
+}
+
+.sink-states dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.sink-states dd strong {
+  display: block;
+  font-size: var(--text-mini);
+}
+
+.sink-states dd span {
+  display: block;
+  margin-top: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  line-height: var(--leading-snug);
+}
+
+/* Eight stats across, which is the widest the console ever asks for — the status
+   ledger — so this bench shows the case where the figures are tightest. */
+.sink-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.sink-stats > * {
+  border-right: 1px solid var(--edge);
+  border-bottom: 1px solid var(--edge);
+}
+
+@media (max-width: 650px) {
+  .sink-states > div { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
+}

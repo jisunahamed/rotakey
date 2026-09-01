@@ -1,0 +1,342 @@
+/* The primitive kit's rules. Loaded after the legacy stylesheets and before the
+ * rotor.
+ *
+ * Every selector here is a single `ui-`prefixed class. That is not a naming
+ * fashion — it is what lets the kit and the 242 classes it is replacing sit on the
+ * same page for a few commits without either one winning by accident. A rule in
+ * `console.css` cannot reach a primitive, and a primitive cannot reach a page.
+ *
+ * There are no element selectors, no descendant selectors deeper than one level,
+ * and no `!important`. A primitive that needs a page to know about its insides is
+ * not finished.
+ *
+ * Every value resolves to a token. If a number appears literally below, it is
+ * because it is geometry belonging to one drawing — the halo around an 8px dot,
+ * the width of a state bar — and not a size any other rule should share.
+ */
+
+/* ── Surface ─────────────────────────────────────────────────────────────────
+   The box. Three depths and nothing else: on the canvas, cut into it, or over it. */
+
+.ui-surface {
+  min-width: 0;
+}
+
+/* A slab resting on the canvas. The lit top edge inside --lift-panel is the whole
+   of the console's depth model; without it the same box reads as a hole. */
+.ui-surface--raised {
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+  box-shadow: var(--lift-panel);
+}
+
+/* A well. No lit edge, because a hole is not lit from above — that one difference
+   is what separates the two readings, and it is why the rotor's track and the
+   panels around it are legible as different kinds of object. */
+.ui-surface--inset {
+  background: var(--surface-inset);
+  border: 1px solid var(--edge);
+}
+
+/* Genuinely above the page: a menu, a popover. The only surface that casts a real
+   shadow, so that shadow keeps meaning "this is temporary and it is in front". */
+.ui-surface--float {
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+  box-shadow: var(--lift-float);
+}
+
+.ui-surface--radius-panel { border-radius: var(--radius-panel); }
+.ui-surface--radius-fitting { border-radius: var(--radius-fitting); }
+.ui-surface--radius-none { border-radius: 0; }
+
+.ui-surface--pad-sm { padding: var(--space-4) var(--space-5); }
+.ui-surface--pad-md { padding: var(--space-6); }
+.ui-surface--pad-lg { padding: var(--space-9); }
+
+/* ── Label ───────────────────────────────────────────────────────────────────
+   The uppercase micro-label. Martian Mono exists in this console for this one job:
+   its wide engineered forms are what make a caption read as a machine label rather
+   than as small prose. */
+
+.ui-label {
+  display: block;
+  color: var(--text-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  font-weight: 500;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
+/* Caps at 11px need the tracking open to stay legible, so a caller must not be
+   able to take it away — two of the twenty hand-written copies of this recipe set
+   `letter-spacing: 0` and the labels on those two panels were the hardest text in
+   the console to read. */
+.ui-label--muted { color: var(--text-muted); }
+.ui-label--accent { color: var(--iris); }
+
+/* ── SectionHeader ───────────────────────────────────────────────────────────
+   Title, one fact, and the actions. The row wraps rather than truncating: the
+   actions dropping to a second line costs 20px, and a clipped heading costs the
+   operator the name of the thing they are looking at. */
+
+.ui-section-header {
+  display: flex;
+  min-height: var(--row-h-lg);
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-6);
+  padding: var(--space-4) var(--space-5);
+}
+
+.ui-section-header__text {
+  min-width: 0;
+  flex: 1 1 240px;
+}
+
+/* Size follows the level rather than being chosen beside it, so a heading cannot
+   be an h3 that looks like an h2. The two smallest steps are deliberately close:
+   below a certain size the difference that carries hierarchy is weight and space,
+   not points. */
+.ui-section-header__title {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ui-section-header--1 .ui-section-header__title { font-size: var(--text-xl); letter-spacing: var(--track-display); }
+.ui-section-header--2 .ui-section-header__title { font-size: var(--text-md); letter-spacing: var(--track-tight); }
+.ui-section-header--3 .ui-section-header__title { font-size: var(--text-base); }
+.ui-section-header--4 .ui-section-header__title { font-size: var(--text-mini); }
+
+.ui-section-header__description {
+  max-width: 68ch;
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-mini);
+  line-height: var(--leading-snug);
+}
+
+/* A fact, so it is set in the data face with tabular figures: this line is
+   redrawn on every poll, and proportional numerals make a static count look like
+   it is twitching. */
+.ui-section-header__meta {
+  min-width: 0;
+  color: var(--text-muted);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-section-header__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex: 0 0 auto;
+}
+
+/* ── Dot ─────────────────────────────────────────────────────────────────────
+   Eight pixels of state. The halo is 3px of the state's own wash: at this size the
+   ring is doing more work than the fill, because it is what the eye catches
+   without looking directly at the row. */
+
+.ui-dot {
+  display: inline-block;
+  width: var(--icon-dot);
+  height: var(--icon-dot);
+  flex: 0 0 auto;
+  border-radius: var(--radius-pill);
+}
+
+.ui-dot--live { background: var(--live-mark); box-shadow: 0 0 0 3px var(--live-wash); }
+.ui-dot--hold { background: var(--hold-mark); box-shadow: 0 0 0 3px var(--hold-wash); }
+.ui-dot--fault { background: var(--fault-mark); box-shadow: 0 0 0 3px var(--fault-wash); }
+.ui-dot--idle { background: var(--idle-mark); box-shadow: 0 0 0 3px var(--idle-wash); }
+.ui-dot--busy { background: var(--iris); box-shadow: 0 0 0 3px var(--iris-wash); }
+
+/* Two states are not shades of the tone they belong to — they are the absence of a
+   reading, and they have to look like it. A hollow ring claims nothing; a grey
+   fill claims "idle", which is a state the thing may well not be in. */
+.ui-dot--unknown,
+.ui-dot--unverified {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--edge-strong);
+}
+
+/* Off is a state, and a quiet one: the pool still contains this key and the
+   operator needs to see that it is there and not counting. */
+.ui-dot--disabled {
+  box-shadow: none;
+  opacity: 0.55;
+}
+
+/* ── Tag ─────────────────────────────────────────────────────────────────────
+   A short word or a figure in a hairline box. The tint stays weak on purpose: the
+   text carries the state colour, and a solid fill at 11px fights every row it sits
+   in. */
+
+.ui-tag {
+  display: inline-flex;
+  width: fit-content;
+  min-height: var(--control-h-xs);
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-1) var(--space-4);
+  color: var(--text-muted);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-fitting);
+  font-size: var(--text-micro);
+  line-height: var(--leading-tight);
+  white-space: nowrap;
+}
+
+/* A figure, not a word: the data face and tabular numerals, so a column of status
+   codes lines up and 200 becoming 429 does not shift the row. The floor is
+   measured in characters of that same face — three digits and the padding — so a
+   two-digit code and a three-digit one are the same width. */
+.ui-tag--figure {
+  min-width: 6ch;
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-tag--neutral { color: var(--text-muted); }
+.ui-tag--live { color: var(--live); background: color-mix(in srgb, var(--live-mark) 8%, transparent); }
+.ui-tag--hold { color: var(--hold); background: color-mix(in srgb, var(--hold-mark) 9%, transparent); }
+.ui-tag--fault { color: var(--fault); background: color-mix(in srgb, var(--fault-mark) 8%, transparent); }
+.ui-tag--idle { color: var(--idle); background: color-mix(in srgb, var(--idle-mark) 8%, transparent); }
+.ui-tag--busy,
+.ui-tag--accent { color: var(--iris); background: color-mix(in srgb, var(--iris) 10%, transparent); }
+
+/* ── Stat ────────────────────────────────────────────────────────────────────
+   A figure and the word for what it counts. */
+
+.ui-stat {
+  min-width: 0;
+  padding: var(--space-5);
+}
+
+/* The state hue sits in a bar along the bottom rather than tinting the cell:
+   eight of these stand side by side, and eight tinted cells are a stripe of
+   colour with no figure legible in it. */
+.ui-stat--live { box-shadow: inset 0 -2px var(--live-mark); }
+.ui-stat--hold { box-shadow: inset 0 -2px var(--hold-mark); }
+.ui-stat--fault { box-shadow: inset 0 -2px var(--fault-mark); }
+.ui-stat--idle { box-shadow: inset 0 -2px var(--idle-mark); }
+.ui-stat--busy { box-shadow: inset 0 -2px var(--iris); }
+
+/* Nothing in a stat may be clipped. This is often the only place a figure appears
+   — no title attribute, no row to expand — so an ellipsis would put the number
+   somewhere the operator cannot get to. It wraps, and the grid equalises around
+   whichever cell needed the second line. */
+.ui-stat__value {
+  display: block;
+  margin-top: var(--space-2);
+  font-family: var(--font-data);
+  font-size: var(--text-base);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.ui-stat__note {
+  display: block;
+  margin-top: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  line-height: var(--leading-snug);
+}
+
+/* ── Notice ──────────────────────────────────────────────────────────────────
+   A message about the thing on screen, in the place it is about. */
+
+.ui-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-6);
+  padding: var(--space-5);
+  color: var(--text-strong);
+  background: var(--iris-wash);
+  /* The hue is on this bar and in the wash, never in the text: the words have to
+     carry the meaning on their own for anyone who cannot separate the warning
+     wash from the success one. */
+  border-left: 3px solid var(--iris);
+  font-size: var(--text-mini);
+  line-height: var(--leading-snug);
+}
+
+.ui-notice__text {
+  min-width: 0;
+  flex: 1 1 260px;
+}
+
+.ui-notice__title {
+  display: block;
+  margin-bottom: var(--space-2);
+  font-size: var(--text-mini);
+}
+
+.ui-notice__action {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex: 0 0 auto;
+}
+
+.ui-notice--success { background: var(--live-wash); border-left-color: var(--live-mark); }
+.ui-notice--warning { background: var(--hold-wash); border-left-color: var(--hold-mark); }
+.ui-notice--danger { background: var(--fault-wash); border-left-color: var(--fault-mark); }
+
+/* ── Empty ───────────────────────────────────────────────────────────────────
+   What stands where the rows would have been. It takes the raised surface for the
+   same reason the panels do: it is standing in for a panel, so it has to read as
+   one resting on the canvas rather than as a gap in the page. */
+
+.ui-empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  padding: var(--space-9);
+  text-align: center;
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+  box-shadow: var(--lift-panel);
+}
+
+.ui-empty--page { min-height: 280px; }
+
+/* Inside a column or an inspector, where the page-sized floor would push the panel
+   taller than the list it is replacing. */
+.ui-empty--pane { min-height: 160px; padding: var(--space-7); }
+
+.ui-empty__title {
+  margin: 0;
+  font-size: var(--text-md);
+}
+
+.ui-empty__description {
+  max-width: 460px;
+  margin: var(--space-4) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-mini);
+  line-height: var(--leading-normal);
+}
+
+.ui-empty__action {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-7);
+}
+
+/* One block per breakpoint, which is the rule the rest of the console's
+   stylesheets follow. Nothing here is a touch target — a tag is a readout and a
+   header is a header — so nothing is raised to the 44px floor; what changes is the
+   padding, which is the only thing a 375px screen actually needs back. */
+@media (max-width: 650px) {
+  .ui-section-header { padding: var(--space-5); }
+  .ui-empty--page { min-height: 220px; padding: var(--space-7); }
+}

@@ -43,6 +43,7 @@ import {
 } from "./components";
 import { CommandPalette } from "./CommandPalette";
 import { useConfirm, useConfirmOpen, type ConfirmRequest } from "./ConfirmDialog";
+import { KitchenSink } from "./dev/KitchenSink";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { isMac, useFilterHotkey, useListKeys, useShellHotkeys } from "./keyboard";
 import { closeActiveDrawerIfAny, useDrawerOpen, useScrollLock } from "./overlays";
@@ -312,7 +313,10 @@ function App() {
   const syncRoute = useCallback(() => {
     setRoute((current) => {
       const next = readRoute();
-      return next.page === current.page && next.notFound === current.notFound && next.canonicalPath === current.canonicalPath
+      return next.page === current.page
+        && next.notFound === current.notFound
+        && next.canonicalPath === current.canonicalPath
+        && next.kitchenSink === current.kitchenSink
         ? current
         : next;
     });
@@ -339,10 +343,12 @@ function App() {
           ? "Set up Rotakey"
           : phase === "login"
             ? "Sign in · Rotakey"
-            : route.notFound
-              ? "Page not found · Rotakey"
-              : documentTitle(route.page, titleDetail);
-  }, [phase, route.page, route.notFound, titleDetail]);
+            : route.kitchenSink
+              ? "Primitive kit · Rotakey"
+              : route.notFound
+                ? "Page not found · Rotakey"
+                : documentTitle(route.page, titleDetail);
+  }, [phase, route.page, route.notFound, route.kitchenSink, titleDetail]);
 
   /** Go to a path the operator picked. Everything that moves the console between
    *  pages ends up here: the rail, the in-page links, and the search palette,
@@ -430,6 +436,20 @@ function App() {
   // the moment the operator signed back in — announcing the one thing that was
   // no longer true. The login card states the reason itself; the dock carries
   // whatever else was already on screen when the session dropped.
+  // The kitchen sink comes before the sign-in branches, not after them. It draws
+  // no data and calls no endpoint, so requiring a session — and therefore a
+  // running gateway with a database behind it — to look at a page of static
+  // specimens would put it out of reach in exactly the situation it exists for:
+  // someone changing a shared rule and wanting to see what else moved. It carries
+  // the theme switch for the same reason, since the rail is not here to hold one.
+  if (import.meta.env.DEV && route.kitchenSink) {
+    return (
+      <ErrorBoundary scope="page">
+        <KitchenSink theme={theme} setTheme={setTheme} />
+      </ErrorBoundary>
+    );
+  }
+
   if (phase === "loading") {
     return <>{toastDock}<LoadingScreen /></>;
   }

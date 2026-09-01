@@ -89,24 +89,36 @@ export type Route = {
   /** Where the address bar should be corrected to, or null when it is already
    *  right. Set for /admin, for the two old slugs, and for a trailing segment. */
   canonicalPath: string | null;
+  /** The development-only page that draws every primitive. It is not a `Page`
+   *  because it is not a destination: nothing links to it, the rail does not list
+   *  it and the search palette does not index it. In a production build the path
+   *  is a typo like any other. */
+  kitchenSink: boolean;
 };
+
+/** The one path outside the seven. Kept next to `readRoute` so the string is
+ *  written once and the guard below cannot drift from the address it answers. */
+export const kitchenSinkPath = "/admin/__ui";
 
 export function readRoute(): Route {
   const segments = location.pathname.replace(/^\/admin\/?/, "").split("/").filter(Boolean);
   const first = segments[0] ?? "";
+  if (import.meta.env.DEV && first === "__ui") {
+    return { page: "overview", notFound: false, canonicalPath: null, kitchenSink: true };
+  }
   if (first === "") {
-    return { page: "overview", notFound: false, canonicalPath: `/admin/overview${location.search}` };
+    return { page: "overview", notFound: false, canonicalPath: `/admin/overview${location.search}`, kitchenSink: false };
   }
   if (isPage(first)) {
     // A page owns one path segment. Anything deeper was never a route, so it is
     // trimmed rather than treated as a section that does not exist.
-    return { page: first, notFound: false, canonicalPath: segments.length > 1 ? `/admin/${first}${location.search}` : null };
+    return { page: first, notFound: false, canonicalPath: segments.length > 1 ? `/admin/${first}${location.search}` : null, kitchenSink: false };
   }
   const legacy = legacyPaths[first];
   if (legacy) {
-    return { page: legacy, notFound: false, canonicalPath: `/admin/${legacy}${location.search}` };
+    return { page: legacy, notFound: false, canonicalPath: `/admin/${legacy}${location.search}`, kitchenSink: false };
   }
-  return { page: "overview", notFound: true, canonicalPath: null };
+  return { page: "overview", notFound: true, canonicalPath: null, kitchenSink: false };
 }
 
 export function pathFor(page: Page, query?: Record<string, string>) {
