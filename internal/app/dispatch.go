@@ -207,6 +207,16 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 	// there is nothing to delete, and stripItemFields says so by removing nothing.
 	plan.Removed = appendUniqueStrings(plan.Removed, stripItemFields(payload, s.learnedItemFieldStrips(ctx, route.Model.ID))...)
 	plan.Removed = appendUniqueStrings(plan.Removed, stripItemFields(payload, state.RemovedItemFields)...)
+	// The conversation's labels are spoken in the wire's own vocabulary, last,
+	// on the exact body about to be encoded — whichever arm above built it. A
+	// passthrough body carries whatever the caller's history holds, and the
+	// translations are not immune either: the chat tool turn crosses into a
+	// tool_result block with its content copied whole (anthropic_translate.go),
+	// caller's labels included. Both were rejected in production by the same
+	// conversation, replayed against a different protocol's model after a
+	// mid-chat switch — which is the thing this gateway exists to allow. See
+	// relabel_content.go.
+	relabeled := relabelConversation(payload, conversationShape(format, plan.Path))
 	learned := s.learnedCompatibilityReplacements(ctx, route.Model.ID, plan.wireEndpoint())
 	if learned == nil {
 		// A Redis outage returns no learned repairs at all, and writing this
@@ -217,6 +227,9 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 		learned[from] = to
 	}
 	plan.Replaced = applyCompatibilityReplacements(payload, learned)
+	for from, to := range relabeled {
+		plan.Replaced[from] = to
+	}
 
 	if format == "anthropic" {
 		if numberAsInt64(payload["max_tokens"]) <= 0 {
