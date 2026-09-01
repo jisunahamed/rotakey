@@ -3801,7 +3801,6 @@ function PlaygroundPage({
   navigate: (page: Page, query?: Record<string, string>) => void;
   notify: (message: string, tone?: "success" | "danger") => void;
 }) {
-  const ask = useConfirm();
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -3812,11 +3811,7 @@ function PlaygroundPage({
   const [activePanel, setActivePanel] = useState<PlaygroundPanel>("models");
   const compact = useMediaQuery("(max-width: 1050px)");
   const [probeResults, setProbeResults] = useState<Record<string, ModelProbeResult>>({});
-  const [checkingAll, setCheckingAll] = useState(false);
   const [checkingID, setCheckingID] = useState("");
-  const [bulkBusy, setBulkBusy] = useState(false);
-  const [probeProgress, setProbeProgress] = useState({ completed: 0, total: 0 });
-  const stopSweep = useRef(false);
   const mounted = useRef(true);
   const [prompt, setPrompt] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
@@ -3834,7 +3829,6 @@ function PlaygroundPage({
     mounted.current = true;
     return () => {
       mounted.current = false;
-      stopSweep.current = true;
       requestController.current?.abort();
       if (requestPhaseTimer.current !== null) window.clearTimeout(requestPhaseTimer.current);
     };
@@ -3891,7 +3885,6 @@ function PlaygroundPage({
       (!statusFilter || modelState(model) === statusFilter) &&
       (!needle || `${model.public_alias} ${model.upstream_model} ${model.provider.name}`.toLowerCase().includes(needle));
   });
-  const failedModels = models.filter((model) => modelState(model) === "failed");
 
   const checkModel = async (model: PlaygroundModel, quiet = false) => {
     setCheckingID(model.id);
@@ -3911,65 +3904,10 @@ function PlaygroundPage({
     }
   };
 
-  const checkAll = async () => {
-    if (checkingAll || models.length === 0) return;
-    stopSweep.current = false;
-    setCheckingAll(true);
-    setProbeProgress({ completed: 0, total: models.length });
-    let cursor = 0;
-    let completed = 0;
-    const worker = async () => {
-      while (!stopSweep.current && cursor < models.length) {
-        const model = models[cursor++];
-        await checkModel(model, true);
-        completed++;
-        if (mounted.current) setProbeProgress({ completed, total: models.length });
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(3, models.length) }, worker));
-    if (!mounted.current) return;
-    setCheckingAll(false);
-    notify(stopSweep.current ? `Model sweep stopped after ${completed} checks.` : `${completed} model routes checked.`);
-    await load(true);
-  };
-
-  const bulkDisableFailed = async () => {
-    if (bulkBusy || failedModels.length === 0) return;
-    if (!(await ask({ title: `Disable ${failedModels.length} failed route${failedModels.length === 1 ? "" : "s"}?`, body: "The routes remain configured but stop receiving traffic until they are enabled again.", confirmLabel: `Disable ${failedModels.length}`, detail: failedModels.map((model) => model.public_alias).join("\n") }))) return;
-    setBulkBusy(true);
-    let changed = 0;
-    let failed = 0;
-    for (const model of failedModels) {
-      try {
-        await api(`/api/admin/models/${model.id}`, { method: "PUT", json: { ...modelToDraft(model), enabled: false } });
-        changed++;
-      } catch {
-        failed++;
-      }
-    }
-    setBulkBusy(false);
-    notify(`${changed} failed route${changed === 1 ? "" : "s"} disabled${failed ? ` · ${failed} could not be changed` : ""}.`, failed ? "danger" : "success");
-    await load(true);
-  };
-
-  const bulkDeleteFailed = async () => {
-    if (bulkBusy || failedModels.length === 0) return;
-    if (!(await ask({ title: `Delete ${failedModels.length} failed route${failedModels.length === 1 ? "" : "s"}?`, body: "These public aliases stop immediately and cannot be restored.", confirmLabel: `Delete ${failedModels.length}`, detail: failedModels.map((model) => model.public_alias).join("\n") }))) return;
-    setBulkBusy(true);
-    let changed = 0;
-    let failed = 0;
-    for (const model of failedModels) {
-      try {
-        await api(`/api/admin/models/${model.id}`, { method: "DELETE" });
-        changed++;
-      } catch {
-        failed++;
-      }
-    }
-    setBulkBusy(false);
-    notify(`${changed} failed route${changed === 1 ? "" : "s"} deleted${failed ? ` · ${failed} could not be deleted` : ""}.`, failed ? "danger" : "success");
-    await load(true);
-  };
+  // The sweep and the two bulk actions that stood here were a second, divergent copy
+  // of the ones on Models: the same button labels ran different code, and the two
+  // "failed" sets did not hold the same routes, so "Delete failed" deleted a
+  // different list depending on which page it was pressed from. Models owns them.
 
   const runPrompt = async (requestOverride?: PlaygroundRequestDraft) => {
     if (!selected || running) return;
@@ -4041,14 +3979,12 @@ function PlaygroundPage({
       </div>
       <div className="playground-workbench">
         <section className={`playground-models${activePanel === "models" ? " is-active" : ""}`}>
-          <header className="playground-pane-title"><div><span>Routes</span><strong>{filtered.length} of {models.length}</strong></div><Button variant="quiet" disabled={checkingAll} onClick={() => void checkAll()}><Activity size={13} aria-hidden="true" /> Check all</Button></header>
+          <header className="playground-pane-title"><div><span>Routes</span><strong>{filtered.length} of {models.length}</strong></div><Button variant="quiet" onClick={() => navigate("models")}><Activity size={13} aria-hidden="true" /> Check all on Models</Button></header>
           <div className="playground-filters">
             <label><Search size={14} aria-hidden="true" /><span className="sr-only">Search model routes</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Alias, model or provider" /></label>
             <select aria-label="Filter by provider" value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)}><option value="">All providers</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select>
             <select aria-label="Filter by status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">All statuses</option><option value="live">Live</option><option value="failed">Failed</option><option value="waiting">Waiting</option><option value="disabled">Disabled</option><option value="unverified">Unverified</option></select>
           </div>
-          {checkingAll && <div className="playground-progress"><span style={{ width: `${probeProgress.total ? probeProgress.completed / probeProgress.total * 100 : 0}%` }} /><small>{probeProgress.completed}/{probeProgress.total}</small><button onClick={() => { stopSweep.current = true; }}>Stop</button></div>}
-          {failedModels.length > 0 && <div className="playground-bulk-actions"><span>{failedModels.length} failed</span><button disabled={bulkBusy || checkingAll} onClick={() => void bulkDisableFailed()}><Power size={12} aria-hidden="true" /> Disable</button><button disabled={bulkBusy || checkingAll} onClick={() => void bulkDeleteFailed()}><Trash2 size={12} aria-hidden="true" /> Delete</button></div>}
           <div className="playground-model-list">
             {filtered.map((model) => {
               const state = modelState(model);
@@ -4057,7 +3993,7 @@ function PlaygroundPage({
                   <span className={`playground-model-dot is-${state}`} role="img" aria-label={state === "live" ? "Live" : state === "failed" ? "Failed" : state === "checking" ? "Checking" : state === "waiting" ? "Waiting for a key" : state === "disabled" ? "Disabled" : "Unverified"} />
                   <span><code title={model.public_alias}>{model.public_alias}</code><small>{model.provider.name} · {state} · {readyKeys(model)}/{model.credentials.length} keys</small></span>
                 </button>
-                <button className="console-icon" disabled={checkingAll || checkingID === model.id} onClick={() => void checkModel(model)} aria-label={`Check ${model.public_alias}`} title="Check model"><RefreshCw size={13} aria-hidden="true" /></button>
+                <button className="console-icon" disabled={checkingID === model.id} onClick={() => void checkModel(model)} aria-label={`Check ${model.public_alias}`} title="Check model"><RefreshCw size={13} aria-hidden="true" /></button>
               </div>;
             })}
             {filtered.length === 0 && <p className="inline-empty">No model routes match these filters.</p>}
@@ -4139,22 +4075,13 @@ function PlaygroundSettings({
       setDeleting(false);
     }
   };
-  const toggleEnabled = async () => {
-    const enabled = !draft.enabled;
-    setSaving(true);
-    try {
-      await api(`/api/admin/models/${model.id}`, { method: "PUT", json: { ...draft, enabled } });
-      setDraft((current) => ({ ...current, enabled }));
-      notify(`${model.public_alias} ${enabled ? "enabled" : "disabled"}.`);
-      await onUpdated();
-    } catch (caught) {
-      notify(errorMessage(caught), "danger");
-    } finally {
-      setSaving(false);
-    }
-  };
+  // The power icon that used to sit in this header is gone. It took a live route off
+  // the air with no question asked, and it committed by PUTting `{ ...draft }` — so
+  // one click also published whatever half-finished edit was sitting in the form
+  // below it. That form already carries "Enable public route", which does the same
+  // job against a Save button the operator can see.
   return <>
-    <header className="playground-pane-title"><div><span>Route settings</span><strong>{model.provider.name}</strong><small>{model.upstream_model}</small></div><div className="button-row"><button className="console-icon" disabled={saving || deleting} onClick={() => void toggleEnabled()} aria-label={`${draft.enabled ? "Disable" : "Enable"} ${model.public_alias}`} title={draft.enabled ? "Disable route" : "Enable route"}><Power size={14} aria-hidden="true" /></button><button className="console-icon" onClick={() => navigate("logs", { q: model.public_alias })} aria-label="Open request logs" title="Open request logs"><FileClock size={14} aria-hidden="true" /></button></div></header>
+    <header className="playground-pane-title"><div><span>Route settings</span><strong>{model.provider.name}</strong><small>{model.upstream_model}</small></div><div className="button-row"><button className="console-icon" onClick={() => navigate("logs", { q: model.public_alias })} aria-label="Open request logs" title="Open request logs"><FileClock size={14} aria-hidden="true" /></button></div></header>
     <form className="playground-settings-form" onSubmit={(event) => { event.preventDefault(); void save(); }}>
       <ModelFields value={draft} onChange={setDraft} />
       <div className="playground-settings-actions"><Button variant="danger" type="button" disabled={saving || deleting} onClick={() => void remove()}><Trash2 size={13} aria-hidden="true" /> {deleting ? "Deleting…" : "Delete"}</Button><Button type="submit" disabled={saving || deleting}>{saving ? "Saving…" : "Save settings"}</Button></div>
@@ -5182,7 +5109,7 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
   // same bounds the inputs advertise.
   const settingsBounds: Array<[keyof Settings, string, number, number]> = [
     ["max_wait_ms", "Capacity wait ceiling", 0, 30_000],
-    ["default_provider_timeout_seconds", "Global provider timeout", 1, 900],
+    ["default_provider_timeout_seconds", "Default request timeout", 1, 900],
     ["metadata_retention_days", "Metadata retention", 1, 3650],
     ["body_retention_days", "Captured body retention", 1, 365]
   ];
@@ -5190,7 +5117,12 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
     const value = settings[key];
     return typeof value !== "number" || !Number.isFinite(value) || value < min || value > max;
   });
-  const saveSettings = () => {
+  const timeout = settings.default_provider_timeout_seconds;
+  const wouldRetime = providers.filter((provider) => provider.timeout_seconds !== timeout);
+  // One writer for the settings form. `applyTimeoutToAll` is the only thing that
+  // reaches providers, and it is false unless the operator pressed the button that
+  // says so: saving this page used to overwrite every per-provider timeout.
+  const commitSettings = (applyTimeoutToAll: boolean) => {
     if (outOfBounds) {
       const [, label, min, max] = outOfBounds;
       notify(`${label} must be between ${formatNumber(min)} and ${formatNumber(max)}.`, "danger");
@@ -5207,14 +5139,28 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
         });
         if (!confirmed) return;
       }
+      if (applyTimeoutToAll) {
+        const confirmed = await ask({
+          title: `Set every provider to ${timeout} seconds?`,
+          body: `${wouldRetime.length} provider${wouldRetime.length === 1 ? "" : "s"} currently use a different timeout. Their own value is replaced and cannot be recovered.`,
+          confirmLabel: "Replace every timeout",
+          detail: wouldRetime.map((provider) => `${provider.name} · ${provider.timeout_seconds}s → ${timeout}s`).join("\n")
+        });
+        if (!confirmed) return;
+      }
       setBusy(true);
       try {
-        const result = await api<SettingsUpdateResult>("/api/admin/settings", { method: "PUT", json: settings });
+        const result = await api<SettingsUpdateResult>("/api/admin/settings", {
+          method: "PUT",
+          json: { ...settings, apply_timeout_to_all_providers: applyTimeoutToAll }
+        });
         publishRoutingMode(result.routing_mode);
         setLoadedMode(result.routing_mode);
+        setProviders((current) => applyTimeoutToAll ? current.map((provider) => ({ ...provider, timeout_seconds: timeout })) : current);
         // A mode switch renames aliases in the same transaction, so the save
         // confirmation reports what changed and what could not.
         const parts = ["Settings saved."];
+        if (result.providers_retimed > 0) parts.push(`${result.providers_retimed} provider${result.providers_retimed === 1 ? "" : "s"} set to ${timeout} seconds.`);
         if (result.aliases_rewritten > 0) parts.push(`${result.aliases_rewritten} model alias${result.aliases_rewritten === 1 ? "" : "es"} renamed for ${result.routing_mode === "model" ? "model" : "provider"}-wise routing.`);
         if (result.alias_conflicts.length > 0) parts.push(`Kept unchanged to avoid a collision: ${result.alias_conflicts.join(", ")}.`);
         notify(parts.join(" "), result.alias_conflicts.length > 0 ? "danger" : "success");
@@ -5224,6 +5170,20 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
         setBusy(false);
       }
     })();
+  };
+  const saveSettings = () => commitSettings(false);
+  // The loader deliberately refuses to type over a form the operator may be part-way
+  // through, so an import has to hand the restored values in rather than ask for a
+  // reload. The rail's routing-mode badge is republished from the same reply.
+  const adoptImportedSettings = () => {
+    void Promise.all([api<Settings>("/api/admin/settings"), api<{ providers: Provider[] }>("/api/admin/providers")])
+      .then(([nextSettings, result]) => {
+        setSettings(nextSettings);
+        setLoadedMode(nextSettings.routing_mode);
+        publishRoutingMode(nextSettings.routing_mode);
+        setProviders(normalizeProviders(result.providers));
+      })
+      .catch(() => notify("The bundle was imported, but this page could not reload. Refresh before saving, or Save will write the old settings back over it.", "danger"));
   };
   return (
     <>
@@ -5235,7 +5195,16 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
           return <option key={provider.id} value={provider.id} disabled={noResourceAPIs}>{provider.name}{noResourceAPIs ? " — no Files or Batches" : ""}</option>;
         })}</select></div></label>
         <label className="settings-row"><span><strong>Capacity wait ceiling</strong><small>Requests wait only when capacity can return within this deadline.</small></span><div><input type="number" min={0} max={30000} step={100} value={settings.max_wait_ms} onChange={(e) => setSettings({ ...settings, max_wait_ms: Number(e.target.value) })} /><code>ms</code></div></label>
-        <label className="settings-row"><span><strong>Global provider timeout</strong><small>Applies this request timeout to every provider and becomes the default for new providers.</small></span><div><input type="number" min={1} max={900} value={settings.default_provider_timeout_seconds} onChange={(e) => setSettings({ ...settings, default_provider_timeout_seconds: Number(e.target.value) })} /><code>seconds</code></div></label>
+        {/* This row holds a button as well as its field, so it is a div with an
+            explicit label: a wrapping label would swallow the button's clicks. */}
+        <div className="settings-row settings-row--wide">
+          <span><strong><label htmlFor="default-provider-timeout">Default request timeout</label></strong><small>How long the gateway waits for a provider to answer. A new provider starts with this value. Providers you already added keep their own timeout unless you replace it here.</small></span>
+          <div>
+            <input id="default-provider-timeout" type="number" min={1} max={900} value={settings.default_provider_timeout_seconds} onChange={(e) => setSettings({ ...settings, default_provider_timeout_seconds: Number(e.target.value) })} />
+            <code>seconds</code>
+            <Button variant="quiet" disabled={busy || wouldRetime.length === 0} onClick={() => commitSettings(true)}>{wouldRetime.length === 0 ? "All providers match" : `Replace on ${wouldRetime.length} provider${wouldRetime.length === 1 ? "" : "s"}`}</Button>
+          </div>
+        </div>
         <label className="settings-row"><span><strong>Metadata retention</strong><small>Request IDs, routing attempts, status, latency and usage.</small></span><div><input type="number" min={1} max={3650} value={settings.metadata_retention_days} onChange={(e) => setSettings({ ...settings, metadata_retention_days: Number(e.target.value) })} /><code>days</code></div></label>
         <label className="settings-row"><span><strong>Captured body retention</strong><small>Only applies to model routes where encrypted body capture is enabled.</small></span><div><input type="number" min={1} max={365} value={settings.body_retention_days} onChange={(e) => setSettings({ ...settings, body_retention_days: Number(e.target.value) })} /><code>days</code></div></label>
       </section>
@@ -5243,7 +5212,7 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
         <span>{modeChanged ? "Saving a new routing mode renames existing model aliases." : "Changes apply to new requests without restarting the gateway."}</span>
         <Button disabled={busy} onClick={saveSettings}>{busy ? "Saving…" : "Save settings"}</Button>
       </div>
-      <ConfigTransfer notify={notify} />
+      <ConfigTransfer notify={notify} onImported={adoptImportedSettings} />
       <section className="security-baseline">
         <ShieldCheck size={19} aria-hidden="true" />
         <div><strong>Protections that are always on</strong><p>Provider API keys are stored encrypted, admin sessions use HttpOnly cookies with CSRF checks, and the gateway refuses to call private network addresses.</p></div>
@@ -5252,16 +5221,27 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
   );
 }
 
-// ConfigTransfer writes the whole provider, model, key and limit setup to one
-// file and replays it. Keys are included by default so an import is a complete
-// setup rather than a shell that still needs every secret pasted back in.
-function ConfigTransfer({ notify }: { notify: (message: string, tone?: "success" | "danger") => void }) {
+// ConfigTransfer writes the whole provider, model, key and limit setup to one file
+// and replays it. Keys are left out unless they are asked for: the bundle stores
+// them in plain text with nothing protecting the file, and the default action of a
+// button should not be the one that writes every provider secret to disk.
+function ConfigTransfer({ notify, onImported }: { notify: (message: string, tone?: "success" | "danger") => void; onImported: () => void }) {
   const ask = useConfirm();
   const [busy, setBusy] = useState<"export" | "import" | null>(null);
-  const [includeSecrets, setIncludeSecrets] = useState(true);
+  const [includeSecrets, setIncludeSecrets] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
 
   const exportConfig = async () => {
+    // The warning used to be a toast fired after the file had already been written,
+    // which is not a warning — it is a notification that it is too late.
+    if (includeSecrets) {
+      const confirmed = await ask({
+        title: "Write every provider API key to a file?",
+        body: "The file holds your provider keys in plain text and nothing protects it. Save it somewhere private, keep it out of synced or shared folders, and delete it once the restore is done.",
+        confirmLabel: "Download with keys"
+      });
+      if (!confirmed) return;
+    }
     setBusy("export");
     try {
       // Export is a POST so the CSRF check applies; a bundle with plaintext keys
@@ -5276,7 +5256,7 @@ function ConfigTransfer({ notify }: { notify: (message: string, tone?: "success"
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(url);
-      notify(includeSecrets ? "Configuration exported with API keys. Store the file like a password." : "Configuration exported without API keys.");
+      notify(includeSecrets ? "Configuration exported with API keys in plain text. Store the file like a password." : "Configuration exported without API keys.");
     } catch (caught) {
       notify(errorMessage(caught), "danger");
     } finally {
@@ -5292,6 +5272,10 @@ function ConfigTransfer({ notify }: { notify: (message: string, tone?: "success"
       const imported = await api<ImportResult>("/api/admin/config/import", { method: "POST", json: bundle });
       setResult(imported);
       const created = imported.providers_created + imported.models_created + imported.credentials_created;
+      // The bundle also rewrites the six settings in the form above. Without this the
+      // form still held the values loaded before the import, and the Save button a
+      // few pixels below wrote them straight back over what was just restored.
+      onImported();
       notify(`Setup restored: ${imported.providers_created + imported.providers_updated} provider${imported.providers_created + imported.providers_updated === 1 ? "" : "s"}, ${imported.models_created + imported.models_updated} model route${imported.models_created + imported.models_updated === 1 ? "" : "s"}, ${imported.credentials_created + imported.credentials_updated} API key${imported.credentials_created + imported.credentials_updated === 1 ? "" : "s"}${created === 0 ? " (all already present)" : ""}.`, imported.warnings.length > 0 ? "danger" : "success");
     } catch (caught) {
       notify(caught instanceof SyntaxError ? "That file is not valid JSON." : errorMessage(caught), "danger");
@@ -5324,7 +5308,7 @@ function ConfigTransfer({ notify }: { notify: (message: string, tone?: "success"
     }
     const confirmed = await ask({
       title: `Import ${file.name}?`,
-      body: "The bundle is replayed in one transaction: matching providers, model routes and API keys are overwritten with the values in the file. Existing items not in the file are left alone.",
+      body: "The bundle is replayed in one transaction: matching providers, model routes and API keys are overwritten with the values in the file, and the settings on this page are replaced by the ones it carries. Existing items not in the file are left alone.",
       confirmLabel: "Import configuration",
       detail: summary
     });
@@ -5337,7 +5321,7 @@ function ConfigTransfer({ notify }: { notify: (message: string, tone?: "success"
       {/* These rows hold buttons rather than a single control, so they are plain
           divs: a wrapping label would steal clicks and nest interactive labels. */}
       <div className="settings-row">
-        <span><strong>Export configuration</strong><small>Writes every provider, model route, API key and rate limit to one JSON file, sorted A-to-Z. Import it on another install to reproduce this setup.</small></span>
+        <span><strong>Export configuration</strong><small>Writes every provider, model route and rate limit to one JSON file, sorted A-to-Z. Import it on another install to reproduce this setup. API keys are left out unless you ask for them, because the file stores them in plain text.</small></span>
         <div>
           <label className="config-transfer__secrets"><input type="checkbox" checked={includeSecrets} onChange={(event) => setIncludeSecrets(event.target.checked)} /><span>Include API keys</span></label>
           <Button variant="quiet" disabled={busy !== null} onClick={() => void exportConfig()}><Download size={14} aria-hidden="true" /> {busy === "export" ? "Exporting…" : "Export"}</Button>

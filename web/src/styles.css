@@ -1944,6 +1944,13 @@ fieldset legend {
   font-size: var(--text-micro);
 }
 
+/* A row whose control column carries a button as well as a field takes the width
+   it needs, rather than the 150px slot sized for a four-digit number. */
+.settings-row--wide > div {
+  width: auto;
+  flex-shrink: 0;
+}
+
 .page-actions {
   display: flex;
   justify-content: flex-end;
@@ -2563,13 +2570,21 @@ fieldset legend {
     min-height: 44px;
   }
 
-  /* These two are labels wrapping a 16px box, so they have no height of their own
-     to grow — the padding is what makes the row a target rather than the box. */
+  /* These are labels wrapping a 16px box, so they have no height of their own to
+     grow — the padding is what makes the row a target rather than the box. The
+     export checkbox decides whether the file carries plaintext API keys, so it is
+     the last control in the console that should be hard to hit accurately. */
   .primary-choice,
-  .confirmation-check {
+  .confirmation-check,
+  .config-transfer__secrets {
     min-height: 44px;
     align-items: center;
     padding: var(--space-3) 0;
+  }
+
+  /* Its box must not stretch with the number fields the rule above it sizes. */
+  .config-transfer__secrets input {
+    min-height: 0;
   }
 
   .page-header {

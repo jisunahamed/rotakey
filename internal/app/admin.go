@@ -436,6 +436,15 @@ func (s *Server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 	if decodeJSON(w, r, 128<<10, &input) != nil {
 		return
 	}
+	// "New providers start with this timeout" has to be true on the server, not only
+	// in the console form that seeds the field. A create that omits the value takes
+	// the current default; validateProviderInput's hardcoded 120 stays as the
+	// last-resort fallback for when the settings row cannot be read.
+	if input.TimeoutSeconds == 0 {
+		if settings, _, err := s.settings(r.Context()); err == nil {
+			input.TimeoutSeconds = settings.DefaultProviderTimeoutSecs
+		}
+	}
 	if err := validateProviderInput(&input); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_provider", err.Error())
 		return
@@ -1531,11 +1540,23 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, settings)
 }
 
+// The default provider timeout is the value a newly added provider starts with.
+// Writing it over the providers that already exist destroys per-provider timeouts
+// the operator set deliberately — a slow reasoning provider given 600s reverted to
+// the global value the next time any unrelated setting was saved. The overwrite is
+// still available, but it is now something the console asks for by name rather than
+// a side effect of pressing Save.
+type settingsUpdateInput struct {
+	AppSettings
+	ApplyTimeoutToAllProviders bool `json:"apply_timeout_to_all_providers"`
+}
+
 func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
-	var input AppSettings
-	if decodeJSON(w, r, 32<<10, &input) != nil {
+	var body settingsUpdateInput
+	if decodeJSON(w, r, 32<<10, &body) != nil {
 		return
 	}
+	input := body.AppSettings
 	if input.MetadataRetentionDays < 1 || input.MetadataRetentionDays > 3650 ||
 		input.BodyRetentionDays < 1 || input.BodyRetentionDays > 365 ||
 		input.MaxWaitMS < 0 || input.MaxWaitMS > 30000 ||
@@ -1584,9 +1605,18 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "settings_update_failed", "Settings could not be updated.")
 		return
 	}
-	if _, err := tx.Exec(r.Context(), `UPDATE providers SET timeout_seconds=$1, updated_at=NOW()`, input.DefaultProviderTimeoutSecs); err != nil {
-		writeError(w, http.StatusInternalServerError, "settings_update_failed", "Provider timeouts could not be updated.")
-		return
+	providersRetimed := int64(0)
+	if body.ApplyTimeoutToAllProviders {
+		// WHERE timeout_seconds <> $1 so the reply can report how many providers
+		// actually changed rather than the whole table every time.
+		tag, err := tx.Exec(r.Context(),
+			`UPDATE providers SET timeout_seconds=$1, updated_at=NOW() WHERE timeout_seconds <> $1`,
+			input.DefaultProviderTimeoutSecs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "settings_update_failed", "Provider timeouts could not be updated.")
+			return
+		}
+		providersRetimed = tag.RowsAffected()
 	}
 	rewrites := []aliasRewrite{}
 	conflicts := []string{}
@@ -1617,11 +1647,13 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		"routing_mode":                     routingMode,
 		"aliases_rewritten":                len(rewrites),
 		"alias_conflicts":                  conflicts,
+		"providers_retimed":                providersRetimed,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"routing_mode":      routingMode,
 		"aliases_rewritten": len(rewrites),
 		"alias_conflicts":   conflicts,
+		"providers_retimed": providersRetimed,
 	})
 }
 

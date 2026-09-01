@@ -328,6 +328,9 @@ export type SettingsUpdateResult = {
   routing_mode: RoutingMode;
   aliases_rewritten: number;
   alias_conflicts: string[];
+  /** How many providers had their own timeout replaced by the default. Zero unless
+   * the save carried `apply_timeout_to_all_providers`. */
+  providers_retimed: number;
 };
 
 /** Returned by POST /api/admin/config/import, which reports what the bundle
