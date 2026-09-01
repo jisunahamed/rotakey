@@ -6,9 +6,14 @@
  * same page for a few commits without either one winning by accident. A rule in
  * `console.css` cannot reach a primitive, and a primitive cannot reach a page.
  *
- * There are no element selectors, no descendant selectors deeper than one level,
- * and no `!important`. A primitive that needs a page to know about its insides is
- * not finished.
+ * There are no descendant selectors deeper than one level and no `!important`. A
+ * primitive that needs a page to know about its insides is not finished.
+ *
+ * One exception, and it is the form fields: `.ui-field` and `.ui-field-row` style
+ * the control they wrap, because styling that control is the whole of what they
+ * are for and requiring a class on every `<input>` in the console guarantees the
+ * one that gets forgotten. Those selectors are wrapped in `:where()`, so they
+ * carry no specificity and any rule at all can overrule them.
  *
  * Every value resolves to a token. If a number appears literally below, it is
  * because it is geometry belonging to one drawing — the halo around an 8px dot,
@@ -332,11 +337,919 @@
   margin-top: var(--space-7);
 }
 
+/* ── DataTable ───────────────────────────────────────────────────────────────
+   The track list is declared once, on the table, and read by the header and every
+   row. Sixteen lists each redeclared it on the row, which is how a column caption
+   ends up over the wrong column. */
+
+.ui-table {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.ui-table__head,
+.ui-row {
+  display: grid;
+  grid-template-columns: var(--ui-table-columns);
+  align-items: center;
+  gap: var(--space-5);
+}
+
+/* The chevron's track is added by the table rather than counted into the caller's
+   track list, so that a column of them cannot go missing from one row: 14px is the
+   glyph, and it belongs to this drawing only. */
+.ui-table--linked .ui-table__head,
+.ui-table--linked .ui-row {
+  grid-template-columns: var(--ui-table-columns) 14px;
+}
+
+/* A row that opens nothing has no chevron and no track for one. Hidden here
+   rather than left out of the row, because whether there is somewhere to go is
+   the table's answer and not each row's. */
+.ui-table:not(.ui-table--linked) .ui-row__chevron {
+  display: none;
+}
+
+/* The header sticks to the top of the rows rather than sitting above them. That
+   is the only way it can be exactly as wide as they are — the rows reserve a
+   scrollbar gutter, and a header outside that container is wider than every row
+   under it by precisely that gutter — and it is what a forty-row list wants
+   anyway: captions that scroll away take the meaning of every column with them. */
+.ui-table__head {
+  position: sticky;
+  z-index: var(--layer-pane-sticky);
+  top: 0;
+  min-height: var(--row-h-sm);
+  padding: var(--space-2) var(--space-5);
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--edge);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
+/* Rows carrying an overflow menu are inset by the strip it sits in, so the header
+   is inset by the same amount. Without this every caption sits a menu's width to
+   the left of the column beneath it. */
+.ui-table--actions .ui-table__head {
+  padding-right: calc(var(--space-5) + var(--icon-box) + var(--space-4));
+}
+
+.ui-table__rows {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.ui-row {
+  width: 100%;
+  min-height: var(--row-h-lg);
+  padding: var(--space-3) var(--space-5);
+  color: var(--text-strong);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--edge);
+  cursor: pointer;
+  text-align: left;
+  text-decoration: none;
+  transition: background var(--dur-state) var(--ease);
+}
+
+/* Hover and selected share one wash on purpose — the row the pointer is over and
+   the row that is open are the same colour — so the bar down the left edge is the
+   only thing that separates them, and moving the mouse across a list never looks
+   like it is changing what is open. */
+.ui-row:hover,
+.ui-row.is-selected {
+  background: var(--select-wash);
+  box-shadow: var(--select-bar);
+}
+
+.ui-row[disabled] {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.ui-row__chevron {
+  color: var(--text-muted);
+}
+
+/* A row that carries its own overflow menu. The menu cannot go inside the row —
+   the row is a button, and a button inside a button is not a thing a browser can
+   render — so the two sit side by side and the hairline moves to the pair.
+   The row's own wash comes off inside a shell rather than being painted twice:
+   it is translucent, and doubling it would make the row a different colour from
+   the strip beside it. */
+.ui-row-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border-bottom: 1px solid var(--edge);
+  transition: background var(--dur-state) var(--ease);
+}
+
+.ui-row-shell > .ui-row {
+  border-bottom: 0;
+}
+
+.ui-row-shell:has(> .ui-row:hover),
+.ui-row-shell:has(> .ui-row.is-selected) {
+  background: var(--select-wash);
+  box-shadow: var(--select-bar);
+}
+
+.ui-row-shell > .ui-row:hover,
+.ui-row-shell > .ui-row.is-selected {
+  background: transparent;
+  box-shadow: none;
+}
+
+.ui-row__actions {
+  display: flex;
+  width: calc(var(--icon-box) + var(--space-4));
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── Cell ────────────────────────────────────────────────────────────────────
+   Everything truncates. The panes clip rather than scroll sideways, so a cell that
+   refuses to shorten is not wider — it is cut off with nothing to scroll to. */
+
+.ui-cell {
+  display: grid;
+  min-width: 0;
+  align-content: center;
+  font-size: var(--text-sm);
+}
+
+.ui-cell__line,
+.ui-cell__sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-cell__sub {
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The dot takes a column of its own so that both lines start at the same place,
+   rather than the second one hanging under the dot. */
+.ui-cell--icon {
+  grid-template-columns: var(--icon-dot) minmax(0, 1fr);
+  align-items: center;
+  gap: 0 var(--space-4);
+}
+
+.ui-cell--icon > .ui-cell__line,
+.ui-cell--icon > .ui-cell__sub {
+  grid-column: 2;
+}
+
+.ui-cell--end {
+  justify-items: end;
+  text-align: right;
+}
+
+.ui-cell--figure {
+  color: var(--text-muted);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Field ───────────────────────────────────────────────────────────────────
+   A labelled control. The label wraps the control, so nothing here needs an id. */
+
+.ui-field {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.ui-field__label {
+  color: var(--text-strong);
+  font-size: var(--text-mini);
+  font-weight: 500;
+}
+
+/* Inline, because it is part of the label rather than a line under it: a unit or
+   a range read together with the name of the thing they qualify. */
+.ui-field__hint {
+  margin-left: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  font-weight: 400;
+}
+
+.ui-field__error {
+  color: var(--fault);
+  font-size: var(--text-micro);
+  line-height: var(--leading-snug);
+}
+
+.ui-field :where(input, select, textarea),
+.ui-field-row :where(input, select) {
+  width: 100%;
+  min-height: var(--control-h-md);
+  padding: var(--space-4);
+  color: var(--text-strong);
+  background: var(--surface-raised);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--radius-fitting);
+  font-size: var(--text-sm);
+}
+
+/* A number field is a readout as much as a control — every one of them is typed
+   over a value the server put there — and a proportional 1 makes the caret jump
+   as the digits change width underneath it. */
+.ui-field :where(input[type="number"]),
+.ui-field-row :where(input[type="number"]) {
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-field :where(textarea) {
+  min-height: 100px;
+  font-family: var(--font-data);
+  line-height: var(--leading-normal);
+  resize: vertical;
+}
+
+.ui-field :where(::placeholder) {
+  color: color-mix(in srgb, var(--text-muted) 70%, transparent);
+}
+
+.ui-field :where([aria-invalid="true"]) {
+  border-color: var(--fault-mark);
+}
+
+.ui-field-stack {
+  display: grid;
+  gap: var(--space-6);
+}
+
+.ui-field-pair {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.ui-field-pair--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.ui-field-pair--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.ui-field--span { grid-column: 1 / -1; }
+
+/* ── FieldRow ────────────────────────────────────────────────────────────────
+   A setting: what it does on the left, the control on the right. */
+
+.ui-field-row {
+  display: flex;
+  min-height: var(--row-h-xl);
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-9);
+  padding: var(--space-6);
+  border-bottom: 1px solid var(--edge);
+}
+
+.ui-field-row:last-child {
+  border-bottom: 0;
+}
+
+.ui-field-row__text {
+  min-width: 0;
+}
+
+.ui-field-row__text > strong {
+  display: block;
+  font-size: var(--text-sm);
+}
+
+.ui-field-row__text > small {
+  display: block;
+  max-width: 540px;
+  margin-top: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  line-height: var(--leading-snug);
+}
+
+/* 280px, not the 150px slot this was designed around: that slot was sized for a
+   four-digit number and it truncated "Model-wise (pooled)" at every desktop
+   width, so the setting an operator was reading about could not be read. */
+.ui-field-row__control {
+  display: flex;
+  width: 280px;
+  align-items: center;
+  gap: var(--space-4);
+  flex: 0 0 auto;
+}
+
+.ui-field-row--wide .ui-field-row__control {
+  width: auto;
+}
+
+/* ── Toolbar ─────────────────────────────────────────────────────────────────
+   Find something, then narrow what is left. */
+
+.ui-toolbar {
+  display: flex;
+  min-height: var(--control-h-xl);
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--edge);
+}
+
+/* The magnifier is inside the control, not a sibling in a grid track that a
+   narrow screen collapses — which is what left three of these as an unlabelled
+   text box with nothing to say what typing in it would do. */
+.ui-search {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 180px;
+  grid-template-columns: var(--icon-check) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  background: var(--surface-sunken);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-fitting);
+}
+
+.ui-search__icon {
+  color: var(--text-muted);
+  justify-self: center;
+}
+
+.ui-search__input {
+  width: 100%;
+  min-height: var(--control-h-md);
+  color: var(--text-strong);
+  background: transparent;
+  border: 0;
+  font-size: var(--text-mini);
+}
+
+/* The browser's own clear button is a second, undocumented control inside a box
+   the console already gives a way to empty, and it appears in one engine only. */
+.ui-search__input::-webkit-search-cancel-button {
+  display: none;
+}
+
+/* ── Tabs and Segmented ──────────────────────────────────────────────────────
+   Two controls that look alike: one switches panels, one picks a value. */
+
+.ui-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--edge);
+}
+
+.ui-tabs__tab {
+  display: inline-flex;
+  min-height: var(--control-h-lg);
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-5);
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  /* The mark is under the open tab and nowhere else. Every other tab keeps the
+     same 2px reserved, so opening one does not move the row by two pixels. */
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-size: var(--text-mini);
+  transition: color var(--dur-state) var(--ease), border-color var(--dur-state) var(--ease);
+}
+
+.ui-tabs__tab:hover {
+  color: var(--text-strong);
+}
+
+.ui-tabs__tab.is-active {
+  color: var(--text-strong);
+  border-bottom-color: var(--iris);
+}
+
+.ui-tabs__badge,
+.ui-segmented__badge {
+  color: var(--text-muted);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-tabpanel {
+  min-width: 0;
+}
+
+.ui-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--surface-sunken);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-fitting);
+}
+
+.ui-segmented__choice {
+  display: inline-flex;
+  min-height: var(--control-h-xs);
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-fitting);
+  cursor: pointer;
+  font-size: var(--text-micro);
+  transition: color var(--dur-state) var(--ease), background var(--dur-state) var(--ease),
+    border-color var(--dur-state) var(--ease);
+}
+
+.ui-segmented__choice:hover {
+  color: var(--text-strong);
+}
+
+/* The chosen one is raised out of the well the others sit in, which is the only
+   difference an operator needs and the only one that survives being looked at
+   sideways on a laptop screen. */
+.ui-segmented__choice.is-active {
+  color: var(--iris);
+  background: var(--surface-raised);
+  border-color: var(--edge);
+}
+
+.ui-segmented--figures .ui-segmented__choice {
+  min-width: 36px;
+  justify-content: center;
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Disclosure ──────────────────────────────────────────────────────────────
+   A section that folds. The title is a heading with the button inside it, so the
+   section stays findable by heading and still opens on Enter. */
+
+.ui-disclosure {
+  border-top: 1px solid var(--edge);
+}
+
+.ui-disclosure__head {
+  display: grid;
+  min-height: var(--row-h-xl);
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-4) var(--space-5);
+}
+
+.ui-disclosure__heading {
+  min-width: 0;
+  margin: 0;
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+.ui-disclosure__toggle {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  min-height: var(--control-h-md);
+  grid-template-columns: var(--icon-mark) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 0;
+  color: var(--text-strong);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+/* Pointing right when closed and down when open, which is the one thing about a
+   fold that needs no words at all. */
+.ui-disclosure__chevron {
+  color: var(--text-muted);
+  transform: rotate(-90deg);
+  transition: transform var(--dur-state) var(--ease);
+}
+
+.ui-disclosure.is-open .ui-disclosure__chevron {
+  transform: rotate(0);
+}
+
+.ui-disclosure__text {
+  min-width: 0;
+}
+
+.ui-disclosure__text > strong {
+  display: block;
+  overflow: hidden;
+  font-size: var(--text-base);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-disclosure__text > small {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+}
+
+/* Stays readable while the section is folded, which is the point of folding it. */
+.ui-disclosure__meta {
+  color: var(--text-muted);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ui-disclosure__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.ui-disclosure__body {
+  padding: 0 var(--space-5) var(--space-5);
+}
+
+/* ── Menu ────────────────────────────────────────────────────────────────────
+   A short list of things that can be done, behind one control. */
+
+/* Only the trigger lives here; the panel is drawn at the top of the document. So
+   there is deliberately no `position: relative` — nothing is positioned against
+   this box, and saying otherwise would invite the next person to put the panel
+   back inside the pane that clips it. */
+.ui-menu {
+  display: inline-flex;
+}
+
+.ui-menu__trigger {
+  display: inline-grid;
+  width: var(--icon-box);
+  height: var(--icon-box);
+  place-items: center;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-fitting);
+  cursor: pointer;
+  transition: color var(--dur-state) var(--ease), background var(--dur-state) var(--ease),
+    border-color var(--dur-state) var(--ease);
+}
+
+/* A trigger with words in it — the account menu, a filter that names its own
+   value. The default is the three-dot square a row uses, and a square is the
+   wrong shape for "Signed in as owner". */
+.ui-menu__trigger--wide {
+  width: auto;
+  height: var(--control-h-sm);
+  grid-auto-flow: column;
+  gap: var(--space-4);
+  padding: 0 var(--space-5);
+  font-size: var(--text-mini);
+}
+
+.ui-menu__trigger:hover,
+.ui-menu__trigger.is-open {
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+  border-color: var(--edge);
+}
+
+/* A real shadow, because this is the one kind of thing that is genuinely in front
+   of the page rather than part of it.
+
+   Drawn at the top of the document and placed from the trigger's rectangle, which
+   the component does in script: every useful place for a menu is inside something
+   that clips its own contents — a list that scrolls, an inspector that scrolls —
+   and a panel positioned against its trigger is cut off by the pane it belongs to.
+   So there are no offsets here beyond the corner it is measured in. It is `fixed`
+   at the corner of the window rather than `absolute` somewhere down the page
+   because moving focus into it is the next thing that happens, and focusing an
+   element the browser has to scroll to would take the whole page with it. */
+.ui-menu__panel {
+  position: fixed;
+  z-index: var(--layer-menu);
+  top: 0;
+  left: 0;
+  width: max-content;
+  min-width: 200px;
+  max-width: 280px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--lift-float);
+}
+
+.ui-menu__section {
+  padding: var(--space-3);
+}
+
+.ui-menu__section + .ui-menu__section {
+  border-top: 1px solid var(--edge);
+}
+
+.ui-menu__caption {
+  margin: var(--space-2) var(--space-4) var(--space-3);
+  color: var(--text-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
+.ui-menu__item {
+  display: flex;
+  width: 100%;
+  min-height: var(--control-h-md);
+  align-items: center;
+  gap: var(--space-4);
+  padding: 0 var(--space-4);
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-fitting);
+  cursor: pointer;
+  font-size: var(--text-mini);
+  text-align: left;
+  text-decoration: none;
+  transition: color var(--dur-state) var(--ease), background var(--dur-state) var(--ease);
+}
+
+.ui-menu__item:hover {
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+}
+
+.ui-menu__item[disabled] {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* The one hue in a menu. A list where three items are coloured says nothing about
+   any of them. */
+.ui-menu__item--danger:hover {
+  color: var(--fault);
+}
+
+/* ── Workbench ───────────────────────────────────────────────────────────────
+   A list on the left, whatever is open on the right. */
+
+/* The page's height, so the two columns can scroll independently — which is the
+   whole reason to put a panel beside a list instead of under it. */
+.ui-workbench-frame {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.ui-workbench {
+  display: grid;
+  min-height: 650px;
+  grid-template-columns: var(--ui-workbench-columns);
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--lift-panel);
+}
+
+/* Both columns take a zero minimum. Neither this frame nor the page scrolls
+   sideways, so a column with a content-based floor does not widen the layout — it
+   pushes the other column past the edge, where there is nothing to scroll to. */
+.ui-workbench__list,
+.ui-workbench__inspector {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.ui-workbench__list {
+  border-right: 1px solid var(--edge);
+}
+
+/* The list's table fills the column and scrolls inside itself, which is the whole
+   point of putting a panel beside a list. Stated here rather than on `.ui-table`,
+   because a table sitting in a panel should be exactly as tall as its rows. */
+.ui-workbench__list > .ui-table {
+  flex: 1;
+}
+
+/* ── Inspector ───────────────────────────────────────────────────────────────
+   What is open, and what can be done to it. No eyebrow: every one of these
+   carried an accent-coloured line naming the category of the heading directly
+   under it, and the accent means "you can act here". */
+
+.ui-inspector {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.ui-inspector__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-5);
+  padding: var(--space-6) var(--space-6) var(--space-5);
+  border-bottom: 1px solid var(--edge);
+}
+
+.ui-inspector__text {
+  min-width: 0;
+}
+
+.ui-inspector__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 500;
+}
+
+.ui-inspector__subtitle {
+  overflow: hidden;
+  margin: var(--space-3) 0 0;
+  color: var(--text-muted);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-inspector__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-top: var(--space-4);
+}
+
+.ui-inspector__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 0 0 auto;
+}
+
+.ui-inspector__body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+/* Only drawn at the widths where the panel is covering something. Above those it
+   is a column of the page and there is nothing to close it back to.
+
+   It is the way out of a panel that is covering the list the operator came from,
+   so it is the one control on this header that has to be easy to hit — which is
+   why it is drawn at all. Left with no rules it was a 32×22 browser default. */
+.ui-inspector__close {
+  display: none;
+  width: var(--icon-box);
+  height: var(--icon-box);
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-fitting);
+  cursor: pointer;
+  transition: color var(--dur-state) var(--ease), background var(--dur-state) var(--ease),
+    border-color var(--dur-state) var(--ease);
+}
+
+.ui-inspector__close:hover {
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+  border-color: var(--edge);
+}
+
+/* Below 1050px the inspector is still a column but a narrower one: a fraction of
+   the remaining width leaves it too thin to hold a labelled figure, so it takes a
+   fixed 300px and the list gives up what it must. */
+@media (max-width: 1050px) {
+  .ui-workbench { grid-template-columns: minmax(0, 1fr) 300px; }
+}
+
+/* Below 900px the inspector stops being a column and becomes a drawer over the
+   list. `useDrawerOverlay` owns the focus trap, Escape, the scrim and the page's
+   frozen scroll; these rules only put the panel where it can be seen. */
+@media (max-width: 900px) {
+  .ui-workbench {
+    /* Stacked into one column the workbench is as tall as its content, so the
+       floor comes off: a two-row list on a phone sat above several hundred pixels
+       of empty panel. */
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ui-workbench__list { border-right: 0; }
+
+  .ui-workbench__inspector {
+    display: none;
+    position: fixed;
+    /* Starts below the sticky header for the same reason the navigation drawer
+       does: the way back stays reachable while the drawer is open. */
+    inset: var(--mobile-header-height) 0 0 auto;
+    z-index: var(--layer-inspector);
+    width: min(430px, 100vw);
+    background: var(--surface-raised);
+    border-left: 1px solid var(--edge);
+    box-shadow: var(--lift-float);
+  }
+
+  .ui-workbench__inspector.is-open { display: flex; }
+  .ui-inspector__close { display: inline-grid; }
+
+  .ui-disclosure__head { grid-template-columns: minmax(0, 1fr); }
+  .ui-disclosure__actions { padding-left: var(--space-8); }
+}
+
 /* One block per breakpoint, which is the rule the rest of the console's
-   stylesheets follow. Nothing here is a touch target — a tag is a readout and a
-   header is a header — so nothing is raised to the 44px floor; what changes is the
-   padding, which is the only thing a 375px screen actually needs back. */
+   stylesheets follow.
+
+   Nothing at these widths is clicked with a mouse, so everything that is pressed
+   grows to the 44px a fingertip needs, exactly as the shell's own controls do.
+   A tag is a readout and a section header is a header, so neither is touched; a
+   row, a menu item and a tab already clear it on their own. What is left is the
+   four here, and three of them were 28–30px — small enough that hitting the wrong
+   segment of a filter is easier than hitting the right one. */
 @media (max-width: 650px) {
   .ui-section-header { padding: var(--space-5); }
   .ui-empty--page { min-height: 220px; padding: var(--space-7); }
+
+  .ui-inspector__close,
+  .ui-menu__trigger {
+    width: var(--control-h-lg);
+    height: var(--control-h-lg);
+  }
+
+  .ui-menu__trigger--wide {
+    width: auto;
+    height: var(--control-h-lg);
+  }
+
+  .ui-segmented__choice { min-height: var(--control-h-lg); }
+  .ui-disclosure__toggle { min-height: var(--control-h-lg); }
+
+  /* The strip beside a row holds the trigger above, so it grows with it. */
+  .ui-row__actions { width: calc(var(--control-h-lg) + var(--space-4)); }
+
+  /* The column captions go. There is no room for four of them and the row below
+     has restacked, so they would be labelling columns that are no longer there. */
+  .ui-table__head { display: none; }
+
+  /* Two lines instead of four columns: what it is on the left, its figure on the
+     right, and the quiet second cell under the name where it belongs. */
+  .ui-table--linked .ui-row,
+  .ui-row {
+    grid-template-columns: minmax(0, 1fr) auto 14px;
+    grid-template-rows: auto auto;
+    row-gap: var(--space-2);
+  }
+
+  .ui-row > .ui-cell:first-child { grid-column: 1; grid-row: 1; }
+  .ui-row > .ui-cell:nth-child(2) { grid-column: 1; grid-row: 2; padding-left: var(--space-6); }
+  /* Pinned to the right-hand column and left to fall down it, so a list with
+     three figures on the row stacks them rather than drawing them on top of each
+     other — which is what a fixed row would do. */
+  .ui-row > .ui-cell:nth-child(n + 3) { grid-column: 2; }
+  .ui-row__chevron { grid-column: 3; grid-row: 1 / -1; align-self: center; }
+
+  .ui-field-pair--2,
+  .ui-field-pair--3 { grid-template-columns: minmax(0, 1fr); }
+
+  /* The control drops under the sentence that explains it rather than squeezing
+     both into a phone's width. */
+  .ui-field-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--space-5);
+    padding: var(--space-5);
+  }
+
+  .ui-field-row__control { width: 100%; }
+  .ui-workbench__inspector { width: 100vw; }
+  .ui-menu__panel { max-width: min(280px, calc(100vw - var(--space-9))); }
 }

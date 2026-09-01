@@ -157,6 +157,16 @@
   --row-h-lg: 58px;
   --row-h-xl: 70px;
 
+  /* How much of a narrow window the header takes once the rail folds away. It is
+     a fact about the shell and it used to be declared on the shell, but the panels
+     that have to start underneath it — the navigation drawer, and now every
+     inspector that becomes a drawer — are primitives, and a primitive that reads a
+     variable its own stylesheet does not declare is not a primitive. Off the shell
+     the `var()` resolved to nothing, `inset` was thrown away whole, and a fixed
+     drawer sat wherever its static position happened to be: at the kitchen sink's
+     widths, nine thousand pixels down the page. */
+  --mobile-header-height: 56px;
+
   /* Square things. A dot is a state; a check is something the operator toggles; a
      mark is a numeral or a glyph inside a hairline square; a box holds an icon
      that stands for a provider, a page or an account. */
@@ -222,6 +232,13 @@
      sheet only as a backstop: Ctrl+K stands down while a form panel is open, so
      the palette cannot navigate out from under half-filled work. */
   --layer-palette: 66;
+  /* Above everything that can open a menu, because everything can: a row inside a
+     scrolling list, the rail's foot, a form inside a sheet. The panel is drawn at
+     the top of the document rather than inside its trigger — a scrolling pane and
+     an inspector both clip their own contents, so a menu that stayed where it was
+     declared would be cut off by the list it belongs to — and once it is up there,
+     the only thing that may cover it is the confirmation it raises. */
+  --layer-menu: 68;
   --layer-dialog: 70;
   --layer-toast: 80;
   --layer-skip: 90;

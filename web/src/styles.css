@@ -174,18 +174,20 @@ h3 {
    the workspace's left inset have to agree, and they are the only two things
    that care. Declaring it here keeps that pair in one place.
 
-   The same goes for the heights below. --mobile-header-height is what the sticky
-   header occupies once the rail folds away, and the drawer, the inspector drawers
-   and the chrome total all have to agree with it or they overlap by a few pixels.
-   --shell-chrome is what a full-height workbench page has to fit underneath: the
-   main pane's own top and bottom padding. It is derived from the same two
-   variables .main-pane reads rather than restating their values, because it had
-   already drifted once — it named the console's overridden top padding while the
-   rule beside it declared the base shell's, so the two disagreed by 16px and only
+   --mobile-header-height, which used to sit here beside it, has moved to
+   tokens.css. It is the same kind of constant, but the panels that have to start
+   underneath the header are primitives now, and one of them read it off the shell
+   and got nothing.
+
+   --shell-chrome stays: it is what a full-height workbench page has to fit
+   underneath — the main pane's own top and bottom padding — and nothing outside
+   the shell has any use for it. It is derived from the same two variables
+   .main-pane reads rather than restating their values, because it had already
+   drifted once — it named the console's overridden top padding while the rule
+   beside it declared the base shell's, so the two disagreed by 16px and only
    looked right because the console override happened to win. */
 .app-shell {
   --rail-width: 232px;
-  --mobile-header-height: 56px;
   --pane-pad-top: var(--space-11);
   --pane-pad-bottom: var(--space-12);
   --shell-chrome: calc(var(--pane-pad-top) + var(--pane-pad-bottom));
