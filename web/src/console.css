@@ -29,11 +29,13 @@
 
 .wordmark__mark,
 .nav-item,
+.rail-search,
 .account__menu,
 .button,
 .icon-button,
 .login-panel,
 .auth-panel,
+.palette,
 .sheet,
 .toast {
   border-radius: var(--radius-fitting);

@@ -242,6 +242,56 @@ h3 {
   font-size: var(--text-micro);
 }
 
+/* Drawn as the field it opens, not as a button, because that is what it becomes
+   the moment it is pressed. It sits above the seven destinations for the same
+   reason: it is the way to the things that are not destinations — a provider, a
+   key, one route out of forty. */
+.rail-search {
+  display: flex;
+  width: 100%;
+  min-height: 34px;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-7);
+  padding: 0 var(--space-4);
+  color: var(--rail-muted);
+  background: var(--rail-raised);
+  border: 1px solid var(--rail-edge);
+  border-radius: var(--radius-fitting);
+  cursor: text;
+  font-size: var(--text-sm);
+  text-align: left;
+  transition: color var(--dur-state) var(--ease), border-color var(--dur-state) var(--ease);
+}
+
+.rail-search:hover {
+  color: var(--rail-text);
+  border-color: var(--edge-strong);
+}
+
+.rail-search span {
+  flex: 1;
+}
+
+/* The chord is printed here because this button is where an operator finds out
+   there is one. Every <kbd> in the console is this shape. */
+.rail-search kbd,
+.palette kbd,
+.shortcut kbd {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-fitting);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.rail-search kbd {
+  color: var(--rail-muted);
+  border-color: var(--rail-edge);
+}
+
 .sidebar nav {
   display: grid;
   gap: var(--space-6);
@@ -1290,6 +1340,209 @@ a.account__version:hover {
 @keyframes confirm-in {
   from { transform: scale(0.98); opacity: 0; }
   to { transform: scale(1); opacity: 1; }
+}
+
+/* ---------------------------------------------------------------- the palette */
+
+/* Anchored near the top rather than centred: the list grows downward as the
+   operator types, and a panel that grows from the middle of the screen moves its
+   own first result away from the eye that is reading it. */
+.palette-layer {
+  position: fixed;
+  z-index: var(--layer-palette);
+  inset: 0;
+  display: grid;
+  justify-items: center;
+  padding: max(var(--space-6), 10vh) var(--space-6) var(--space-6);
+  align-content: start;
+}
+
+.palette-scrim {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  background: rgb(8 14 19 / 0.5);
+  border: 0;
+  cursor: default;
+  backdrop-filter: blur(2px);
+}
+
+.palette {
+  position: relative;
+  display: flex;
+  width: min(100%, 620px);
+  max-height: min(560px, 80vh);
+  flex-direction: column;
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+  box-shadow: var(--lift-float);
+  animation: confirm-in var(--dur-state) var(--ease);
+}
+
+.palette__field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: 0 var(--space-6);
+  border-bottom: 1px solid var(--edge);
+  color: var(--text-muted);
+}
+
+/* The whole strip is the field. A bordered box inside a bordered panel would draw
+   two frames around one thing, so the panel's own top edge is the frame and the
+   input carries no chrome of its own — including on focus, where the cursor is
+   already in it and nothing else on this layer can take it. */
+.palette__field input {
+  flex: 1;
+  min-height: 52px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--text-strong);
+  font-family: var(--font-body);
+  font-size: var(--text-md);
+}
+
+.palette__field input:focus {
+  outline: 0;
+}
+
+.palette__results {
+  overflow-y: auto;
+  padding: var(--space-4) 0;
+  scrollbar-width: thin;
+}
+
+.palette__section {
+  margin: 0;
+  padding: var(--space-5) var(--space-6) var(--space-3);
+  color: var(--text-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  font-weight: 500;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
+/* One row: picture, name, and what distinguishes it from the others with the same
+   name. The detail is allowed to shrink to nothing and the name is not — an
+   operator scanning for "gpt-4o" needs to see the alias whole, and the provider
+   behind it only when there is room. */
+.palette__hit {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-4) var(--space-6);
+  color: var(--text-strong);
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+
+.palette__hit svg {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.palette__label {
+  flex: none;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette__detail {
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-mini);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Hover and keyboard are the same highlight, because they mean the same thing:
+   this is what Enter opens. The pointer moving over a row makes it the active one,
+   so the two can never disagree. */
+.palette__hit.is-active {
+  background: var(--iris-wash);
+  box-shadow: inset 2px 0 var(--iris);
+}
+
+.palette__hit.is-active svg:last-child {
+  color: var(--iris);
+}
+
+.palette__empty {
+  margin: 0;
+  padding: var(--space-7) var(--space-6);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+/* Running text with keys set into it, not a row of flex items: a gap between
+   every child would put one around the separators too, and "to move ·" adrift
+   from what it separates reads as a typo. */
+.palette__hint {
+  margin: 0;
+  padding: var(--space-4) var(--space-6);
+  border-top: 1px solid var(--edge);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  line-height: 1.9;
+}
+
+.palette__hint kbd + kbd {
+  margin-left: var(--space-1);
+}
+
+/* -------------------------------------------------------- the shortcut listing */
+
+.shortcut-groups {
+  display: grid;
+  gap: var(--space-9);
+}
+
+.shortcut-group h3 {
+  margin: 0 0 var(--space-5);
+  color: var(--text-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  font-weight: 500;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
+.shortcut-group dl {
+  display: grid;
+  margin: 0;
+  gap: var(--space-1);
+}
+
+/* Keys left, meaning right. The keys column is fixed so every description starts
+   on the same line down the page — a list of shortcuts is read by running the eye
+   down the sentences, not the glyphs. */
+.shortcut {
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--space-5);
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--edge);
+}
+
+.shortcut dt {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.shortcut dd {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
 }
 
 .form-stack {
@@ -2641,9 +2894,11 @@ fieldset legend {
     margin-left: 0;
   }
 
-  /* Two things now: the menu button and the product name. The theme control that
-     used to sit on the right went into the account menu inside the drawer, which
-     is where every other rail-level setting already was. */
+  /* Three things: the menu button, the product name, and search. The theme control
+     that used to sit on the right went into the account menu inside the drawer,
+     which is where every other rail-level setting already was — search took its
+     place because the rail's own search button is off-canvas at this width and a
+     phone has no Ctrl+K. */
   .mobile-header {
     position: sticky;
     z-index: var(--layer-sticky);
@@ -2660,8 +2915,10 @@ fieldset legend {
   }
 
   /* The header shows the product name where the rail's wordmark was, so it keeps
-     the wordmark's label face rather than turning into a page title. */
+     the wordmark's label face rather than turning into a page title. It takes the
+     slack so the two icon buttons stay pinned to their own edges. */
   .mobile-header strong {
+    flex: 1;
     font-family: var(--font-label);
     font-size: var(--text-mini);
     letter-spacing: var(--track-label);
@@ -2745,7 +3002,9 @@ fieldset legend {
   .field select,
   .settings-row input,
   .settings-row select,
-  .nav-item {
+  .nav-item,
+  .rail-search,
+  .palette__hit {
     min-height: 44px;
   }
 
@@ -2816,6 +3075,57 @@ fieldset legend {
      it is on in its own heading, so they are the one thing here that can go. */
   .setup-rail {
     display: none;
+  }
+
+  /* Two columns of ellipsised text on a 375px screen leaves neither one readable.
+     The detail goes under the name and keeps its own line, so a route still says
+     which provider serves it. The panel takes the top of the screen outright: the
+     keyboard is about to cover the bottom half of it. */
+  .palette-layer {
+    padding: 0;
+  }
+
+  .palette {
+    width: 100%;
+    max-height: 100%;
+    border: 0;
+    border-bottom: 1px solid var(--edge);
+  }
+
+  .palette__hit {
+    display: grid;
+    grid-template-columns: 15px minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    align-items: center;
+    row-gap: var(--space-2);
+    padding: var(--space-4) var(--space-6);
+  }
+
+  .palette__hit > svg:first-child {
+    grid-row: 1 / -1;
+  }
+
+  .palette__label,
+  .palette__detail {
+    max-width: 100%;
+    grid-column: 2;
+    text-align: left;
+  }
+
+  /* The row is tapped, not Entered. */
+  .palette__hit > svg:last-child {
+    display: none;
+  }
+
+  /* The arrow keys it names are not on this keyboard, and the row it sits under is
+     already tappable. */
+  .palette__hint {
+    display: none;
+  }
+
+  .shortcut {
+    grid-template-columns: 1fr;
+    gap: var(--space-2);
   }
 
   .sheet {

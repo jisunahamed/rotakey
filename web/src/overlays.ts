@@ -22,6 +22,7 @@ let lockCount = 0;
 /** Whatever the document was set to before the first overlay took the scrollbar.
  *  Restored rather than cleared, because nothing guarantees it was empty. */
 let overflowBeforeLock = "";
+const lockSubscribers = new Set<(covered: boolean) => void>();
 
 /** Stops the page behind an overlay scrolling for as long as `active` holds.
  *  Every overlay calls this, and they nest. */
@@ -33,11 +34,35 @@ export function useScrollLock(active: boolean) {
       document.body.style.overflow = "hidden";
     }
     lockCount += 1;
+    lockSubscribers.forEach((notifySubscriber) => notifySubscriber(true));
     return () => {
       lockCount -= 1;
       if (lockCount === 0) document.body.style.overflow = overflowBeforeLock;
+      lockSubscribers.forEach((notifySubscriber) => notifySubscriber(lockCount > 0));
     };
   }, [active]);
+}
+
+/** Whether anything is covering the page right now.
+ *
+ *  This reads the same counter, because the set of things that take the scrollbar
+ *  and the set of things that are modal are the same set: the sheet, the dialog,
+ *  the palette, and the two drawers — each of which locks only at the widths where
+ *  it stops being part of the layout and starts covering it.
+ *
+ *  It exists for the keyboard shortcuts. `/` focuses a filter and `?` opens the
+ *  shortcut list, and neither should fire underneath an open panel, where the
+ *  operator's next keystroke belongs to whatever is in front of them. */
+export function useCoveredPage() {
+  const [covered, setCovered] = useState(lockCount > 0);
+  useEffect(() => {
+    lockSubscribers.add(setCovered);
+    setCovered(lockCount > 0);
+    return () => {
+      lockSubscribers.delete(setCovered);
+    };
+  }, []);
+  return covered;
 }
 
 /* ------------------------------------------------------------ inspector drawer */

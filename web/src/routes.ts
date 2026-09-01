@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { CircleGauge, Database, FileClock, FlaskConical, KeyRound, Route, Settings } from "lucide-react";
 
 /** Every destination the console serves. The slug in the address bar and the word
  *  in the rail are the same word — three of the seven used to disagree, so
@@ -25,16 +26,24 @@ export type PageMeta = {
    *  It states the object, not the mechanism. */
   summary: string;
   group: PageGroup;
+  /** The rail's picture, reused by the search palette so a result is recognised as
+   *  the row the operator already knows. Typed off a value because lucide-react
+   *  publishes no name for it. */
+  icon: typeof CircleGauge;
+  /** Words an operator might search for that are not in the label or the summary —
+   *  what they called this screen before, and what it holds. Only the palette
+   *  reads these. */
+  aliases: string;
 };
 
 export const pages: readonly PageMeta[] = [
-  { id: "overview", label: "Overview", summary: "What is ready now, and what it cost", group: "operate" },
-  { id: "requests", label: "Requests", summary: "Every request and why it went the way it did", group: "operate" },
-  { id: "providers", label: "Providers", summary: "Upstream accounts and their API keys", group: "configure" },
-  { id: "models", label: "Models", summary: "The model names your callers ask for", group: "configure" },
-  { id: "playground", label: "Playground", summary: "Send a prompt through the gateway", group: "use" },
-  { id: "connect", label: "Connect", summary: "Base URLs, SDK snippets and the gateway key", group: "use" },
-  { id: "settings", label: "Settings", summary: "Gateway-wide policy, backup and restore", group: "system" }
+  { id: "overview", label: "Overview", summary: "What is ready now, and what it cost", group: "operate", icon: CircleGauge, aliases: "dashboard home status health spend cost usage" },
+  { id: "requests", label: "Requests", summary: "Every request and why it went the way it did", group: "operate", icon: FileClock, aliases: "logs history traffic errors latency" },
+  { id: "providers", label: "Providers", summary: "Upstream accounts and their API keys", group: "configure", icon: Database, aliases: "upstream accounts credentials keys base url" },
+  { id: "models", label: "Models", summary: "The model names your callers ask for", group: "configure", icon: Route, aliases: "routes aliases limits capabilities" },
+  { id: "playground", label: "Playground", summary: "Send a prompt through the gateway", group: "use", icon: FlaskConical, aliases: "chat test prompt try" },
+  { id: "connect", label: "Connect", summary: "Base URLs, SDK snippets and the gateway key", group: "use", icon: KeyRound, aliases: "access gateway key sdk snippet curl python endpoint" },
+  { id: "settings", label: "Settings", summary: "Gateway-wide policy, backup and restore", group: "system", icon: Settings, aliases: "config options preferences export import backup" }
 ];
 
 /** The rail's bands, in the order they are shown. Seven flat rows gave an operator

@@ -10,12 +10,10 @@ import {
   ChevronRight,
   CircleGauge,
   Clipboard,
-  Database,
   Download,
   FileClock,
   FlaskConical,
   Github,
-  KeyRound,
   LogOut,
   Menu,
   Plus,
@@ -24,7 +22,6 @@ import {
   Route,
   Search,
   Send,
-  Settings as SettingsIcon,
   ShieldCheck,
   Trash2,
   Upload,
@@ -44,9 +41,12 @@ import {
   Toggle,
   useDrawerOverlay
 } from "./components";
+import { CommandPalette } from "./CommandPalette";
 import { useConfirm, useConfirmOpen, type ConfirmRequest } from "./ConfirmDialog";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { isMac, useFilterHotkey, useListKeys, useShellHotkeys } from "./keyboard";
 import { closeActiveDrawerIfAny, useDrawerOpen, useScrollLock } from "./overlays";
+import { ShortcutSheet } from "./ShortcutSheet";
 import {
   documentTitle,
   pageGroups,
@@ -80,19 +80,6 @@ import {
 } from "./types";
 
 type AuthPhase = "loading" | "setup" | "login" | "app";
-
-/** The rail is the page list from `routes.ts` with an icon on each row. The list
- *  itself lives there because the URL, the label and the tab title all read from
- *  it; only the picture is a shell decision. */
-const pageIcons: Record<Page, typeof Activity> = {
-  overview: CircleGauge,
-  requests: FileClock,
-  providers: Database,
-  models: Route,
-  playground: FlaskConical,
-  connect: KeyRound,
-  settings: SettingsIcon
-};
 
 // The routing mode decides whether a new public alias carries the provider slug,
 // so it is fetched once and shared by every form that proposes an alias. The
@@ -151,6 +138,10 @@ function App() {
   const [username, setUsername] = useState("");
   const [route, setRoute] = useState<ConsoleRoute>(readRoute);
   const [menuOpen, setMenuOpen] = useState(false);
+  // The search over everything the console holds, and the list of every key that
+  // opens it. Both are shell state because both are reachable from every page.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [theme, setTheme] = useState<ThemeChoice>(() => {
     const stored = localStorage.getItem("relay-theme");
     return stored === "light" || stored === "dark" ? stored : "system";
@@ -353,11 +344,30 @@ function App() {
               : documentTitle(route.page, titleDetail);
   }, [phase, route.page, route.notFound, titleDetail]);
 
-  const navigate = (next: Page, query?: Record<string, string>) => {
+  /** Go to a path the operator picked. Everything that moves the console between
+   *  pages ends up here: the rail, the in-page links, and the search palette,
+   *  which deals in finished URLs because every one of its results is one. */
+  const goTo = (path: string) => {
     if (menuOpen) navigated.current = true;
     setMenuOpen(false);
-    writeURL(pathFor(next, query), "push");
+    writeURL(path, "push");
   };
+
+  const navigate = (next: Page, query?: Record<string, string>) => goTo(pathFor(next, query));
+
+  // Ctrl+K toggles, so the same keystroke that opened the palette closes it. Both
+  // stand down while signed out: there is nothing to search, and asking the
+  // gateway for a provider list without a session would only sign the operator
+  // out of a session they do not have.
+  const togglePalette = useCallback(() => {
+    if (phase !== "app") return;
+    setPaletteOpen((open) => !open);
+  }, [phase]);
+  const openShortcuts = useCallback(() => {
+    if (phase !== "app") return;
+    setShortcutsOpen(true);
+  }, [phase]);
+  useShellHotkeys({ paletteOpen, onPalette: togglePalette, onShortcuts: openShortcuts });
 
   // Navigation entries are links, not buttons: an operator can middle-click a
   // section into a new tab, and the status bar shows where each one goes. The
@@ -485,6 +495,15 @@ function App() {
             <small>API key gateway</small>
           </span>
         </div>
+        {/* The palette's own keystroke is no use to anyone who has not been told
+            it exists, so it also has a place to click — at the top of the rail,
+            drawn as the field it opens. The chord is printed on it, which is how
+            an operator learns the chord. */}
+        <button className="rail-search" onClick={() => setPaletteOpen(true)}>
+          <Search size={15} aria-hidden="true" />
+          <span>Search</span>
+          <kbd>{isMac ? "⌘K" : "Ctrl K"}</kbd>
+        </button>
         {/* Seven rows in one flat stack made the operator read all seven to find
             one. The bands say why you would be here: watching it, setting it up,
             or using it. Settings belongs to none of those, so it sits alone under
@@ -502,8 +521,7 @@ function App() {
               ) : (
                 <hr className="nav-group__rule" />
               )}
-              {pagesIn(group).map(({ id, label, summary }) => {
-                const Icon = pageIcons[id];
+              {pagesIn(group).map(({ id, label, summary, icon: Icon }) => {
                 const active = !route.notFound && route.page === id;
                 return (
                   <a
@@ -534,6 +552,12 @@ function App() {
             <Menu size={19} aria-hidden="true" />
           </button>
           <strong>Rotakey</strong>
+          {/* The rail's search button is off-canvas at this width, and a phone has
+              no Ctrl+K. Without this the palette would be unreachable on the one
+              screen size where hunting through lists costs the most. */}
+          <button className="icon-button" onClick={() => setPaletteOpen(true)} aria-label="Search Rotakey">
+            <Search size={18} aria-hidden="true" />
+          </button>
         </header>
         {/* A second boundary, inside the shell. A page that threw used to take the
             navigation with it, so the only way to another page was a reload; now
@@ -564,6 +588,8 @@ function App() {
         </main>
       </div>
 
+      {paletteOpen && <CommandPalette onGo={goTo} onClose={() => setPaletteOpen(false)} />}
+      {shortcutsOpen && <ShortcutSheet onClose={() => setShortcutsOpen(false)} />}
       {gatewayKey && (
         <SecretReveal
           title="Save your gateway key"
@@ -1872,6 +1898,7 @@ function formatRelativeTime(value: string) {
 
 function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" | "danger") => void }) {
   const ask = useConfirm();
+  const listKeys = useListKeys();
   const [providers, setProviders] = useState<Provider[]>([]);
   // The open provider is held in the address bar, so a reload or a link pasted to
   // someone else comes back to the same one.
@@ -2008,12 +2035,13 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
         <div className="resource-layout">
           {/* The list is inert while the drawer covers it, for the same reason the
               nav drawer makes the page behind it inert. */}
-          <section className="resource-list" aria-label="Providers" inert={inspectorFloating && providerInspectorOpen && Boolean(selected)}>
+          <section className="resource-list" aria-label="Providers" inert={inspectorFloating && providerInspectorOpen && Boolean(selected)} onKeyDown={listKeys}>
             {providers.map((provider) => {
               const healthy = provider.credentials.filter((credential) => credentialPoolState(credential) === "healthy").length;
               return (
                 <button
                   key={provider.id}
+                  data-row
                   className={`resource-item ${selectedID === provider.id ? "is-selected" : ""}`}
                   aria-current={selectedID === provider.id}
                   onClick={() => { setSelectedID(provider.id); setProviderInspectorOpen(true); }}
@@ -4105,6 +4133,9 @@ function PlaygroundPage({
   navigate: (page: Page, query?: Record<string, string>) => void;
   notify: (message: string, tone?: "success" | "danger") => void;
 }) {
+  const listKeys = useListKeys();
+  const filterField = useRef<HTMLInputElement | null>(null);
+  useFilterHotkey(filterField);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -4284,15 +4315,15 @@ function PlaygroundPage({
         <section className={`playground-models${activePanel === "models" ? " is-active" : ""}`}>
           <header className="playground-pane-title"><div><span>Routes</span><strong>{filtered.length} of {models.length}</strong></div><Button variant="quiet" onClick={() => navigate("models")}><Activity size={13} aria-hidden="true" /> Check all on Models</Button></header>
           <div className="playground-filters">
-            <label><Search size={14} aria-hidden="true" /><span className="sr-only">Search model routes</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Alias, model or provider" /></label>
+            <label><Search size={14} aria-hidden="true" /><span className="sr-only">Search model routes</span><input ref={filterField} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Alias, model or provider" /></label>
             <select aria-label="Filter by provider" value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)}><option value="">All providers</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select>
             <select aria-label="Filter by status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">All statuses</option><option value="live">Live</option><option value="failed">Failed</option><option value="waiting">Waiting</option><option value="disabled">Disabled</option><option value="unverified">Unverified</option></select>
           </div>
-          <div className="playground-model-list">
+          <div className="playground-model-list" onKeyDown={listKeys}>
             {filtered.map((model) => {
               const state = modelState(model);
               return <div key={model.id} className={selectedID === model.id ? "is-selected" : ""}>
-                <button className="playground-model-select" onClick={() => { setSelectedID(model.id); if (compact) setActivePanel("run"); }} aria-current={selectedID === model.id}>
+                <button data-row className="playground-model-select" onClick={() => { setSelectedID(model.id); if (compact) setActivePanel("run"); }} aria-current={selectedID === model.id}>
                   <span className={`playground-model-dot is-${state}`} role="img" aria-label={state === "live" ? "Live" : state === "failed" ? "Failed" : state === "checking" ? "Checking" : state === "waiting" ? "Waiting for a key" : state === "disabled" ? "Disabled" : "Unverified"} />
                   <span><code title={model.public_alias}>{model.public_alias}</code><small>{model.provider.name} · {state} · {readyKeyCount(model)}/{model.credentials.length} keys</small></span>
                 </button>
@@ -4405,6 +4436,9 @@ function ModelsPage({
   notify: (message: string, tone?: "success" | "danger") => void;
 }) {
   const ask = useConfirm();
+  const listKeys = useListKeys();
+  const filterField = useRef<HTMLInputElement | null>(null);
+  useFilterHotkey(filterField);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -4616,7 +4650,7 @@ function ModelsPage({
           <section className="ide-resource-list" inert={inspectorFloating && modelInspectorOpen && Boolean(selected)}>
             <div className="ide-filter model-filter">
               <Search size={14} aria-hidden="true" />
-              <label><span className="sr-only">Filter model routes</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter aliases or upstream IDs" /></label>
+              <label><span className="sr-only">Filter model routes</span><input ref={filterField} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter aliases or upstream IDs" /></label>
               <label><span className="sr-only">Provider</span><select value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)}><option value="">All providers</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
             </div>
             <section className={`model-sweep${bulkChecking ? " is-running" : ""}`}>
@@ -4646,7 +4680,10 @@ function ModelsPage({
                 table row, so the labels cannot be associated as headers. Every
                 row states its own values in its accessible name instead. */}
             {filtered.length > 0 && <header aria-hidden="true"><span>Public alias</span><span>Provider</span><span>Keys</span></header>}
-            <div>
+            {/* The handler sits on the rows' own container rather than on the pane:
+                the filter box above is inside the same section, and Home and End
+                belong to it while the cursor is in it. */}
+            <div onKeyDown={listKeys}>
               {/* A filter that matches nothing used to leave a blank rectangle under a
                   row of column labels, which reads as a failed load rather than as an
                   answer. Both empties say which one it is and offer the way out. */}
@@ -4675,6 +4712,7 @@ function ModelsPage({
                 return (
                   <button
                     key={model.id}
+                    data-row
                     className={selectedID === model.id ? "is-selected" : ""}
                     onClick={() => { setSelectedID(model.id); setModelInspectorOpen(true); }}
                     aria-current={selectedID === model.id}
@@ -4871,6 +4909,9 @@ const statusPresets: ReadonlyArray<readonly [string, string]> = [
 ];
 
 function LogsPage() {
+  const listKeys = useListKeys();
+  const filterField = useRef<HTMLInputElement | null>(null);
+  useFilterHotkey(filterField);
   const [logs, setLogs] = useState<RequestLog[]>([]);
   // Both filters live in the address bar so a filtered view is a link. They
   // replace rather than push: a filter is refined by typing, and one history
@@ -5009,7 +5050,7 @@ function LogsPage() {
             <Search size={14} aria-hidden="true" />
             <label>
               <span className="sr-only">Search logs</span>
-              <input aria-label="Search logs" placeholder="Request ID or model alias" value={query} onChange={(e) => setQuery(e.target.value)} />
+              <input ref={filterField} aria-label="Search logs" placeholder="Request ID or model alias" value={query} onChange={(e) => setQuery(e.target.value)} />
             </label>
             {/* The picker used to be a dropdown listing twelve status codes, and a
                 provider can return any of them. A link to ?status=409 selected
@@ -5053,7 +5094,7 @@ function LogsPage() {
               table row, so the labels cannot be associated as real headers —
               instead every row states its own values in its accessible name. */}
           <header aria-hidden="true"><span>Request</span><span>Model / route</span><span>Status</span><span>Latency</span><span /></header>
-          <div className="log-resource-rows">
+          <div className="log-resource-rows" onKeyDown={listKeys}>
             {loading ? (
               <PageSkeleton />
             ) : logs.length === 0 ? (
@@ -5070,6 +5111,7 @@ function LogsPage() {
             ) : logs.map((log) => (
               <button
                 key={log.id}
+                data-row
                 className={`${selectedID === log.id ? "is-selected" : ""}${log.running ? " is-running" : ""}`}
                 aria-current={selectedID === log.id}
                 aria-label={`${log.model_alias} via ${log.provider_name}, ${log.running ? "still running" : `HTTP ${log.status_code}`}, ${log.latency_ms} ms, at ${formatClockTime(log.created_at)}`}

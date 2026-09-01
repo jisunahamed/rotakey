@@ -147,6 +147,11 @@
   --layer-scrim: 59;
   --layer-rail: 60;
   --layer-sheet: 65;
+  /* Above the rail because the search button that opens it lives inside the rail,
+     and on a phone the rail is still on screen when the palette arrives. Above the
+     sheet only as a backstop: Ctrl+K stands down while a form panel is open, so
+     the palette cannot navigate out from under half-filled work. */
+  --layer-palette: 66;
   --layer-dialog: 70;
   --layer-toast: 80;
   --layer-skip: 90;
