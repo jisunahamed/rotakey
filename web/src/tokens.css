@@ -124,8 +124,41 @@
   --ease: cubic-bezier(0.22, 0.68, 0.24, 1);
   --dur-state: 120ms;
   --dur-move: 260ms;
+
+  /* Stacking. Eleven ad-hoc z-indexes were spread across two stylesheets, and two
+     of them were wrong in a way nothing but a phone would show: the navigation
+     drawer sat at 20 and the inspector drawer at 35, so opening the menu slid the
+     rail underneath the panel it was meant to replace; and the toast dock tied the
+     confirmation layer at 70, so a failure that never expires could end up behind
+     a scrim whose only action is to answer "no".
+
+     The ladder is written as one list so the order is a decision rather than a
+     coincidence. Reading up: things that stick to a scrolling pane, then the shell
+     header, then an inspector covering its page, then the navigation — which
+     outranks an in-page drawer because it replaces the page — then the sheet, then
+     the dialog that a sheet raises, then messages, which outrank everything because
+     an error the operator cannot read is an error nobody fixes, and finally the
+     skip link, which has to clear the whole shell to be usable at all. */
+  --layer-pane-sticky: 4;
+  --layer-pane-bar: 8;
+  --layer-sticky: 10;
+  --layer-drawer-scrim: 34;
+  --layer-inspector: 35;
+  --layer-scrim: 59;
+  --layer-rail: 60;
+  --layer-sheet: 65;
+  --layer-dialog: 70;
+  --layer-toast: 80;
+  --layer-skip: 90;
 }
 
+/* One dark block, not two. `data-theme` on <html> is always a literal `light` or
+ * `dark`: the inline script in index.html resolves the operator's stored choice —
+ * including "match my system" — before the first stylesheet loads, and the console
+ * writes the same resolved value whenever the choice or the system preference
+ * changes. There used to be a second, byte-identical copy of everything below
+ * under `@media (prefers-color-scheme: dark) { :root[data-theme="system"] }`, kept
+ * in sync by hand; it had already drifted once. */
 :root[data-theme="dark"] {
   color-scheme: dark;
   --surface-canvas: #0d1015;
@@ -163,45 +196,6 @@
 
   --lift-panel: inset 0 1px 0 var(--edge-highlight), 0 1px 2px rgb(0 0 0 / 0.4);
   --lift-float: 0 24px 60px -16px rgb(0 0 0 / 0.66), 0 2px 8px rgb(0 0 0 / 0.4);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root[data-theme="system"] {
-    color-scheme: dark;
-    --surface-canvas: #0d1015;
-    --surface-raised: #151a21;
-    --surface-sunken: #11161c;
-    --surface-inset: #1c232c;
-
-    --text-strong: #e7ebf0;
-    --text-muted: #8e99a8;
-    --text-inverse: #10141a;
-
-    --edge: #252e39;
-    --edge-strong: #3a4553;
-    --edge-highlight: #232b35;
-
-    --iris: #8b7bff;
-    --iris-hover: #a094ff;
-    --iris-wash: #1e1b3d;
-    --iris-edge: #3d3673;
-
-    --live: #3ecf8e;
-    --live-wash: #102b21;
-    --hold: #e0a34a;
-    --hold-wash: #33260f;
-    --fault: #f0736b;
-    --fault-wash: #391f1e;
-    --idle: #7d8797;
-    --idle-wash: #1c222b;
-
-    --rail: #090c11;
-    --rail-raised: #151b24;
-    --rail-edge: #212934;
-
-    --lift-panel: inset 0 1px 0 var(--edge-highlight), 0 1px 2px rgb(0 0 0 / 0.4);
-    --lift-float: 0 24px 60px -16px rgb(0 0 0 / 0.66), 0 2px 8px rgb(0 0 0 / 0.4);
-  }
 }
 
 /* The console's older colour names — --canvas, --ink, --blue, --sidebar-*,

@@ -37,6 +37,21 @@ export const pages: readonly PageMeta[] = [
   { id: "settings", label: "Settings", summary: "Gateway-wide policy, backup and restore", group: "system" }
 ];
 
+/** The rail's bands, in the order they are shown. Seven flat rows gave an operator
+ *  no way to guess where a thing lived; three verbs do, because they are the three
+ *  reasons anyone opens this console. Settings carries no caption — it is one row,
+ *  and a caption over one row is decoration. It gets a hairline instead. */
+export const pageGroups: readonly { group: PageGroup; caption: string | null }[] = [
+  { group: "operate", caption: "Operate" },
+  { group: "configure", caption: "Configure" },
+  { group: "use", caption: "Use" },
+  { group: "system", caption: null }
+];
+
+export function pagesIn(group: PageGroup): readonly PageMeta[] {
+  return pages.filter((page) => page.group === group);
+}
+
 const pageIDs = new Set<string>(pages.map((page) => page.id));
 
 /** URLs that already shipped. A bookmark, a link in a chat, or a browser history

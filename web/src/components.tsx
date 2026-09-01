@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { useConfirm, useConfirmOpen } from "./ConfirmDialog";
 import { focusableSelector, trapTab } from "./focus";
+import { registerDrawer, useScrollLock } from "./overlays";
 import type { RatePolicy } from "./types";
 
 export { Button } from "./Button";
@@ -73,11 +74,16 @@ export function EmptyState({
  *
  * Returns the ref to put on the drawer. Give the drawer `tabIndex={-1}` so focus
  * has somewhere to land when it holds no controls yet, and mark the list behind
- * it `inert` with the same `open && active` condition. */
+ * it `inert` with the same `open && active` condition. The scrim and the page's
+ * frozen scroll come with it — the shell draws both from the registration below,
+ * so no page has to remember to ask. */
 export function useDrawerOverlay({ open, active, onClose }: { open: boolean; active: boolean; onClose: () => void }) {
   const ref = useRef<HTMLElement | null>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  // The page under a fixed drawer used to keep its scrollbar, so a flick of the
+  // wheel moved the list out from under the panel describing one of its rows.
+  useScrollLock(open && active);
   // A confirmation opened from inside the drawer sits above it. While it is up the
   // drawer's own Escape and Tab handling has to stand down, or Escape would answer
   // the question and close the drawer in one keypress.
@@ -103,7 +109,11 @@ export function useDrawerOverlay({ open, active, onClose }: { open: boolean; act
     }
 
     document.addEventListener("keydown", onKeyDown);
+    // Tells the shell there is a panel over the page, so it can draw the scrim and
+    // refuse to slide the navigation out on top of it.
+    const releaseDrawer = registerDrawer(() => closeRef.current());
     return () => {
+      releaseDrawer();
       document.removeEventListener("keydown", onKeyDown);
       // Restoring focus is what makes the drawer feel like it closed rather than
       // vanished: the operator lands back on the row they opened.
@@ -137,6 +147,9 @@ export function Sheet({
 }) {
   const ask = useConfirm();
   const headingID = useId();
+  // The sheet is mounted only while it is open, and its body scrolls on its own,
+  // so the page behind it has no business moving.
+  useScrollLock(true);
   const panel = useRef<HTMLElement | null>(null);
   const closeRef = useRef(onClose);
   const dirtyRef = useRef(dirty);

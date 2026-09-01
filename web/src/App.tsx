@@ -18,7 +18,6 @@ import {
   KeyRound,
   LogOut,
   Menu,
-  Moon,
   Plus,
   Power,
   RefreshCw,
@@ -27,13 +26,13 @@ import {
   Send,
   Settings as SettingsIcon,
   ShieldCheck,
-  Sun,
   Trash2,
   Upload,
   Square,
   X
 } from "lucide-react";
 import { api, APIError, setCSRF } from "./api";
+import { clipboardBlocked, copyText } from "./clipboard";
 import {
   Button,
   EmptyState,
@@ -45,10 +44,13 @@ import {
   Toggle,
   useDrawerOverlay
 } from "./components";
-import { useConfirm, type ConfirmRequest } from "./ConfirmDialog";
+import { useConfirm, useConfirmOpen, type ConfirmRequest } from "./ConfirmDialog";
+import { ErrorBoundary } from "./ErrorBoundary";
+import { closeActiveDrawerIfAny, useDrawerOpen, useScrollLock } from "./overlays";
 import {
   documentTitle,
-  pages,
+  pageGroups,
+  pagesIn,
   pathFor,
   readRoute,
   useCurrentTitleDetail,
@@ -149,7 +151,7 @@ function App() {
   const [username, setUsername] = useState("");
   const [route, setRoute] = useState<ConsoleRoute>(readRoute);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [theme, setTheme] = useState<"light" | "dark" | "system">(() => {
+  const [theme, setTheme] = useState<ThemeChoice>(() => {
     const stored = localStorage.getItem("relay-theme");
     return stored === "light" || stored === "dark" ? stored : "system";
   });
@@ -235,14 +237,32 @@ function App() {
     return () => window.removeEventListener("relay:session-expired", expired);
   }, [checkSession]);
 
+  // "Match my system" is resolved here rather than left as a word in the
+  // attribute, so the dark palette is one selector instead of two hand-synced
+  // copies. Reading the preference through the same media-query hook the layout
+  // uses means a system that flips to dark at sunset flips the console with it.
+  const systemDark = useMediaQuery("(prefers-color-scheme: dark)");
+  const resolvedTheme = theme === "system" ? (systemDark ? "dark" : "light") : theme;
+
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
+    document.documentElement.dataset.theme = resolvedTheme;
+    // The choice is stored, not the resolution: an operator who picked "match my
+    // system" has not picked dark, and next week their system may disagree.
     localStorage.setItem("relay-theme", theme);
-  }, [theme]);
+    // The browser's own chrome — a phone's address bar, a desktop title bar —
+    // takes its colour from this. Read back off the stylesheet rather than
+    // restated here, so the canvas has exactly one definition.
+    const canvas = getComputedStyle(document.documentElement).getPropertyValue("--surface-canvas").trim();
+    if (canvas) document.querySelector('meta[name="theme-color"]')?.setAttribute("content", canvas);
+  }, [theme, resolvedTheme]);
 
   // Whether the rail is off-canvas is a CSS decision at 900px; the shell needs to
   // know it too, so the hidden rail can be taken out of the tab order.
   const isCompact = useMediaQuery("(max-width: 900px)");
+  // An inspector is covering a page somewhere below. The shell owns the scrim for
+  // it, because the drawer is fixed to the viewport and so is the thing that has
+  // to sit behind it — neither is really the page's business.
+  const drawerOpen = useDrawerOpen();
 
   // Escape closes the mobile rail, and while it is open the page behind it does
   // not scroll — otherwise the drawer slides over content that moved underneath.
@@ -256,6 +276,9 @@ function App() {
   // the top of the new one.
   const navigated = useRef(false);
   const workspace = useRef<HTMLElement | null>(null);
+  // Only below 900px is the rail an overlay; above it, it is a column of the page
+  // and the page is expected to scroll behind nothing.
+  useScrollLock(menuOpen && isCompact);
   useEffect(() => {
     if (!menuOpen) return;
     rail.current?.querySelector<HTMLAnchorElement>(".nav-item")?.focus();
@@ -263,11 +286,8 @@ function App() {
       if (event.key === "Escape") setMenuOpen(false);
     };
     document.addEventListener("keydown", onKeyDown);
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = previousOverflow;
       if (navigated.current) {
         navigated.current = false;
         workspace.current?.focus();
@@ -276,6 +296,15 @@ function App() {
       menuButton.current?.focus();
     };
   }, [menuOpen]);
+
+  // The rail slides in from the same edge an inspector drawer occupies and outranks
+  // it, so opening the menu over an open inspector left two panels stacked with the
+  // lower one unreachable. The page underneath is where the operator is going back
+  // to; the inspector is not.
+  const openMenu = () => {
+    closeActiveDrawerIfAny();
+    setMenuOpen(true);
+  };
 
   useEffect(() => {
     const loadVersion = () => void api<VersionInfo>("/api/version").then(setVersion).catch(() => undefined);
@@ -435,6 +464,15 @@ function App() {
         aria-label="Close navigation"
         tabIndex={-1}
       />
+      {/* The page an inspector is covering. The drawers are fixed to the viewport,
+          so what sits behind them is a shell concern; each drawer registers itself
+          and this is drawn once, rather than four pages each remembering to. */}
+      <button
+        className={`drawer-scrim${drawerOpen ? " is-visible" : ""}`}
+        onClick={closeActiveDrawerIfAny}
+        aria-label="Close panel"
+        tabIndex={-1}
+      />
       {/* Off-canvas at mobile widths, the rail is still in the document, so it is
           marked inert while closed — otherwise Tab lands on invisible links. */}
       <aside className={`sidebar ${menuOpen ? "is-open" : ""}`} inert={isCompact && !menuOpen} ref={rail}>
@@ -444,71 +482,47 @@ function App() {
           </span>
           <span>
             <strong>ROTAKEY</strong>
-            <small>routing control plane</small>
+            <small>API key gateway</small>
           </span>
         </div>
+        {/* Seven rows in one flat stack made the operator read all seven to find
+            one. The bands say why you would be here: watching it, setting it up,
+            or using it. Settings belongs to none of those, so it sits alone under
+            a rule rather than under a caption written to justify it. */}
         <nav aria-label="Primary navigation">
-          {pages.map(({ id, label, summary }) => {
-            const Icon = pageIcons[id];
-            const active = !route.notFound && route.page === id;
-            return (
-              <a
-                key={id}
-                className={`nav-item ${active ? "is-active" : ""}`}
-                href={pathFor(id)}
-                title={summary}
-                onClick={(event) => navigateFromLink(event, id)}
-                aria-current={active ? "page" : undefined}
-              >
-                <Icon size={17} aria-hidden="true" />
-                <span>{label}</span>
-              </a>
-            );
-          })}
-        </nav>
-        <div className="sidebar__bottom">
-          {/* latest_version is optional in the payload, so both readouts are gated
-              on the string itself rather than on the flag. A release check that
-              reports an update without naming the version rendered "Rotakey v". */}
-          {version?.update_available && version.latest_version && (
-            <a className="release-notice" href={version.release_url} target="_blank" rel="noreferrer">
-              <span>Update available</span>
-              <strong>Rotakey v{version.latest_version}</strong>
-              <small>View release notes →</small>
-            </a>
-          )}
-          <a
-            className="sidebar__github"
-            href="https://github.com/jisunahamed/rotakey/blob/main/docs/OPERATOR-GUIDE.md"
-            target="_blank"
-            rel="noreferrer"
-          >
-            <BookOpen size={15} aria-hidden="true" />
-            <span>Operator guide</span>
-          </a>
-          <a
-            className="sidebar__github"
-            href="https://github.com/jisunahamed/rotakey"
-            target="_blank"
-            rel="noreferrer"
-          >
-            <Github size={15} aria-hidden="true" />
-            <span>Star on GitHub</span>
-          </a>
-          <div className="sidebar__footer">
-            <div className="operator">
-              <span className="operator__avatar">{username.slice(0, 1).toUpperCase()}</span>
-              <span>
-                <strong>{username}</strong>
-                <small>Owner</small>
-              </span>
+          {pageGroups.map(({ group, caption }) => (
+            <div
+              className="nav-group"
+              key={group}
+              role={caption ? "group" : undefined}
+              aria-labelledby={caption ? `nav-group-${group}` : undefined}
+            >
+              {caption ? (
+                <p className="nav-group__caption" id={`nav-group-${group}`}>{caption}</p>
+              ) : (
+                <hr className="nav-group__rule" />
+              )}
+              {pagesIn(group).map(({ id, label, summary }) => {
+                const Icon = pageIcons[id];
+                const active = !route.notFound && route.page === id;
+                return (
+                  <a
+                    key={id}
+                    className={`nav-item ${active ? "is-active" : ""}`}
+                    href={pathFor(id)}
+                    title={summary}
+                    onClick={(event) => navigateFromLink(event, id)}
+                    aria-current={active ? "page" : undefined}
+                  >
+                    <Icon size={17} aria-hidden="true" />
+                    <span>{label}</span>
+                  </a>
+                );
+              })}
             </div>
-            <button className="icon-button" onClick={() => void logout()} aria-label={`Sign out ${username}`}>
-              <LogOut size={17} aria-hidden="true" />
-            </button>
-          </div>
-          <VersionBadge version={version} />
-        </div>
+          ))}
+        </nav>
+        <AccountMenu username={username} version={version} theme={theme} setTheme={setTheme} onSignOut={logout} />
       </aside>
 
       {/* While the drawer is over the page, the page behind it is inert: without
@@ -516,35 +530,38 @@ function App() {
           scrim sits outside this element so dismissing by click still works. */}
       <div className="workspace" inert={isCompact && menuOpen}>
         <header className="mobile-header">
-          <button className="icon-button" onClick={() => setMenuOpen(true)} aria-label="Open navigation" aria-expanded={menuOpen} ref={menuButton}>
+          <button className="icon-button" onClick={openMenu} aria-label="Open navigation" aria-expanded={menuOpen} ref={menuButton}>
             <Menu size={19} aria-hidden="true" />
           </button>
           <strong>Rotakey</strong>
-          <ThemeButton theme={theme} setTheme={setTheme} />
         </header>
+        {/* A second boundary, inside the shell. A page that threw used to take the
+            navigation with it, so the only way to another page was a reload; now
+            the rail, the account menu and the message dock stay up beside the
+            failure. Keyed by page so walking away from a broken screen and back
+            re-runs it instead of showing the panel forever. */}
         <main className="main-pane" id="workspace" tabIndex={-1} ref={workspace}>
-          {route.notFound && <NotFoundPage navigate={navigate} />}
-          {!route.notFound && (
-            <>
-              {route.page === "overview" && <OverviewPage navigate={navigate} notify={notify} />}
-              {route.page === "providers" && <ProvidersPage notify={notify} />}
-              {route.page === "models" && <ModelsPage navigate={navigate} notify={notify} />}
-              {route.page === "playground" && <PlaygroundPage navigate={navigate} notify={notify} />}
-              {route.page === "requests" && <LogsPage />}
-              {route.page === "connect" && (
-                <AccessPage
-                  gatewayKey={gatewayKey}
-                  onNewKey={setGatewayKey}
-                  notify={notify}
-                />
-              )}
-              {route.page === "settings" && <SettingsPage notify={notify} />}
-            </>
-          )}
+          <ErrorBoundary scope="page" key={route.notFound ? "not-found" : route.page}>
+            {route.notFound && <NotFoundPage navigate={navigate} />}
+            {!route.notFound && (
+              <>
+                {route.page === "overview" && <OverviewPage navigate={navigate} notify={notify} />}
+                {route.page === "providers" && <ProvidersPage notify={notify} />}
+                {route.page === "models" && <ModelsPage navigate={navigate} notify={notify} />}
+                {route.page === "playground" && <PlaygroundPage navigate={navigate} notify={notify} />}
+                {route.page === "requests" && <LogsPage />}
+                {route.page === "connect" && (
+                  <AccessPage
+                    gatewayKey={gatewayKey}
+                    onNewKey={setGatewayKey}
+                    notify={notify}
+                  />
+                )}
+                {route.page === "settings" && <SettingsPage notify={notify} />}
+              </>
+            )}
+          </ErrorBoundary>
         </main>
-        <div className="desktop-theme">
-          <ThemeButton theme={theme} setTheme={setTheme} />
-        </div>
       </div>
 
       {gatewayKey && (
@@ -575,25 +592,188 @@ type VersionInfo = {
   check_error?: string;
 };
 
-/** The version line, which used to state two things it did not know. The number
- *  fell back to a hardcoded "0.2.7" whenever the request had not landed — three
- *  releases stale the day it was written — and the badge read "up to date"
- *  unconditionally, including when the release check had failed or had never run.
- *  Every branch below is something the payload actually says. */
-function VersionBadge({ version }: { version: VersionInfo | null }) {
-  const badge = !version
-    ? { text: "checking…", title: "Reading this install's version." }
-    : version.update_available && version.latest_version
-      ? { text: `new v${version.latest_version}`, title: `Version ${version.latest_version} has been released.` }
-      : version.check_error
-        ? { text: "check failed", title: version.check_error }
-        : version.latest_version
-          ? { text: "up to date", title: `v${version.latest_version} is the newest release.` }
-          : { text: "no release found", title: "There is no published release to compare this build against." };
+/** What the release check knows, in a sentence. The badge used to state two things
+ *  it did not know: the number fell back to a hardcoded "0.2.7" whenever the
+ *  request had not landed — three releases stale the day it was written — and it
+ *  read "up to date" unconditionally, including when the check had failed or had
+ *  never run. Every branch below is something the payload actually says. */
+function versionState(version: VersionInfo | null) {
+  if (!version) return { text: "Checking…", detail: "Reading this install's version." };
+  if (version.update_available && version.latest_version) {
+    return { text: `v${version.latest_version} available`, detail: "View the release notes" };
+  }
+  if (version.check_error) return { text: "Check failed", detail: version.check_error };
+  if (version.latest_version) return { text: "Up to date", detail: `v${version.latest_version} is the newest release.` };
+  return { text: "No release found", detail: "There is no published release to compare this build against." };
+}
+
+type ThemeChoice = "light" | "dark" | "system";
+
+/** Three choices, each with the word for it. The rail used to carry one unlabelled
+ *  34px button that cycled through all three, with a heartbeat icon standing for
+ *  "match my system" — so the only way to find out what any state was called was to
+ *  press it and read the tooltip that told you what the *next* one was. */
+const themeChoices: readonly { value: ThemeChoice; label: string; description: string }[] = [
+  { value: "light", label: "Light", description: "Always the light palette" },
+  { value: "dark", label: "Dark", description: "Always the dark palette" },
+  { value: "system", label: "System", description: "Follow this device's setting" }
+];
+
+/** Everything about the person signed in and the install they are signed in to,
+ *  behind one control.
+ *
+ *  The rail's foot used to be five loose items competing with the seven navigation
+ *  rows above them: an update card, two link rows, a name with a bare power icon
+ *  beside it that signed out on the first click, and a version line. None of them
+ *  is something an operator navigates to, and one of them destroyed a half-filled
+ *  form. They are all still here — this is the menu they are in. */
+function AccountMenu({
+  username,
+  version,
+  theme,
+  setTheme,
+  onSignOut
+}: {
+  username: string;
+  version: VersionInfo | null;
+  theme: ThemeChoice;
+  setTheme: (theme: ThemeChoice) => void;
+  onSignOut: () => Promise<void>;
+}) {
+  const ask = useConfirm();
+  const [open, setOpen] = useState(false);
+  const container = useRef<HTMLDivElement | null>(null);
+  const trigger = useRef<HTMLButtonElement | null>(null);
+  // The sign-out confirmation renders above the menu and takes focus out of it.
+  // While it is up the menu's Escape and outside-click handling stands down, or
+  // Escape would answer the question and shut the menu in one keypress, and the
+  // click that opened the dialog would be read as a click outside the menu.
+  const confirmOpen = useConfirmOpen();
+  const confirmOpenRef = useRef(confirmOpen);
+  confirmOpenRef.current = confirmOpen;
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (confirmOpenRef.current || event.key !== "Escape") return;
+      event.preventDefault();
+      setOpen(false);
+      trigger.current?.focus();
+    };
+    // pointerdown rather than click: a menu should be gone by the time the button
+    // underneath it is pressed, not after.
+    const onPointerDown = (event: PointerEvent) => {
+      if (confirmOpenRef.current) return;
+      if (!container.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [open]);
+
+  const release = versionState(version);
+  const updateReady = Boolean(version?.update_available && version.latest_version);
+
+  const signOut = async () => {
+    const confirmed = await ask({
+      title: "Sign out?",
+      body: "Anything you have typed and not saved will be lost. The gateway keeps routing while you are signed out.",
+      confirmLabel: "Sign out",
+      cancelLabel: "Stay signed in"
+    });
+    if (!confirmed) return;
+    setOpen(false);
+    await onSignOut();
+  };
+
   return (
-    <div className="sidebar__version" title={version?.commit ? `Commit ${version.commit}` : undefined}>
-      {version ? `Rotakey v${version.current_version}` : "Rotakey"}
-      <span title={badge.title}>{badge.text}</span>
+    <div className="account" ref={container}>
+      <button
+        className={`account__trigger${open ? " is-open" : ""}`}
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+        aria-haspopup="true"
+        ref={trigger}
+      >
+        <span className="account__avatar" aria-hidden="true">{username.slice(0, 1).toUpperCase()}</span>
+        <span className="account__who">
+          <strong>{username}</strong>
+          <small>Owner</small>
+        </span>
+        {/* An update is the one thing down here worth interrupting for, and it is
+            now a click away rather than on screen. The dot is what makes it
+            findable; the label is what makes it announceable. */}
+        {updateReady && <span className="account__badge" role="img" aria-label="An update is available" />}
+        <ChevronDown size={15} aria-hidden="true" />
+      </button>
+
+      {open && (
+        <div className="account__menu" role="group" aria-label={`Account and settings for ${username}`}>
+          <div className="account__section">
+            <p className="account__caption" id="account-theme-label">Theme</p>
+            <div className="account__themes" role="radiogroup" aria-labelledby="account-theme-label">
+              {themeChoices.map((choice) => (
+                <button
+                  key={choice.value}
+                  role="radio"
+                  aria-checked={theme === choice.value}
+                  className={`account__theme${theme === choice.value ? " is-active" : ""}`}
+                  title={choice.description}
+                  onClick={() => setTheme(choice.value)}
+                >
+                  {choice.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="account__section">
+            <a
+              className="account__item"
+              href="https://github.com/jisunahamed/rotakey/blob/main/docs/OPERATOR-GUIDE.md"
+              target="_blank"
+              rel="noreferrer"
+            >
+              <BookOpen size={15} aria-hidden="true" />
+              <span>Operator guide</span>
+            </a>
+            <a className="account__item" href="https://github.com/jisunahamed/rotakey" target="_blank" rel="noreferrer">
+              <Github size={15} aria-hidden="true" />
+              <span>Rotakey on GitHub</span>
+            </a>
+          </div>
+
+          {/* The version reads as a fact plus what is known about it. When there is
+              a release to go to it becomes the link to it; when there is not, it
+              stays a readout rather than pretending to be actionable. */}
+          <div className="account__section">
+            <p className="account__caption">This install</p>
+            {updateReady ? (
+              <a className="account__version" href={version?.release_url} target="_blank" rel="noreferrer">
+                <strong>Rotakey v{version?.current_version}</strong>
+                <span className="account__version-state is-update">{release.text}</span>
+                <small>{release.detail} →</small>
+              </a>
+            ) : (
+              <div className="account__version" title={version?.commit ? `Commit ${version.commit}` : undefined}>
+                <strong>{version ? `Rotakey v${version.current_version}` : "Rotakey"}</strong>
+                <span className="account__version-state">{release.text}</span>
+                <small>{release.detail}</small>
+              </div>
+            )}
+          </div>
+
+          <div className="account__section">
+            <button className="account__item account__item--danger" onClick={() => void signOut()}>
+              <LogOut size={15} aria-hidden="true" />
+              <span>Sign out</span>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -763,25 +943,6 @@ function LoginScreen({
         </form>
       </section>
     </div>
-  );
-}
-
-function ThemeButton({
-  theme,
-  setTheme
-}: {
-  theme: "light" | "dark" | "system";
-  setTheme: (theme: "light" | "dark" | "system") => void;
-}) {
-  const next = theme === "system" ? "dark" : theme === "dark" ? "light" : "system";
-  const Icon = theme === "dark" ? Moon : theme === "light" ? Sun : Activity;
-  const nextLabel = next === "system" ? "match the system" : next;
-  // The label names the action, not the current value: "Theme: dark" left the
-  // operator guessing what pressing it would do.
-  return (
-    <button className="icon-button" onClick={() => setTheme(next)} aria-label={`Switch theme to ${nextLabel}`} title={`Theme: ${theme === "system" ? "matching the system" : theme}`}>
-      <Icon size={17} aria-hidden="true" />
-    </button>
   );
 }
 
@@ -5081,12 +5242,6 @@ const keyCheckFailed =
 const discoveryFailed =
   "The provider did not return a model list. Check the API key and the base URL, then try again.";
 
-/** Copying can be refused by the browser — an insecure origin, or a denied
- *  permission — and the operator still needs the value, so the message ends with the
- *  way to get it. Four call sites copy something; only one of them used to say this
- *  much. */
-const clipboardBlocked = "Your browser blocked the copy. Select the text and copy it manually.";
-
 /** The capability enum comes off the route row as a database value —
  *  `probe_verified`, `catalog_verified`, `unverified` — and the inspector used to
  *  print it with the underscore swapped for a space, which told the operator how
@@ -5898,33 +6053,6 @@ function formatClockTime(value?: string) {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return "—";
   return parsed.toLocaleTimeString();
-}
-
-async function copyText(value: string) {
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(value);
-      return;
-    } catch {
-      // HTTP/IP deployments often block the modern Clipboard API. Fall through.
-    }
-  }
-
-  const textarea = document.createElement("textarea");
-  textarea.value = value;
-  textarea.readOnly = true;
-  textarea.style.position = "fixed";
-  textarea.style.inset = "0 auto auto -9999px";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-  textarea.setSelectionRange(0, value.length);
-  try {
-    if (!document.execCommand("copy")) throw new Error("Clipboard copy failed");
-  } finally {
-    textarea.remove();
-  }
 }
 
 function errorMessage(caught: unknown) {

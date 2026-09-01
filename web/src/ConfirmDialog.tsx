@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useId, useRef, useSt
 import { AlertTriangle } from "lucide-react";
 import { Button } from "./Button";
 import { focusableSelector, trapTab } from "./focus";
+import { useScrollLock } from "./overlays";
 
 /** The console's consequential decisions used to go through window.confirm(): the
  * browser's own dialog, which cannot be styled, cannot be read by a screen reader as
@@ -98,6 +99,10 @@ function ConfirmDialog({
 }) {
   const headingID = useId();
   const bodyID = useId();
+  // A question is the most modal thing the console does. The lock is counted, so
+  // this releasing does not hand the scrollbar back to a sheet that is still open
+  // underneath — which is exactly the case, since a sheet is usually what asked.
+  useScrollLock(true);
   const panel = useRef<HTMLDivElement | null>(null);
   const cancel = useRef<HTMLButtonElement | null>(null);
   const settleRef = useRef(onSettle);

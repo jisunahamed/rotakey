@@ -29,7 +29,7 @@
 
 .wordmark__mark,
 .nav-item,
-.sidebar__github,
+.account__menu,
 .button,
 .icon-button,
 .login-panel,
@@ -2545,7 +2545,7 @@
   .resource-page .ide-resource-list { display: flex; min-height: 0; flex-direction: column; overflow: hidden; }
   .resource-page .ide-resource-list > div:last-child { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
   .resource-page .resource-inspector > .inspector-header,
-  .resource-page .ide-resource-inspector > header { position: sticky; z-index: 4; top: 0; background: var(--surface-raised); }
+  .resource-page .ide-resource-inspector > header { position: sticky; z-index: var(--layer-pane-sticky); top: 0; background: var(--surface-raised); }
 }
 
 .ide-inspector-section {
@@ -2782,7 +2782,7 @@
    put more elevation on a row of buttons than the panels they act on. */
 .console-actionbar {
   position: sticky;
-  z-index: 8;
+  z-index: var(--layer-pane-bar);
   bottom: 0;
   align-items: center;
   justify-content: space-between;
@@ -2843,7 +2843,7 @@
   .overview-inspector {
     display: none;
     position: fixed;
-    z-index: 35;
+    z-index: var(--layer-inspector);
     inset: 0 0 0 auto;
     width: min(390px, 100vw);
     overflow-y: auto;
@@ -2891,7 +2891,7 @@
   .resource-page .ide-resource-inspector {
     display: none;
     position: fixed;
-    z-index: 35;
+    z-index: var(--layer-inspector);
     inset: var(--mobile-header-height) 0 0 auto;
     width: min(430px, 100vw);
     overflow-y: auto;
@@ -2905,7 +2905,7 @@
   .resource-page .ide-resource-inspector.is-open { display: block; }
   .resource-inspector-close { display: inline-grid; }
   .resource-page .inspector-header,
-  .resource-page .ide-resource-inspector > header { position: sticky; z-index: 4; top: 0; background: var(--surface-raised); }
+  .resource-page .ide-resource-inspector > header { position: sticky; z-index: var(--layer-pane-sticky); top: 0; background: var(--surface-raised); }
   .resource-disclosure > header { grid-template-columns: 1fr; }
   .resource-disclosure__actions { padding-left: var(--space-8); }
 }

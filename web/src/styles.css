@@ -152,7 +152,7 @@ h3 {
    reader users get a way past it. Visible only while focused, and above the rail. */
 .skip-link {
   position: fixed;
-  z-index: 40;
+  z-index: var(--layer-skip);
   top: var(--space-4);
   left: var(--space-4);
   padding: var(--space-4) var(--space-6);
@@ -197,7 +197,7 @@ h3 {
 .sidebar {
   position: fixed;
   inset: 0 auto 0 0;
-  z-index: 20;
+  z-index: var(--layer-rail);
   display: flex;
   width: var(--rail-width);
   flex-direction: column;
@@ -244,7 +244,35 @@ h3 {
 
 .sidebar nav {
   display: grid;
+  gap: var(--space-6);
+}
+
+/* Seven rows in one stack read as a list to be searched. Three bands read as a
+   place to look: what you watch, what you set up, what you use. The gap between
+   groups is the whole separation — no boxes, no second background. */
+.nav-group {
+  display: grid;
   gap: var(--space-1);
+}
+
+.nav-group__caption {
+  margin: 0 0 var(--space-2);
+  padding: 0 var(--space-5);
+  color: var(--rail-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  font-weight: 500;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
+/* Settings is one row and belongs to no band, so it gets the hairline a caption
+   would otherwise have to invent a word for. */
+.nav-group__rule {
+  height: 0;
+  margin: 0 var(--space-5) var(--space-3);
+  border: 0;
+  border-top: 1px solid var(--rail-edge);
 }
 
 .nav-item {
@@ -282,79 +310,51 @@ h3 {
   color: var(--iris);
 }
 
-.sidebar__bottom {
-  display: grid;
-  gap: var(--space-4);
+/* The foot of the rail. It used to be five separate things — an update card, two
+   link rows, a name with a bare power icon beside it, and a version line — each
+   competing with the seven navigation rows above them for the same glance, none of
+   them somewhere an operator navigates to, and one of them signing out on a single
+   click. They are all still here, one control down. */
+.account {
+  position: relative;
   margin-top: auto;
-}
-
-.sidebar__github {
-  display: flex;
-  min-height: 36px;
-  align-items: center;
-  gap: var(--space-4);
-  padding: 0 var(--space-5);
-  color: var(--rail-muted);
-  border: 1px solid var(--rail-edge);
-  border-radius: var(--radius-fitting);
-  font-size: var(--text-mini);
-  text-decoration: none;
-}
-
-.sidebar__github:hover {
-  color: var(--rail-text);
-  background: var(--rail-raised);
-}
-
-.release-notice {
-  display: grid;
-  gap: var(--space-1);
-  padding: var(--space-5);
-  color: var(--rail-text);
-  background: var(--rail-raised);
-  border: 1px solid var(--iris-edge);
-  border-radius: var(--radius-fitting);
-  text-decoration: none;
-}
-
-.release-notice span,
-.release-notice small,
-.sidebar__version {
-  font-family: var(--font-data);
-  font-size: var(--text-micro);
-  font-variant-numeric: tabular-nums;
-}
-
-.release-notice span { color: var(--iris); text-transform: uppercase; letter-spacing: var(--track-label); }
-.release-notice strong { font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
-.release-notice small { color: var(--rail-muted); }
-
-.sidebar__version {
-  display: flex;
-  justify-content: space-between;
-  padding: 0 var(--space-4);
-  color: var(--rail-muted);
-}
-
-.sidebar__version span { color: var(--iris); }
-
-.sidebar__footer {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-5) var(--space-3) var(--space-1);
+  padding-top: var(--space-5);
   border-top: 1px solid var(--rail-edge);
 }
 
-.operator {
+.account__trigger {
   display: flex;
-  min-width: 0;
-  flex: 1;
+  width: 100%;
+  min-height: 46px;
   align-items: center;
   gap: var(--space-4);
+  padding: 0 var(--space-4);
+  color: var(--rail-text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-fitting);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--dur-state) var(--ease), border-color var(--dur-state) var(--ease);
 }
 
-.operator__avatar {
+.account__trigger:hover,
+.account__trigger.is-open {
+  background: var(--rail-raised);
+  border-color: var(--rail-edge);
+}
+
+.account__trigger > svg {
+  flex: 0 0 auto;
+  color: var(--rail-muted);
+  transition: transform var(--dur-state) var(--ease);
+}
+
+.account__trigger.is-open > svg {
+  transform: rotate(180deg);
+}
+
+.account__avatar {
   display: grid;
   width: 30px;
   height: 30px;
@@ -367,21 +367,170 @@ h3 {
   font-weight: 600;
 }
 
-.operator strong,
-.operator small {
+.account__who {
+  min-width: 0;
+  flex: 1;
+}
+
+.account__who strong,
+.account__who small {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.operator strong {
+.account__who strong {
   font-size: var(--text-sm);
 }
 
-.operator small {
+.account__who small {
   margin-top: var(--space-1);
   color: var(--rail-muted);
   font-size: var(--text-micro);
+}
+
+/* A new release is the one thing behind this menu worth interrupting for, so it
+   leaves a mark on the closed control. */
+.account__badge {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  background: var(--iris);
+  border-radius: var(--radius-pill);
+}
+
+/* Opens upward, because the control it belongs to is at the bottom of the rail.
+   It is allowed to scroll: on a landscape phone the rail itself is barely taller
+   than this panel. */
+.account__menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + var(--space-3));
+  left: 0;
+  max-height: min(430px, calc(100dvh - 120px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--rail-raised);
+  border: 1px solid var(--rail-edge);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--lift-float);
+}
+
+.account__section {
+  padding: var(--space-5);
+}
+
+.account__section + .account__section {
+  border-top: 1px solid var(--rail-edge);
+}
+
+.account__caption {
+  margin: 0 0 var(--space-4);
+  color: var(--rail-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
+.account__themes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--rail);
+  border: 1px solid var(--rail-edge);
+  border-radius: var(--radius-fitting);
+}
+
+.account__theme {
+  min-height: 30px;
+  padding: 0 var(--space-2);
+  color: var(--rail-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-fitting);
+  cursor: pointer;
+  font-size: var(--text-mini);
+  transition: color var(--dur-state) var(--ease), background var(--dur-state) var(--ease);
+}
+
+.account__theme:hover {
+  color: var(--rail-text);
+}
+
+.account__theme.is-active {
+  color: var(--text-inverse);
+  background: var(--iris);
+}
+
+.account__item {
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 0 var(--space-4);
+  color: var(--rail-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-fitting);
+  cursor: pointer;
+  font-size: var(--text-mini);
+  text-align: left;
+  text-decoration: none;
+  transition: color var(--dur-state) var(--ease), background var(--dur-state) var(--ease);
+}
+
+.account__item svg {
+  flex: 0 0 auto;
+}
+
+.account__item:hover {
+  color: var(--rail-text);
+  background: var(--rail);
+}
+
+.account__item--danger:hover {
+  color: var(--fault);
+}
+
+.account__version {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  color: var(--rail-muted);
+  border-radius: var(--radius-fitting);
+  text-decoration: none;
+}
+
+a.account__version:hover {
+  background: var(--rail);
+}
+
+.account__version strong,
+.account__version-state {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.account__version strong {
+  color: var(--rail-text);
+  font-size: var(--text-mini);
+}
+
+.account__version-state {
+  font-size: var(--text-micro);
+}
+
+.account__version-state.is-update {
+  color: var(--iris);
+}
+
+.account__version small {
+  font-size: var(--text-micro);
+  line-height: var(--leading-snug);
 }
 
 .workspace {
@@ -395,11 +544,26 @@ h3 {
   padding: var(--pane-pad-top) clamp(var(--space-8), 4vw, var(--space-12)) var(--pane-pad-bottom);
 }
 
-.desktop-theme {
+/* The page an inspector drawer is covering. The two inspector breakpoints differ
+   — 1050px on Overview, 900px on the resource pages — so this carries no media
+   query of its own: a drawer registers itself with the shell only while it is
+   genuinely an overlay, and the class follows that registration.
+
+   Like the sheet's, the colour is a literal. No surface token is dark enough in
+   the light theme to read as "behind". */
+.drawer-scrim {
+  display: none;
   position: fixed;
-  z-index: 8;
-  top: 18px;
-  right: 18px;
+  z-index: var(--layer-drawer-scrim);
+  inset: 0;
+  width: 100%;
+  background: rgb(8 14 19 / 0.5);
+  border: 0;
+  cursor: default;
+}
+
+.drawer-scrim.is-visible {
+  display: block;
 }
 
 .mobile-header,
@@ -964,7 +1128,7 @@ h3 {
 
 .sheet-layer {
   position: fixed;
-  z-index: 50;
+  z-index: var(--layer-sheet);
   inset: 0;
   display: flex;
   justify-content: flex-end;
@@ -1028,7 +1192,7 @@ h3 {
    answer has to be readable over the panel that raised it. */
 .confirm-layer {
   position: fixed;
-  z-index: 70;
+  z-index: var(--layer-dialog);
   inset: 0;
   display: grid;
   place-items: center;
@@ -2087,7 +2251,7 @@ fieldset legend {
    dismiss button still works. */
 .toast-dock {
   position: fixed;
-  z-index: 70;
+  z-index: var(--layer-toast);
   right: 22px;
   bottom: 22px;
   display: flex;
@@ -2169,9 +2333,31 @@ fieldset legend {
   box-shadow: var(--lift-panel);
 }
 
+/* The same panel, rendered inside a shell that is still standing. It is wider
+   because it has a page's width to use rather than a centred card's, and it does
+   not centre itself: the navigation is still beside it and the failure belongs
+   where the page was. */
+.crash-panel--page {
+  width: 100%;
+  max-width: 760px;
+}
+
 .crash-panel p {
   margin: 0;
   color: var(--text-muted);
+}
+
+/* The copy button and whatever it has to say afterwards. A toast cannot answer
+   here — the notifier is part of the tree that has just stopped rendering. */
+.crash-panel__report {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.crash-panel__report span {
+  color: var(--text-muted);
+  font-size: var(--text-mini);
 }
 
 .crash-panel pre {
@@ -2421,17 +2607,17 @@ fieldset legend {
     transform: translateX(0);
   }
 
-  /* Six nav sections plus the release notice and the operator footer do not fit
-     a landscape phone, so the nav itself takes the overflow. Without min-height
-     it refuses to shrink below its content and the footer is pushed off-screen
-     where nothing can scroll to it. */
+  /* Seven nav rows plus three group captions and the account control do not fit a
+     landscape phone, so the nav itself takes the overflow. Without min-height it
+     refuses to shrink below its content and the account control is pushed
+     off-screen where nothing can scroll to it. */
   .sidebar nav {
     min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
   }
 
-  .sidebar__bottom {
+  .account {
     flex: 0 0 auto;
   }
 
@@ -2439,7 +2625,7 @@ fieldset legend {
      same reason the sheet's is: no surface token is dark enough here. */
   .mobile-scrim {
     position: fixed;
-    z-index: 19;
+    z-index: var(--layer-scrim);
     inset: 0;
     width: 100%;
     background: rgb(8 14 19 / 0.5);
@@ -2455,15 +2641,18 @@ fieldset legend {
     margin-left: 0;
   }
 
+  /* Two things now: the menu button and the product name. The theme control that
+     used to sit on the right went into the account menu inside the drawer, which
+     is where every other rail-level setting already was. */
   .mobile-header {
     position: sticky;
-    z-index: 10;
+    z-index: var(--layer-sticky);
     top: 0;
     display: flex;
     height: var(--mobile-header-height);
     min-height: var(--mobile-header-height);
     align-items: center;
-    justify-content: space-between;
+    gap: var(--space-5);
     padding: var(--space-4) var(--space-5);
     background: color-mix(in srgb, var(--surface-raised) 94%, transparent);
     border-bottom: 1px solid var(--edge);
@@ -2476,10 +2665,6 @@ fieldset legend {
     font-family: var(--font-label);
     font-size: var(--text-mini);
     letter-spacing: var(--track-label);
-  }
-
-  .desktop-theme {
-    display: none;
   }
 
   .main-pane {
@@ -2552,7 +2737,8 @@ fieldset legend {
      the whole row and growing the control would only make it look heavy. */
   .button,
   .credential-entry > header .button,
-  .sidebar__github,
+  .account__item,
+  .account__theme,
   .catalog-search,
   .catalog-alias input,
   .field input,
