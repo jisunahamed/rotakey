@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -229,6 +230,8 @@ func (s *Server) servePooled(
 	modelIDs := routeModelIDs(routes)
 	state := dispatchState{
 		Replaced:                   map[string]string{},
+		MinOutputTokens:            map[string]int64{},
+		DetachReplayedIDs:          map[string]bool{},
 		NativeResponsesUnavailable: s.responsesEndpointMissing(r.Context(), modelIDs),
 		PreferNativeResponses:      s.responsesEndpointPreferred(r.Context(), modelIDs),
 	}
@@ -341,6 +344,7 @@ func (s *Server) servePooled(
 
 		if len(outcome.LearnedStrip) > 0 || len(outcome.LearnedReplace) > 0 ||
 			outcome.LearnedItemStrip.Field != "" ||
+			outcome.LearnedReplyFloor > 0 || outcome.LearnedDetachIDs ||
 			outcome.NativeResponsesMissing || outcome.NativeResponsesPreferred {
 			state.Removed = appendUniqueStrings(state.Removed, outcome.LearnedStrip...)
 			for from, to := range outcome.LearnedReplace {
@@ -348,6 +352,12 @@ func (s *Server) servePooled(
 			}
 			if outcome.LearnedItemStrip.Field != "" && !slices.Contains(state.RemovedItemFields, outcome.LearnedItemStrip) {
 				state.RemovedItemFields = append(state.RemovedItemFields, outcome.LearnedItemStrip)
+			}
+			if outcome.LearnedReplyFloor > state.MinOutputTokens[candidate.Route.Model.ID] {
+				state.MinOutputTokens[candidate.Route.Model.ID] = outcome.LearnedReplyFloor
+			}
+			if outcome.LearnedDetachIDs {
+				state.DetachReplayedIDs[candidate.Route.Model.ID] = true
 			}
 			if outcome.NativeResponsesMissing {
 				state.NativeResponsesUnavailable[candidate.Route.Model.ID] = true
@@ -558,6 +568,7 @@ func (s *Server) runAttempt(
 			parameters     []string
 			itemStrip      itemFieldStrip
 			hasItemStrip   bool
+			hasDetach      bool
 		)
 		if readErr == nil && !wasTruncated {
 			// A provider that names /responses in its rejection is answered by moving
@@ -577,6 +588,9 @@ func (s *Server) runAttempt(
 			// an index in it is never an allowlisted top-level parameter.
 			if !switchEndpoint && !hasReplacement && len(parameters) == 0 {
 				itemStrip, hasItemStrip = unsupportedItemField(errorBody, plan.Payload)
+			}
+			if !switchEndpoint && !hasReplacement && len(parameters) == 0 && !hasItemStrip {
+				hasDetach = orphanedReasoningPairing(errorBody, plan.Payload)
 			}
 		}
 		if allowCompatibility {
@@ -630,6 +644,18 @@ func (s *Server) runAttempt(
 					UpstreamRequestID: upstreamRequestID, Compatibility: true, ResetSkips: true,
 					LearnedItemStrip: itemStrip,
 				}
+			case hasDetach:
+				record.Retryable = true
+				record.RemovedParameters = []string{"input[].id"}
+				s.rememberDetachReplayedIDs(r.Context(), candidate.Route.Model.ID)
+				s.logger.Info("provider refused a replayed message id's pairing; retrying without the ids",
+					"request_id", req.RequestID, "model", candidate.Route.Model.PublicAlias,
+					"provider", candidate.Route.Provider.Name)
+				return attemptOutcome{
+					Record: record, Status: response.StatusCode,
+					UpstreamRequestID: upstreamRequestID, Compatibility: true, ResetSkips: true,
+					LearnedDetachIDs: true,
+				}
 			}
 		}
 		// A 400 the gateway can name is already excluded above. So is a 400 on an
@@ -638,7 +664,7 @@ func (s *Server) runAttempt(
 		// so striking this one only shrinks the rotation over the gateway's own
 		// mistake. A route that publishes /responses natively is not covered —
 		// there the configuration is the operator's and the 400 is real evidence.
-		if !switchEndpoint && !hasReplacement && len(parameters) == 0 && !hasItemStrip && !plan.SwitchedToResponses {
+		if !switchEndpoint && !hasReplacement && len(parameters) == 0 && !hasItemStrip && !hasDetach && !plan.SwitchedToResponses {
 			s.markUpstreamFailure(r.Context(), credential.ID, response.StatusCode, response.Header, errorBody)
 		}
 		return s.writeAttemptFailure(w, r, req, plan, response, errorBody, wasTruncated, record, credential, upstreamRequestID)
@@ -687,6 +713,11 @@ func (s *Server) runAttempt(
 	if plan.SwitchedToResponses {
 		s.rememberResponsesEndpointPreferred(r.Context(), candidate.Route.Model.ID)
 	}
+	// Same proved-not-inferred rule for the reply budget: the raised cap is
+	// remembered only on the attempt that actually answered under it.
+	if plan.ReplyFloor > 0 {
+		s.rememberReplyFloor(r.Context(), candidate.Route.Model.ID, plan.ReplyFloor)
+	}
 	if req.Stream {
 		return s.streamAttempt(w, r, req, candidate, plan, response, reserved, record, upstreamRequestID)
 	}
@@ -699,6 +730,31 @@ func (s *Server) runAttempt(
 			Done: true, Record: record, Status: http.StatusBadGateway,
 			ErrorCode: record.Error, ErrorMessage: record.ErrorMessage, Truncated: wasTruncated,
 			UpstreamRequestID: upstreamRequestID,
+		}
+	}
+	// A reply that spent its whole budget without one visible word is repaired
+	// like a rejection, not delivered like an answer: the budget escalates and
+	// the same request is retried, inside the ordinary compatibility budget.
+	// The tokens the starved attempt burned were real, so the limiter is
+	// settled with what the reply actually reports before the retry reserves
+	// its own. See reply_budget.go.
+	if allowCompatibility && starvedReply(plan.Format, plan.wireEndpoint(), body) {
+		current := currentOutputCap(plan.Payload, plan.Format, plan.wireEndpoint())
+		if escalated := escalateReplyBudget(current); escalated > current {
+			usedInput, usedOutput := replyUsage(plan.Format, plan.wireEndpoint(), body)
+			_ = s.limiter.AdjustTokens(r.Context(), reserved, usedInput+usedOutput)
+			record.Error = "reply_budget_exhausted"
+			record.ErrorMessage = fmt.Sprintf(
+				"The model spent all %d reply tokens without producing text; retried with %d.", current, escalated)
+			record.Retryable = true
+			s.logger.Info("reply budget exhausted before any visible output; retrying with a larger one",
+				"request_id", req.RequestID, "model", candidate.Route.Model.PublicAlias,
+				"provider", candidate.Route.Provider.Name, "from", current, "to", escalated)
+			return attemptOutcome{
+				Record: record, Status: response.StatusCode,
+				UpstreamRequestID: upstreamRequestID, Compatibility: true, ResetSkips: true,
+				LearnedReplyFloor: escalated,
+			}
 		}
 	}
 	translatedBody, inputTokens, outputTokens, translateErr := translateUpstreamResponse(req, plan, body)
@@ -848,6 +904,27 @@ func (s *Server) streamAttempt(
 			}
 		}
 		source = prepared
+	}
+	if plan.Format != "anthropic" {
+		// The same peek the Anthropic branch has always had, for the other two
+		// wires: a stream whose first event is an error never carried an answer,
+		// so nothing has been committed and the pool can still fail over. See
+		// prepareOpenAIStreamSource for the production request that needed it.
+		prepared, errorFrame, prepareErr := prepareOpenAIStreamSource(response)
+		if prepareErr != nil {
+			_ = response.Body.Close()
+			record.Error = valueOr(upstreamErrorCode(errorFrame), "upstream_stream_error")
+			record.ErrorMessage = valueOr(upstreamErrorMessage(errorFrame, candidate.Credential.Secret), prepareErr.Error())
+			record.Retryable = true
+			s.markCredentialFailure(r.Context(), candidate.Credential.ID, http.StatusBadGateway, 0)
+			return attemptOutcome{
+				Record: record, Status: http.StatusBadGateway,
+				ErrorCode: record.Error, ErrorMessage: record.ErrorMessage, UpstreamRequestID: upstreamRequestID,
+			}
+		}
+		if prepared != nil {
+			source = prepared
+		}
 	}
 	defer response.Body.Close()
 

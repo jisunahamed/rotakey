@@ -35,6 +35,12 @@ type dispatchState struct {
 	// Removed because the two are applied by different code: one deletes a key
 	// from the payload, the other from every item of an array inside it.
 	RemovedItemFields []itemFieldStrip
+	// MinOutputTokens holds, per model, the reply budget a starved attempt
+	// proved too small during this request — see reply_budget.go.
+	MinOutputTokens map[string]int64
+	// DetachReplayedIDs holds the model IDs whose provider refused a replayed
+	// message id's pairing during this request — see replayed_ids.go.
+	DetachReplayedIDs map[string]bool
 	// NativeResponsesUnavailable holds the model IDs whose provider answered 404
 	// at /responses during this request. A provider that never implemented the
 	// endpoint rejects every model the same way, so the retry translates to Chat
@@ -62,6 +68,9 @@ type upstreamPlan struct {
 	// SwitchedToResponses marks a plan that reached /responses only because the
 	// provider asked for it, so the answer can say so in a response header.
 	SwitchedToResponses bool
+	// ReplyFloor is the raised reply budget this plan carries after a starved
+	// attempt, so a success can prove the number worth remembering.
+	ReplyFloor int64
 	// ResponsesUnavailable carries the learned 404 into the attempt, which stops
 	// it from reading a Chat rejection as an invitation to try /responses again.
 	ResponsesUnavailable bool
@@ -90,6 +99,13 @@ type attemptOutcome struct {
 	// Its zero value means nothing was learned, which is why it is a value rather
 	// than a slice: at most one path is named per rejection.
 	LearnedItemStrip itemFieldStrip
+	// LearnedReplyFloor carries the reply budget the next attempt must allow,
+	// after this one came back with nothing visible in it. Zero means the
+	// budget was enough.
+	LearnedReplyFloor int64
+	// LearnedDetachIDs reports that the provider refused a replayed message
+	// id's pairing, so later plans send the turns without their ids.
+	LearnedDetachIDs bool
 	// ResetSkips clears the per-request skip set, because a request-shape
 	// failure is not the credential's fault.
 	ResetSkips bool
@@ -221,6 +237,13 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 	if dropMisplacedStreamOptions(payload, shape) {
 		plan.Removed = appendUniqueStrings(plan.Removed, "stream_options")
 	}
+	// Replayed ids leave the turns once a provider has refused their pairing —
+	// see replayed_ids.go. Only the Responses wire carries them.
+	if shape == "responses" &&
+		(state.DetachReplayedIDs[route.Model.ID] || s.learnedDetachReplayedIDs(ctx, route.Model.ID)) &&
+		stripReplayedItemIDs(payload) {
+		plan.Removed = appendUniqueStrings(plan.Removed, "input[].id")
+	}
 	learned := s.learnedCompatibilityReplacements(ctx, route.Model.ID, plan.wireEndpoint())
 	if learned == nil {
 		// A Redis outage returns no learned repairs at all, and writing this
@@ -235,20 +258,33 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 		plan.Replaced[from] = to
 	}
 
+	// The reply floors, read before the caps are filled so "the caller set no
+	// cap" still means what it says — see reply_budget.go. The learned floor
+	// only stands in where the route default would; the in-request floor was
+	// proved necessary moments ago by a reply with nothing visible in it, so it
+	// overrides even a cap the caller chose.
+	callerCapped := payloadCarriesOutputCap(payload)
 	if format == "anthropic" {
 		if numberAsInt64(payload["max_tokens"]) <= 0 {
 			payload["max_tokens"] = route.Model.DefaultMaxOutputTokens
 		}
-		plan.InputEstimate = estimateInputTokens(req.Raw, route.Model.Tokenizer)
-		plan.TokenCost = plan.InputEstimate + numberAsInt64(payload["max_tokens"])
 	} else {
-		input, output := prepareTokenReservation(
+		input, _ := prepareTokenReservation(
 			payload, plan.wireEndpoint(),
 			route.Model.DefaultMaxOutputTokens, route.Model.Tokenizer, req.Raw,
 		)
 		plan.InputEstimate = input
-		plan.TokenCost = input + output
 	}
+	if !callerCapped {
+		applyReplyFloor(payload, format, plan.wireEndpoint(), s.learnedReplyFloor(ctx, route.Model.ID))
+	}
+	if floor := state.MinOutputTokens[route.Model.ID]; floor > 0 && applyReplyFloor(payload, format, plan.wireEndpoint(), floor) {
+		plan.ReplyFloor = floor
+	}
+	if format == "anthropic" {
+		plan.InputEstimate = estimateInputTokens(req.Raw, route.Model.Tokenizer)
+	}
+	plan.TokenCost = plan.InputEstimate + currentOutputCap(payload, format, plan.wireEndpoint())
 	payload["model"] = upstreamModelForProvider(route.Provider, route.Model.UpstreamModel)
 	plan.Payload = payload
 	if plan.Encoded, err = json.Marshal(payload); err != nil {

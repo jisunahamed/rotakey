@@ -209,6 +209,15 @@ export function learnedFactSentence(fact: LearnedFact) {
       const pairs = (fact.renames ?? []).map(([from, to]) => `${from} to ${to}`);
       return `Renaming ${pairs.join(", ")} on ${endpointLabel(fact.endpoint)} requests. The provider named the spelling it accepts.`;
     }
+    case "raise_reply_budget": {
+      // The number is the fact. Without it the sentence reads as a policy;
+      // with it the operator can see the budget a request will actually get,
+      // and judge it against what the model costs.
+      const floor = formatNumber(Number(fact.parameters?.[0] ?? 0));
+      return `Asking for at least ${floor} reply tokens when the caller sets no limit of their own. A smaller budget came back spent entirely on the model's own reasoning, with no visible reply in it.`;
+    }
+    case "detach_replayed_ids":
+      return "Sending the conversation's earlier messages without their ids. The provider demanded each id's original reasoning record, which the app that sent the request does not have to give.";
     case "strip_item_fields": {
       // The path, not the bare name. These fields are put there by the caller's
       // own client rather than by Rotakey or by the operator, so the sentence has

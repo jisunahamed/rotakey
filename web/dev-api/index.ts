@@ -407,7 +407,9 @@ function learnedFacts(id: string): LearnedFact[] {
     { kind: "strip_parameters", endpoint: "responses", parameters: ["stream_options"], expires_at: hours(9) },
     // The Codex field. It is the longest sentence the panel can produce, so it is
     // the one worth having on screen while the layout is being judged.
-    { kind: "strip_item_fields", parameters: ["input[].internal_chat_message_metadata_passthrough"], expires_at: hours(23) }
+    { kind: "strip_item_fields", parameters: ["input[].internal_chat_message_metadata_passthrough"], expires_at: hours(23) },
+    { kind: "raise_reply_budget", parameters: ["4096"], expires_at: hours(18) },
+    { kind: "detach_replayed_ids", expires_at: hours(18) }
   ];
 }
 

@@ -53,7 +53,14 @@ export type ModelRoute = {
  * expires within a day, and a restart forgets all of it. So it is shown as facts
  * with an expiry, never as settings with a value. */
 export type LearnedFact = {
-  kind: "prefer_responses" | "no_responses" | "strip_parameters" | "rename_parameters" | "strip_item_fields";
+  kind:
+    | "prefer_responses"
+    | "no_responses"
+    | "strip_parameters"
+    | "rename_parameters"
+    | "strip_item_fields"
+    | "raise_reply_budget"
+    | "detach_replayed_ids";
   /** Which endpoint the fact applies to, on the two that are learned per
    * endpoint. Absent on the two that apply to the route as a whole. */
   endpoint?: string;

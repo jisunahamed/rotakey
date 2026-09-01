@@ -43,12 +43,14 @@ func TestLearnedRouteFactsReportsEveryRepairTheGatewayIsMaking(t *testing.T) {
 		compatibilityReplacement{From: "max_tokens", To: "max_output_tokens"})
 	server.rememberItemFieldStrip(ctx, modelID,
 		itemFieldStrip{Root: "input", Field: "internal_chat_message_metadata_passthrough"})
+	server.rememberReplyFloor(ctx, modelID, 4096)
+	server.rememberDetachReplayedIDs(ctx, modelID)
 
 	byKind := make(map[string]LearnedFact)
 	for _, fact := range server.learnedRouteFacts(ctx, modelID) {
 		byKind[fact.Kind] = fact
 	}
-	for _, kind := range []string{"prefer_responses", "no_responses", "strip_parameters", "rename_parameters", "strip_item_fields"} {
+	for _, kind := range []string{"prefer_responses", "no_responses", "strip_parameters", "rename_parameters", "strip_item_fields", "raise_reply_budget", "detach_replayed_ids"} {
 		fact, ok := byKind[kind]
 		if !ok {
 			t.Fatalf("%s was learned and is not reported", kind)
@@ -77,6 +79,10 @@ func TestLearnedRouteFactsReportsEveryRepairTheGatewayIsMaking(t *testing.T) {
 	if got := byKind["strip_item_fields"].Parameters; len(got) != 1 ||
 		got[0] != "input[].internal_chat_message_metadata_passthrough" {
 		t.Fatalf("stripped turn fields were %v", got)
+	}
+	// The number, so the panel can say what uncapped requests now ask for.
+	if got := byKind["raise_reply_budget"].Parameters; len(got) != 1 || got[0] != "4096" {
+		t.Fatalf("the reply floor was reported as %v", got)
 	}
 }
 
@@ -119,12 +125,14 @@ func TestForgetLearnedRouteStateClearsTheParameterFactsToo(t *testing.T) {
 	server.rememberResponsesEndpointMissing(ctx, modelID)
 	server.rememberCompatibilityParameters(ctx, modelID, []string{"stream_options"})
 	server.rememberItemFieldStrip(ctx, modelID, itemFieldStrip{Root: "input", Field: "vendor_metadata"})
+	server.rememberReplyFloor(ctx, modelID, 16384)
+	server.rememberDetachReplayedIDs(ctx, modelID)
 	for _, endpoint := range learnedRouteEndpoints {
 		server.rememberCompatibilityReplacement(ctx, modelID, endpoint,
 			compatibilityReplacement{From: "max_tokens", To: "max_output_tokens"})
 	}
-	if facts := server.learnedRouteFacts(ctx, modelID); len(facts) != 6 {
-		t.Fatalf("expected six facts before the reset, got %d", len(facts))
+	if facts := server.learnedRouteFacts(ctx, modelID); len(facts) != 8 {
+		t.Fatalf("expected eight facts before the reset, got %d", len(facts))
 	}
 
 	server.forgetLearnedRouteState(ctx, modelID)

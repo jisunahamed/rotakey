@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -556,4 +557,54 @@ func (c *limitedCapture) Write(data []byte) (int, error) {
 
 func (c *limitedCapture) Bytes() []byte {
 	return c.buffer.Bytes()
+}
+
+// prepareOpenAIStreamSource peeks at an OpenAI-shaped SSE stream before the
+// gateway commits a single byte to the caller.
+//
+// Some providers answer a streaming request with HTTP 200 and then say no
+// inside it. NVIDIA held one such connection open for 121 seconds and then
+// sent, as the first and only event:
+//
+//	ResourceExhausted: Worker local total request limit reached (118/32)
+//
+// By then the gateway had long since forwarded the 200 and its headers, and
+// failover was gone — the caller got the provider's overload as their answer,
+// with seven healthy keys sitting in the pool. The Anthropic path has peeked
+// before committing since the beginning (prepareAnthropicStreamSource); this
+// is the same rule for the other two wires.
+//
+// Only the first data frame is examined. An error there means the stream
+// never carried an answer and the attempt can still fail over; anything else
+// — a delta, a [DONE], any frame at all — commits the stream, prelude
+// included, byte for byte. A non-SSE content type passes through untouched:
+// deciding what a JSON body means on a streaming request is someone else's
+// repair.
+func prepareOpenAIStreamSource(response *http.Response) (io.Reader, []byte, error) {
+	if !strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
+		return nil, nil, nil
+	}
+	reader := bufio.NewReaderSize(response.Body, 128<<10)
+	prefix := &bytes.Buffer{}
+	for prefix.Len() <= 256<<10 {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			_, _ = prefix.Write(line)
+			trimmed := bytes.TrimSpace(line)
+			if bytes.HasPrefix(trimmed, []byte("data:")) {
+				data := bytes.TrimSpace(bytes.TrimPrefix(trimmed, []byte("data:")))
+				var event map[string]any
+				if json.Unmarshal(data, &event) == nil {
+					if _, failed := event["error"]; failed && event["error"] != nil || event["object"] == "error" {
+						return nil, data, fmt.Errorf("upstream sent an error before the stream carried anything")
+					}
+				}
+				return io.MultiReader(bytes.NewReader(prefix.Bytes()), reader), nil, nil
+			}
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("upstream stream ended before its first event")
+		}
+	}
+	return nil, nil, fmt.Errorf("upstream stream prelude exceeded 256 KiB without an event")
 }

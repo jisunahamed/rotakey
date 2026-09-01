@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -33,6 +34,10 @@ type LearnedFact struct {
 	//   rename_parameters the provider named a different spelling for these parameters
 	//   strip_item_fields the provider rejected these fields from inside the
 	//                     caller's own turns, so they go from every turn
+	//   raise_reply_budget a smaller reply budget came back spent entirely on
+	//                     thinking, so uncapped requests ask for at least this
+	//   detach_replayed_ids the provider demanded a replayed id's original
+	//                     reasoning item, so replayed messages go without ids
 	Kind string `json:"kind"`
 	// Endpoint the fact applies to, for the facts learned per endpoint. Empty on
 	// the two that apply to the route as a whole.
@@ -91,6 +96,18 @@ func (s *Server) learnedRouteFacts(ctx context.Context, modelID string) []Learne
 			facts = append(facts, LearnedFact{Kind: "strip_item_fields", Parameters: paths, ExpiresAt: expiresAt})
 		}
 	}
+	if floor := s.learnedReplyFloor(ctx, modelID); floor > 0 {
+		if expiresAt, ok := expiry(replyFloorKey(modelID)); ok {
+			facts = append(facts, LearnedFact{
+				Kind: "raise_reply_budget", Parameters: []string{strconv.FormatInt(floor, 10)}, ExpiresAt: expiresAt,
+			})
+		}
+	}
+	if s.learnedDetachReplayedIDs(ctx, modelID) {
+		if expiresAt, ok := expiry(detachReplayedKey(modelID)); ok {
+			facts = append(facts, LearnedFact{Kind: "detach_replayed_ids", ExpiresAt: expiresAt})
+		}
+	}
 	for _, endpoint := range learnedRouteEndpoints {
 		replacements := s.learnedCompatibilityReplacements(ctx, modelID, endpoint)
 		if len(replacements) == 0 {
@@ -126,6 +143,8 @@ func (s *Server) forgetLearnedRouteState(ctx context.Context, modelID string) {
 		responsesMissingKey(modelID),
 		compatibilityStripKey(modelID),
 		compatibilityItemStripKey(modelID),
+		replyFloorKey(modelID),
+		detachReplayedKey(modelID),
 	}
 	for _, endpoint := range learnedRouteEndpoints {
 		keys = append(keys, compatibilityReplaceKey(modelID, endpoint))
