@@ -7,7 +7,13 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check": "npm run typecheck && npm run check:css",
+    "check:css": "npm run lint:css && npm run check:css-vars && npm run check:css-classes",
+    "lint:css": "node scripts/lint-css.cjs",
+    "check:css-vars": "node scripts/check-css-vars.cjs",
+    "check:css-classes": "node scripts/check-css-classes.cjs",
+    "check:css-order": "node scripts/check-css-order.cjs"
   },
   "dependencies": {
     "@fontsource-variable/archivo": "5.3.0",
@@ -21,6 +27,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "stylelint": "^17.14.1",
     "typescript": "^5.7.2",
     "vite": "^6.0.5"
   },

@@ -1,98 +1,1731 @@
-/* Rotakey's routing-specific developer console. Loaded after the base system.
+/* Everything that belongs to one page, and the components that predate the kit.
  *
- * Every colour, length, and size here resolves to a token from tokens.css. The
- * console used to carry a private palette of its own, so a theme change had to
- * be made in two places and the two copies drifted apart; now there is one.
+ * This file is the residue of the split and it is meant to shrink. As each page
+ * moves onto `ui/`, its rules leave here and do not come back; the shared
+ * components near the top — the button, the field, the row, the status dot — go
+ * the same way as the primitives that replace them land.
+ *
+ * Read a rule here as "not yet a primitive" rather than as a decision.
  */
 
-/* The console runs a narrower rail than the base shell's default, and its pages
-   open with a dense command bar rather than a marketing headline, so they sit
-   closer to the top. Both are retuned through the shell's own variables rather
-   than through the rules that read them: --rail-width kept the rail and the
-   workspace offset in agreement while this file hardcoded 214px into both and
-   left the token saying 232px, and --pane-pad-top is what the full-height
-   workbench frame subtracts, so overriding the padding directly made the frame
-   subtract a padding that was no longer applied. */
-.app-shell {
-  --rail-width: 214px;
-  --pane-pad-top: var(--space-9);
+/* Eyebrows name the kind of thing you are looking at, so they are set in the
+   label face: wide, uppercase, unmistakably a machine label rather than prose. */
+.eyebrow {
+  margin-bottom: var(--space-3);
+  color: var(--iris);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  font-weight: 500;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
 }
 
-.sidebar {
-  padding: var(--space-6) var(--space-4) var(--space-5);
-  border-right-color: var(--rail-edge);
+/* An inline action inside a sentence — "Try again", "Clear filters". It has to
+   look like the link it reads as, not like a button squeezed into a paragraph. */
+.link-button {
+  padding: 0;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
-.wordmark {
-  padding: var(--space-1) var(--space-4) var(--space-7);
+.link-button:hover {
+  text-decoration-thickness: 2px;
 }
 
-.wordmark__mark,
-.nav-item,
-.rail-search,
-.account__menu,
-.button,
-.icon-button,
-.login-panel,
-.auth-panel,
-.palette,
-.sheet,
-.toast {
+.button {
+  display: inline-flex;
+  min-height: var(--control-h-md);
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid transparent;
   border-radius: var(--radius-fitting);
-}
-
-/* The rail is denser than the base shell's default, but only while it is a rail.
-   Once it becomes a touch drawer the 44px floor from styles.css has to survive,
-   and a base-layer 40px here beat it at every width — the patch that put it back
-   started at 650px, leaving the whole 651-900px range, where the drawer is
-   already in use, on a 40px target. */
-.nav-item {
-  gap: var(--space-5);
-  padding: 0 var(--space-4);
+  cursor: pointer;
   font-size: var(--text-sm);
+  font-weight: 550;
+  transition: background var(--dur-state) var(--ease), border-color var(--dur-state) var(--ease), color var(--dur-state) var(--ease);
 }
 
-@media (min-width: 901px) {
-  .nav-item { min-height: var(--control-h-md); }
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
 }
 
-/* The rail keeps its own dark surfaces in both themes, and the active item is
-   marked with the one interactive hue rather than a second accent. The bar is 3px
-   for the same reason the selected row's is: this and the selected row are the two
-   "look here" markers an operator tracks at the same time, and the rail's was 2px
-   against the row's 3px, which read as two different devices rather than one. */
-.nav-item.is-active {
-  background: var(--rail-raised);
-  border-color: var(--rail-edge);
+.button--primary {
+  color: var(--text-inverse);
+  background: var(--iris);
+}
+
+.button--primary:hover:not(:disabled) {
+  background: var(--iris-hover);
+}
+
+.button--quiet {
+  color: var(--text-strong);
+  background: var(--surface-raised);
+  border-color: var(--edge-strong);
+}
+
+.button--quiet:hover:not(:disabled) {
+  background: var(--surface-sunken);
+  border-color: var(--iris);
+}
+
+.button--danger {
+  color: var(--fault);
+  background: transparent;
+  border-color: color-mix(in srgb, var(--fault-mark) 40%, var(--edge));
+}
+
+.button--danger:hover:not(:disabled) {
+  background: var(--fault-wash);
+  border-color: var(--fault-mark);
+}
+
+/* Square, and the same height as a labelled button, so the two line up when they
+   sit in the same strip — they used to differ by two pixels. On small screens it
+   grows to the touch floor, where nothing is being clicked with a mouse. */
+.icon-button {
+  display: inline-grid;
+  width: var(--control-h-md);
+  height: var(--control-h-md);
+  flex: 0 0 auto;
+  place-items: center;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-fitting);
+  cursor: pointer;
+  transition: background var(--dur-state) var(--ease), border-color var(--dur-state) var(--ease);
+}
+
+.icon-button:hover {
+  background: color-mix(in srgb, currentColor 7%, transparent);
+  border-color: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+/* The key prefix reads as a value you check rather than a value you edit: the icon
+   is what marks it as a credential, and the label above it names what it is. */
+.key-prefix {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.key-prefix small,
+.key-prefix code {
+  display: block;
+}
+
+.key-prefix small {
+  margin-bottom: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+}
+
+.section-block {
+  margin-top: var(--space-10);
+}
+
+.section-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-7);
+  margin-bottom: var(--space-6);
+}
+
+.section-heading h2,
+.section-heading p {
+  margin-bottom: 0;
+}
+
+.section-heading > span {
+  color: var(--text-muted);
+  font-family: var(--font-data);
+  font-size: var(--text-mini);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A caveat under a section's heading — why a figure in it is missing, most often.
+   It sits below the h2 rather than replacing it, so the heading keeps naming the
+   section while the note says what could not be read. */
+.section-note {
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-mini);
+  line-height: var(--leading-snug);
+}
+
+/* The capacity debugger, the model ranking and the failure list are full-bleed
+   stacks of rows. Clipping them to the panel keeps the first and last row inside
+   the rounded corner instead of insetting every row to avoid it. */
+.capacity-debugger,
+.model-ranking,
+.failure-panel {
+  overflow: hidden;
+}
+
+/* An EmptyState carries its own frame so it can stand alone on a page, and the
+   frame includes the lit top edge: on the pages where it replaces a whole list it
+   is the only thing on the canvas, so it has to read as a slab resting on it.
+   Dropped into the debugger it is already inside a panel that carries that edge, so
+   the frame comes back off and the elevation goes with it — a lit edge a few pixels
+   inside another one reads as a seam rather than as depth. */
+.capacity-debugger .empty-state {
+  min-height: 200px;
+  padding: var(--space-9);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+/* The log list's empty state keeps its frame — console.css only insets it — but not
+   the elevation, for the same reason: the workbench around it is already a slab. */
+.log-resource-rows > .empty-state {
+  box-shadow: none;
+}
+
+/* The chart and the attention queue sit side by side in .signal-grid. A grid
+   child needs an explicit minimum or it refuses to shrink below its widest row,
+   and laying each panel out as a column hands the leftover height to the chart
+   and the queue rather than stretching their headers. */
+.signal-panel,
+.attention-panel {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.signal-panel .signal-chart,
+.attention-panel .attention-list {
+  flex: 1;
+}
+
+/* console.css tints the latency and error swatches off the base legend swatch and
+   leaves requests on the default. Naming it here means all three keys are stated
+   rather than one of them depending on what the base happens to be. */
+.signal-legend .is-request {
+  background: var(--iris);
+}
+
+/* The dot is the console's smallest readout, so each state gets its own hue plus
+   a wash halo: the ring is what makes an 8px dot legible in peripheral vision. */
+.status-dot {
+  display: inline-block;
+  width: var(--icon-dot);
+  height: var(--icon-dot);
+  flex: 0 0 auto;
+  background: var(--idle-mark);
+  border-radius: var(--radius-pill);
+}
+
+.status-dot--healthy {
+  background: var(--live-mark);
+  box-shadow: 0 0 0 3px var(--live-wash);
+}
+
+.status-dot--partial,
+.status-dot--cooldown {
+  background: var(--hold-mark);
+  box-shadow: 0 0 0 3px var(--hold-wash);
+}
+
+.status-dot--exhausted,
+.status-dot--quarantined {
+  background: var(--fault-mark);
+  box-shadow: 0 0 0 3px var(--fault-wash);
+}
+
+.status-dot--disabled {
+  background: var(--idle-mark);
+  opacity: 0.55;
+}
+
+/* "Not read yet" is not the same as "off", so it reads as a hollow ring rather
+   than a filled dot: nothing is being claimed about the segment's health. Without
+   a rule of its own it fell back to the same flat grey as idle. */
+.status-dot--unknown {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--edge-strong);
+}
+
+/* The empty state is the only thing on the page when it appears — a list that
+   could not load, a page with nothing in it yet — so it takes the lit top edge
+   that says "slab resting on the canvas" rather than reading as a hole cut in it. */
+.empty-state {
+  display: grid;
+  min-height: 280px;
+  place-items: center;
+  align-content: center;
+  padding: var(--space-9);
+  text-align: center;
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+  box-shadow: var(--lift-panel);
+}
+
+.empty-state h3 {
+  font-size: var(--text-md);
+}
+
+.empty-state p {
+  max-width: 460px;
+  margin-bottom: var(--space-7);
+  color: var(--text-muted);
+  line-height: var(--leading-normal);
+}
+
+.resource-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.68fr) minmax(520px, 1.7fr);
+  min-height: 640px;
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+}
+
+.resource-list {
+  border-right: 1px solid var(--edge);
+}
+
+.resource-item {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 10px minmax(0, 1fr) auto 15px;
+  min-height: var(--row-h-xl);
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  color: var(--text-strong);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--edge);
+  cursor: pointer;
+  text-align: left;
+}
+
+.resource-item:hover {
+  background: var(--surface-sunken);
+}
+
+/* The bar stays 3px: the same width marks the active rail item and a failed key,
+   and dropping it to 2px here made "this is the row you are looking at" the one
+   marker in the console thinner than the rest. */
+.resource-item.is-selected {
+  background: var(--select-wash);
   box-shadow: var(--select-bar);
 }
 
-.workspace {
-  background: var(--surface-canvas);
+.resource-item strong,
+.resource-item small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* A wider measure and tighter side gutters than the base shell; the top padding
-   is retuned through --pane-pad-top above. */
-.main-pane {
-  width: min(100%, 1600px);
-  padding-right: clamp(var(--space-8), 3vw, var(--space-11));
-  padding-left: clamp(var(--space-8), 3vw, var(--space-11));
+.resource-item strong {
+  font-size: var(--text-base);
 }
 
-.page-header {
-  margin-bottom: var(--space-8);
+.resource-item small {
+  margin-top: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
 }
 
-.page-header h1,
-.console-panel h2,
-.overview-inspector h2 {
-  font-family: var(--font-display);
+.resource-item__count {
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.resource-inspector {
+  min-width: 0;
+}
+
+.inspector-header {
+  display: flex;
+  min-height: 124px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-7);
+  padding: var(--space-8) var(--space-8) var(--space-7);
+}
+
+.inspector-header code {
+  display: block;
+  overflow: hidden;
+  max-width: 600px;
+  color: var(--text-muted);
+  font-size: var(--text-mini);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The header now carries turn off, test, edit and delete, which is one button
+   more than fits a narrow inspector, so the row wraps instead of squeezing. */
+.inspector-header .button-row {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.inspector-stats {
+  display: grid;
+  /* The credit cell only appears on providers whose keys track a balance, so the
+     row sizes itself to whatever it is given rather than to a fixed three. */
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  border-top: 1px solid var(--edge);
+  border-bottom: 1px solid var(--edge);
+}
+
+.inspector-stats span {
+  min-height: var(--row-h-lg);
+  padding: var(--space-5) var(--space-6);
+  color: var(--text-muted);
+  border-right: 1px solid var(--edge);
+  font-size: var(--text-micro);
+}
+
+.inspector-stats span:last-child {
+  border-right: 0;
+}
+
+.inspector-stats strong {
+  display: block;
+  margin-bottom: var(--space-1);
+  color: var(--text-strong);
+  font-family: var(--font-data);
+  font-size: var(--text-base);
+  font-variant-numeric: tabular-nums;
+}
+
+.pool-capacity {
+  margin: var(--space-7) 0 var(--space-2);
+  border: 1px solid var(--edge);
+  background: var(--surface-sunken);
+}
+
+.pool-capacity > header {
+  display: flex;
+  min-height: var(--row-h-lg);
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-6);
+  padding: var(--space-5);
+  border-bottom: 1px solid var(--edge);
+}
+
+.pool-capacity > header h3 {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-md);
+}
+
+.pool-capacity > header > span {
+  color: var(--text-muted);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.pool-capacity__limits {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.pool-capacity__limits > div {
+  min-width: 0;
+  padding: var(--space-5) var(--space-4);
+  border-right: 1px solid var(--edge);
+}
+
+.pool-capacity__limits > div:last-child {
+  border-right: 0;
+}
+
+.pool-capacity__limits span,
+.pool-capacity__limits strong,
+.pool-capacity__limits small {
+  display: block;
+}
+
+/* Each cell names a rate-limit dimension in caps, which is what the label face
+   is for. */
+.pool-capacity__limits span {
+  color: var(--text-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
+}
+
+.pool-capacity__limits strong {
+  margin-top: var(--space-2);
+  overflow: hidden;
+  font-family: var(--font-data);
+  font-size: var(--text-mini);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pool-capacity__limits small {
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+}
+
+.pool-capacity > p {
+  margin: 0;
+  padding: var(--space-4) var(--space-5);
+  color: var(--text-muted);
+  border-top: 1px solid var(--edge);
+  font-size: var(--text-micro);
+}
+
+/* A key that failed validation gets a fault bar down its left edge, the same
+   marker the rail uses for the active page, so "look here" reads one way. */
+.dense-row.has-warning {
+  box-shadow: inset 3px 0 0 var(--fault-mark);
+}
+
+.dense-row.has-warning small {
+  color: var(--fault);
+}
+
+.inline-empty {
+  min-height: var(--row-h-xl);
+  margin: 0;
+  padding: var(--space-8) var(--space-5);
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+  border: 1px dashed var(--edge-strong);
+  font-size: var(--text-sm);
+}
+
+.dense-table {
+  border: 1px solid var(--edge);
+}
+
+.dense-row {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 9px minmax(170px, 1.2fr) minmax(120px, 1fr) 14px;
+  min-height: var(--row-h-lg);
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-4) var(--space-5);
+  color: var(--text-strong);
+  background: var(--surface-raised);
+  border: 0;
+  border-bottom: 1px solid var(--edge);
+  cursor: pointer;
+  text-align: left;
+}
+
+.dense-row:last-child {
+  border-bottom: 0;
+}
+
+.dense-row:hover {
+  background: var(--surface-sunken);
+}
+
+.dense-row strong,
+.dense-row code,
+.dense-row small {
+  display: block;
+}
+
+.dense-row strong,
+.dense-row code {
+  overflow: hidden;
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dense-row small,
+.dense-row > span:nth-child(3) {
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.mono-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes sheet-in {
+  from { transform: translateX(24px); opacity: 0.7; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes confirm-in {
+  from { transform: scale(0.98); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.form-stack {
+  display: grid;
+  gap: var(--space-6);
+}
+
+.field-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-5);
+}
+
+.pricing-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-5);
+}
+
+.field {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.field > span,
+fieldset legend {
+  color: var(--text-strong);
+  font-size: var(--text-mini);
   font-weight: 500;
 }
 
-.page-header h1 {
-  font-size: clamp(var(--text-xl), 2.3vw, var(--text-2xl));
-  letter-spacing: var(--track-display);
+.field small {
+  display: inline;
+  margin-left: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  font-weight: 400;
+}
+
+.field input,
+.field textarea,
+.field select,
+.settings-row input,
+.settings-row select {
+  width: 100%;
+  min-height: var(--control-h-md);
+  padding: var(--space-4);
+  color: var(--text-strong);
+  background: var(--surface-raised);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--radius-fitting);
+  font-size: var(--text-sm);
+}
+
+/* A number field is a readout as much as a control: the rate limits, the retention
+   days and the wait ceiling are all typed over a value the server put there, and a
+   proportional 1 makes the caret jump as the digits change width under it. */
+.field input[type="number"],
+.settings-row input[type="number"] {
+  font-variant-numeric: tabular-nums;
+}
+
+.field textarea {
+  min-height: 100px;
+  resize: vertical;
+  font-family: var(--font-data);
+  line-height: var(--leading-normal);
+}
+
+.field input::placeholder,
+.field textarea::placeholder {
+  color: color-mix(in srgb, var(--text-muted) 70%, transparent);
+}
+
+.toggle-row {
+  display: flex;
+  min-height: var(--row-h-lg);
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-7);
+  padding: var(--space-4) 0;
+  border-bottom: 1px solid var(--edge);
+}
+
+.toggle-row strong,
+.toggle-row small {
+  display: block;
+}
+
+.toggle-row strong {
+  font-size: var(--text-sm);
+}
+
+.toggle-row small {
+  margin-top: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  line-height: var(--leading-snug);
+}
+
+.toggle-input {
+  width: 36px;
+  height: 20px;
+  flex: 0 0 auto;
+  appearance: none;
+  background: var(--edge-strong);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: background var(--dur-state) var(--ease);
+}
+
+/* The knob has to stay light against both the grey off-track and the iris
+   on-track, so it takes the rail's ink: the one token that is light in both
+   themes because the rail itself never changes. */
+.toggle-input::before {
+  display: block;
+  width: var(--icon-check);
+  height: var(--icon-check);
+  margin: 1px;
+  background: var(--rail-text);
+  border-radius: var(--radius-pill);
+  content: "";
+  transition: transform var(--dur-state) var(--ease);
+}
+
+.toggle-input:checked {
+  background: var(--iris);
+  border-color: var(--iris);
+}
+
+.toggle-input:checked::before {
+  transform: translateX(16px);
+}
+
+/* A toggle that is not available yet reads as unavailable — the label dims with the
+   control, so the pair is never a live-looking switch that refuses to move. Its
+   description says what would make it available. */
+.toggle-row.is-disabled {
+  cursor: default;
+}
+
+.toggle-row.is-disabled strong {
+  color: var(--text-muted);
+}
+
+.toggle-input:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* The note sits under a legend that already carries bottom space, so it pulls
+   back up rather than reading as a second paragraph. */
+.fieldset-note {
+  margin: calc(var(--space-3) * -1) 0 var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  line-height: var(--leading-snug);
+}
+
+.rate-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-5);
+}
+
+.rate-grid .field:last-child {
+  grid-column: 2;
+}
+
+.rate-grid--compact {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.rate-grid--compact .field:last-child {
+  grid-column: auto;
+}
+
+/* A rate field's label is a limit expression (rpm, tpd), so it is set in the
+   data face and the plain-language hint under it drops back to body. */
+.rate-grid .field > span {
+  display: flex;
+  min-height: 27px;
+  flex-direction: column;
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
+}
+
+.rate-grid .field small {
+  margin: var(--space-1) 0 0;
+  font-family: var(--font-body);
+  font-size: var(--text-micro);
+}
+
+.stepper {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin-bottom: var(--space-8);
+  border-bottom: 1px solid var(--edge);
+}
+
+.stepper span {
+  position: relative;
+  padding: 0 0 var(--space-4);
+  color: var(--text-muted);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
+}
+
+.stepper span::after {
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: transparent;
+  content: "";
+}
+
+.stepper span.is-active {
+  color: var(--iris);
+}
+
+.stepper span.is-active::after {
+  background: var(--iris);
+}
+
+.credential-entry-list {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.validation-action {
+  display: flex;
+  min-height: 64px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-6);
+  padding: var(--space-5);
+  background: var(--iris-wash);
+  border: 1px solid var(--iris-edge);
+}
+
+.validation-action strong,
+.validation-action small {
+  display: block;
+}
+
+.validation-action strong {
+  font-size: var(--text-sm);
+}
+
+.validation-action small {
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+}
+
+.model-catalog {
+  display: grid;
+  gap: var(--space-4);
+  min-height: 220px;
+  padding: var(--space-5);
+  border: 1px solid var(--edge);
+}
+
+.model-catalog > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+
+.model-catalog > header strong,
+.model-catalog > header small {
+  display: block;
+}
+
+.model-catalog > header strong {
+  font-size: var(--text-sm);
+}
+
+.model-catalog > header small {
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The search field draws its own frame here rather than using the .field input
+   rule, because the magnifier icon has to sit inside that frame. */
+.catalog-search {
+  display: flex;
+  min-height: var(--control-h-md);
+  align-items: center;
+  gap: var(--space-4);
+  padding: 0 var(--space-4);
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+  border: 1px solid var(--edge);
+}
+
+.catalog-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+.catalog-select-all {
+  display: flex;
+  min-height: var(--control-h-lg);
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-5);
+  background: color-mix(in srgb, var(--iris) 5%, var(--surface-raised));
+  border: 1px solid var(--iris-edge);
+  cursor: pointer;
+}
+
+.catalog-select-all input {
+  width: var(--icon-check);
+  height: var(--icon-check);
+}
+
+.catalog-select-all span,
+.catalog-select-all strong,
+.catalog-select-all small { display: block; }
+
+.catalog-select-all strong { font-size: var(--text-mini); }
+
+.catalog-select-all small { margin-top: var(--space-1); color: var(--text-muted); font-size: var(--text-micro); font-variant-numeric: tabular-nums; }
+
+.model-catalog__list {
+  display: grid;
+  max-height: 390px;
+  overflow: auto;
+  border: 1px solid var(--edge);
+}
+
+.catalog-model {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(210px, 0.7fr);
+  align-items: center;
+  gap: var(--space-6);
+  min-height: var(--row-h-lg);
+  padding: var(--space-4) var(--space-5);
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--edge);
+}
+
+.catalog-model:last-child {
+  border-bottom: 0;
+}
+
+.catalog-model.is-existing {
+  background: var(--surface-sunken);
+}
+
+.catalog-model > label:first-child {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: var(--space-4);
+  cursor: pointer;
+}
+
+.catalog-model input[type="checkbox"] {
+  width: var(--icon-check);
+  height: var(--icon-check);
+  margin: var(--space-1) 0 0;
+  accent-color: var(--iris);
+}
+
+.catalog-model code,
+.catalog-model small {
+  display: block;
+}
+
+.catalog-model code {
+  overflow: hidden;
+  font-size: var(--text-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalog-model small {
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+}
+
+.catalog-alias {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.catalog-alias span {
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+}
+
+.catalog-alias input {
+  width: 100%;
+  min-height: var(--control-h-sm);
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
+}
+
+.credential-entry-list__intro,
+.credential-entry > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-6);
+}
+
+.credential-entry-list__intro strong,
+.credential-entry-list__intro small {
+  display: block;
+}
+
+.credential-entry-list__intro strong {
+  font-size: var(--text-sm);
+}
+
+.credential-entry-list__intro small {
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+}
+
+.credential-entry {
+  display: grid;
+  gap: var(--space-6);
+  padding: var(--space-6);
+  background: var(--surface-sunken);
+  border: 1px solid var(--edge);
+}
+
+.credential-entry > header {
+  min-height: var(--control-h-xs);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--edge);
+}
+
+.credential-entry > header > strong {
+  font-family: var(--font-data);
+  font-size: var(--text-mini);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.credential-entry > header .button {
+  min-height: var(--control-h-xs);
+  padding: var(--space-2) var(--space-4);
+}
+
+.primary-choice {
+  display: flex;
+  width: fit-content;
+  align-items: flex-start;
+  gap: var(--space-4);
+  cursor: pointer;
+}
+
+.primary-choice input {
+  width: var(--icon-check);
+  height: var(--icon-check);
+  margin: var(--space-1) 0 0;
+  accent-color: var(--iris);
+}
+
+.primary-choice strong,
+.primary-choice small {
+  display: block;
+}
+
+.primary-choice strong {
+  font-size: var(--text-mini);
+}
+
+.primary-choice small {
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+}
+
+.review-list {
+  border: 1px solid var(--edge);
+}
+
+.review-list > div {
+  display: grid;
+  min-height: var(--row-h-xl);
+  grid-template-columns: 120px 1fr;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  border-bottom: 1px solid var(--edge);
+}
+
+.review-list > div:last-child {
+  border-bottom: 0;
+}
+
+.review-list span {
+  color: var(--text-muted);
+  font-size: var(--text-mini);
+}
+
+.review-list strong,
+.review-list code,
+.review-list small {
+  display: block;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.review-list code,
+.review-list small {
+  margin-top: var(--space-2);
+  color: var(--text-muted);
+}
+
+.notice {
+  margin-bottom: var(--space-6);
+  padding: var(--space-5);
+  color: var(--text-strong);
+  background: var(--iris-wash);
+  border-left: 3px solid var(--iris);
+  font-size: var(--text-mini);
+  line-height: var(--leading-snug);
+}
+
+.notice--danger {
+  background: var(--fault-wash);
+  border-color: var(--fault-mark);
+}
+
+/* A warning is a lower rung than a fault, not a second fault: something to look
+   at, on a key that is still carrying traffic. */
+.notice--warning {
+  background: var(--hold-wash);
+  border-color: var(--hold-mark);
+}
+
+.notice--success {
+  background: var(--live-wash);
+  border-color: var(--live-mark);
+}
+
+/* A notice that carries its own action puts the sentence and the button on one
+   line, and stacks them when the inspector is too narrow to hold both. */
+.notice-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+}
+
+.notice-line > .button {
+  flex: 0 0 auto;
+}
+
+.wizard-validation-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-6);
+}
+
+.wizard-validation-notice .button {
+  flex: 0 0 auto;
+}
+
+/* The log page is a full-height workbench rather than a scrolling document: the
+   list and the inspector scroll independently, which console.css sets up for
+   .resource-page. This only keeps the page from adding a second scrollbar. */
+.log-page {
+  min-width: 0;
+}
+
+.log-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border-top: 1px solid var(--edge);
+  border-left: 1px solid var(--edge);
+}
+
+.log-detail-grid > div {
+  min-height: var(--row-h-xl);
+  padding: var(--space-5);
+  border-right: 1px solid var(--edge);
+  border-bottom: 1px solid var(--edge);
+}
+
+.log-detail-grid span,
+.log-detail-grid code,
+.log-detail-grid strong {
+  display: block;
+}
+
+.log-detail-grid span {
+  margin-bottom: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+}
+
+.log-detail-grid code,
+.log-detail-grid strong {
+  font-size: var(--text-mini);
+  font-variant-numeric: tabular-nums;
+}
+
+.attempt-list {
+  border: 1px solid var(--edge);
+}
+
+/* An attempt row carries a key label and an upstream error string, neither of
+   which has a length the console controls. The middle column needs the explicit
+   minimum or the grid refuses to shrink it below the longest error and pushes the
+   row past the inspector; the break rule is what lets that error use the height it
+   needs instead of forcing the page sideways. */
+.attempt-list > div {
+  display: grid;
+  grid-template-columns: 25px minmax(0, 1fr) 140px 80px;
+  min-height: var(--row-h-md);
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--edge);
+  font-size: var(--text-mini);
+  font-variant-numeric: tabular-nums;
+}
+
+.attempt-list > div > strong,
+.attempt-list > div > code,
+.attempt-list > div > small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.attempt-list > div:last-child {
+  border-bottom: 0;
+}
+
+.attempt-list > div > span {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
+}
+
+.attempt-list small {
+  color: var(--text-muted);
+}
+
+.body-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-5);
+  margin-top: var(--space-7);
+}
+
+.body-grid section {
+  min-width: 0;
+}
+
+.body-grid h3 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--row-h-sm);
+  margin: 0;
+  font-size: var(--text-mini);
+}
+
+/* A truncated body is a caveat about the evidence, not an error, so it reads in
+   the hold hue. */
+.body-grid h3 small {
+  color: var(--hold);
+  font-size: var(--text-micro);
+}
+
+/* Code samples stay dark in both themes for the same reason the rail does: a
+   terminal-coloured block is recognisably a thing you copy, not page prose. The
+   rail tokens are the palette's only theme-independent set, so they own it. */
+.body-grid pre,
+.code-example pre {
+  overflow: auto;
+  margin: 0;
+  padding: var(--space-6);
+  color: var(--rail-text);
+  background: var(--rail);
+  border: 1px solid var(--rail-edge);
+  font-size: var(--text-micro);
+  line-height: var(--leading-normal);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.access-key-panel {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.9fr) minmax(280px, 1.3fr) auto;
+  align-items: center;
+  gap: var(--space-9);
+  padding: var(--space-8);
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+}
+
+.key-prefix svg {
+  color: var(--live);
+}
+
+.key-prefix code {
+  font-size: var(--text-base);
+}
+
+.access-key-panel > div:nth-child(2) strong {
+  font-size: var(--text-sm);
+}
+
+.access-key-panel > div:nth-child(2) p {
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-mini);
+  line-height: var(--leading-snug);
+}
+
+.code-example {
+  max-width: 900px;
+}
+
+.settings-list {
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+}
+
+.settings-row {
+  display: flex;
+  min-height: 88px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-9);
+  padding: var(--space-6);
+  border-bottom: 1px solid var(--edge);
+}
+
+.settings-row:last-child {
+  border-bottom: 0;
+}
+
+.settings-row strong,
+.settings-row small {
+  display: block;
+}
+
+.settings-row strong {
+  font-size: var(--text-sm);
+}
+
+.settings-row small {
+  max-width: 540px;
+  margin-top: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  line-height: var(--leading-snug);
+}
+
+.settings-row > div {
+  display: flex;
+  width: 150px;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.settings-row input {
+  width: 92px;
+}
+
+.settings-row code {
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+}
+
+/* A row whose control column carries a button as well as a field takes the width
+   it needs, rather than the 150px slot sized for a four-digit number. */
+.settings-row--wide > div {
+  width: auto;
+  flex-shrink: 0;
+}
+
+/* The transfer rows carry a checkbox next to a button, so they need more room
+   than the fixed-width numeric controls the other settings rows use. */
+.config-transfer {
+  margin-top: var(--space-9);
+}
+
+.config-transfer .settings-row > div {
+  width: auto;
+  flex-shrink: 0;
+  gap: var(--space-6);
+}
+
+.config-transfer__secrets {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-mini);
+  white-space: nowrap;
+}
+
+.config-transfer__secrets input {
+  width: auto;
+}
+
+.config-transfer__result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-6);
+  border-top: 1px solid var(--edge);
+}
+
+.config-transfer__result strong {
+  font-size: var(--text-sm);
+}
+
+/* The import summary is a column of created-and-updated counts, so the figures line
+   up under each other even though the list is set in the body face. */
+.config-transfer__result ul {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding-left: var(--space-7);
+  color: var(--text-muted);
+  font-size: var(--text-mini);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Takes the panel radius and elevation but keeps its 3px live bar as its only
+   border: painting that bar the neutral hairline colour, as the shared panel rule
+   would, turns the one marker that says "this is already secure" into a grey
+   line. */
+.security-baseline {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-5);
+  margin-top: var(--space-9);
+  padding: var(--space-6);
+  background: var(--live-wash);
+  border-left: 3px solid var(--live-mark);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--lift-panel);
+}
+
+.security-baseline svg {
+  flex: 0 0 auto;
+  color: var(--live);
+}
+
+.security-baseline strong {
+  display: block;
+  font-size: var(--text-sm);
+}
+
+.security-baseline p {
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  line-height: var(--leading-snug);
+}
+
+/* A revealed secret is shown on the dark code surface so it is visibly a value
+   to copy rather than page content, and so its copy button is the only bright
+   thing in the block. */
+.secret-value {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  background: var(--rail);
+  border: 1px solid var(--rail-edge);
+}
+
+/* This is the only time the gateway key is ever displayed, so it wraps to as many
+   lines as it needs rather than being cut off at the panel edge: an operator whose
+   clipboard access is blocked has to be able to read the whole value and type it.
+   The minimum is what stops the long unbroken string widening the sheet instead. */
+.secret-value code {
+  min-width: 0;
+  flex: 1;
+  color: var(--rail-text);
+  font-size: var(--text-mini);
+  overflow-wrap: anywhere;
+}
+
+.secret-value .button {
+  flex: 0 0 auto;
+  color: var(--rail-text);
+  background: var(--rail-raised);
+  border-color: var(--rail-edge);
+}
+
+.confirmation-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-6);
+  font-size: var(--text-mini);
+}
+
+.confirmation-check input {
+  width: var(--icon-check);
+  height: var(--icon-check);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* A failed field states what to do about it, in the place the eye already is. */
+.field-error {
+  display: block;
+  margin-top: var(--space-2);
+  color: var(--fault);
+  font-size: var(--text-micro);
+  font-weight: 500;
+}
+
+.field input[aria-invalid="true"],
+.field textarea[aria-invalid="true"],
+.field select[aria-invalid="true"] {
+  border-color: var(--fault-mark);
+}
+
+@media (max-width: 1280px) {
+.resource-layout {
+    grid-template-columns: 260px minmax(0, 1fr);
+  }
+
+.log-detail-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+.resource-layout {
+    grid-template-columns: 1fr;
+  }
+
+.pool-capacity__limits {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+.pool-capacity__limits > div {
+    border-bottom: 1px solid var(--edge);
+  }
+
+/* The list stops being a column beside the inspector and becomes a strip of
+     cards above it, so its dividing hairline moves with it. */
+  .resource-list {
+    display: flex;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--edge);
+  }
+
+.resource-item {
+    min-width: 260px;
+    border-right: 1px solid var(--edge);
+    border-bottom: 0;
+  }
+}
+
+@media (max-width: 650px) {
+/* Nothing here is clicked with a mouse, so every control pads out to the 44px
+     minimum a fingertip needs in both axes rather than the 36–40px that is
+     comfortable under a pointer. The desktop sizes above are untouched, so this
+     costs nothing visually where a mouse is in use.
+
+     The checkboxes and the switch are still left alone deliberately: each one is
+     wrapped in a label that is itself taller than 44px, so the tappable area is
+     the whole row and growing the control would only make it look heavy. */
+  .button,
+  .credential-entry > header .button,
+  .account__item,
+  .account__theme,
+  .catalog-search,
+  .catalog-alias input,
+  .field input,
+  .field select,
+  .settings-row input,
+  .settings-row select,
+  .nav-item,
+  .rail-search,
+  .palette__hit {
+    min-height: var(--control-h-lg);
+  }
+
+.icon-button {
+    width: var(--control-h-lg);
+    height: var(--control-h-lg);
+    min-width: var(--control-h-lg);
+    min-height: var(--control-h-lg);
+  }
+
+/* These are labels wrapping a 16px box, so they have no height of their own to
+     grow — the padding is what makes the row a target rather than the box. The
+     export checkbox decides whether the file carries plaintext API keys, so it is
+     the last control in the console that should be hard to hit accurately. */
+  .primary-choice,
+  .confirmation-check,
+  .config-transfer__secrets {
+    min-height: var(--control-h-lg);
+    align-items: center;
+    padding: var(--space-3) 0;
+  }
+
+/* Its box must not stretch with the number fields the rule above it sizes. */
+  .config-transfer__secrets input {
+    min-height: 0;
+  }
+
+.inspector-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+.inspector-stats {
+    grid-template-columns: 1fr 1fr;
+  }
+
+/* The third cell is a rate-limit summary on a key row and the translation
+     behaviour on a model row — both are the reason the operator opened the row, so
+     the cell stacks under the label rather than being dropped. The dot and the
+     chevron span the two lines. */
+  .dense-row {
+    grid-template-columns: 9px minmax(0, 1fr) 14px;
+    grid-template-rows: auto auto;
+    row-gap: var(--space-2);
+  }
+
+.dense-row > :first-child { grid-column: 1; grid-row: 1; }
+
+.dense-row > span:nth-child(2) { grid-column: 2; grid-row: 1; }
+
+.dense-row > span:nth-child(3) { grid-column: 2; grid-row: 2; }
+
+.dense-row > svg { grid-column: 3; grid-row: 1 / -1; align-self: center; }
+
+.field-pair,
+  .pricing-fields,
+  .body-grid,
+  .access-key-panel {
+    grid-template-columns: 1fr;
+  }
+
+.credential-entry-list__intro {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+/* A notice that ends in a button cannot keep the button on the same line at
+     this width without crushing the sentence, so the button drops below it. */
+  .wizard-validation-notice,
+  .validation-action,
+  .model-catalog > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+.validation-action .button,
+  .model-catalog > header .button,
+  .credential-entry-list__intro .button {
+    width: 100%;
+  }
+
+.catalog-model {
+    grid-template-columns: 1fr;
+  }
+
+.pool-capacity__limits {
+    grid-template-columns: 1fr 1fr;
+  }
+
+.rate-grid,
+  .rate-grid--compact {
+    grid-template-columns: 1fr 1fr;
+  }
+
+.rate-grid .field:last-child {
+    grid-column: auto;
+  }
+
+.access-key-panel > div:nth-child(2) {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
+/* Four tracks with three gaps take about 269px of a 375px screen's 325px of
+     measure, so the flexible column the comment above the rule describes — the one
+     holding the upstream error — was left roughly 56px, about six characters, and
+     every error wrapped into a ragged tower. The attempt number keeps its column,
+     the key label and the duration share the first line, and the outcome takes the
+     full measure below them. */
+  .attempt-list > div {
+    grid-template-columns: 20px minmax(0, 1fr) auto;
+    align-items: start;
+    gap: var(--space-2) var(--space-4);
+  }
+
+.attempt-list > div > span { grid-column: 1; grid-row: 1; }
+
+.attempt-list > div > strong { grid-column: 2; grid-row: 1; }
+
+.attempt-list > div > small { grid-column: 3; grid-row: 1; }
+
+.attempt-list > div > code { grid-column: 2 / -1; grid-row: 2; }
+
+.log-detail-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+.settings-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--space-5);
+  }
+
+.settings-row > div {
+    width: 100%;
+  }
+
+.settings-row input {
+    flex: 1;
+  }
 }
 
 /* These containers are all "one bordered slab of rows", so they share the panel
@@ -103,31 +1736,6 @@
   border-color: var(--edge);
   border-radius: var(--radius-panel);
   box-shadow: var(--lift-panel);
-}
-
-/* The security note takes the same radius and elevation but keeps its 3px live
-   bar: that bar is its only border, and folding it into the group above painted
-   it the neutral hairline colour, which turned the one marker that says "this is
-   already secure" into a grey line. */
-.security-baseline {
-  border-radius: var(--radius-panel);
-  box-shadow: var(--lift-panel);
-}
-
-/* The console's own iris wash is lighter than the base shell's flat one so the
-   selected row reads against this file's cooler list background, but the bar stays
-   3px: the same width marks the active rail item and a failed key, and dropping it
-   to 2px here made "this is the row you are looking at" the one marker in the
-   console thinner than the rest. */
-.resource-item.is-selected {
-  background: var(--select-wash);
-  box-shadow: var(--select-bar);
-}
-
-.dense-row,
-.settings-row,
-.resource-item {
-  border-color: var(--edge);
 }
 
 /* The two shared row types the console reuses are the only rows on these pages whose
@@ -378,7 +1986,9 @@
 /* The state hue sits in a bottom accent bar rather than tinting the cell, so
    seven metrics side by side stay readable. */
 .ledger-metric--healthy { box-shadow: inset 0 -2px var(--live-mark); }
+
 .ledger-metric--warning { box-shadow: inset 0 -2px var(--hold-mark); }
+
 .ledger-metric--danger { box-shadow: inset 0 -2px var(--fault-mark); }
 
 .ops-console__workspace {
@@ -490,12 +2100,14 @@
 }
 
 .model-ranking__table { padding: 0 var(--space-5); }
+
 .model-ranking__head, .model-ranking__row {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) 92px 92px 104px;
   align-items: center;
   gap: var(--space-5);
 }
+
 .model-ranking__head {
   min-height: var(--row-h-sm);
   color: var(--text-muted);
@@ -505,11 +2117,17 @@
   letter-spacing: var(--track-label);
   text-transform: uppercase;
 }
+
 .model-ranking__row { min-height: var(--row-h-md); border-bottom: 1px solid color-mix(in srgb, var(--edge) 72%, transparent); font-family: var(--font-data); font-size: var(--text-mini); font-variant-numeric: tabular-nums; }
+
 .model-ranking__row:last-child { border-bottom: 0; }
+
 .model-ranking__row > span, .model-ranking__head > span:not(:first-child) { text-align: right; }
+
 .model-ranking__row strong { display: flex; min-width: 0; align-items: center; gap: var(--space-4); font-weight: 500; }
+
 .model-ranking__row code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .model-ranking__row i { display: grid; width: var(--icon-mark); height: var(--icon-mark); flex: 0 0 auto; place-items: center; border: 1px solid var(--edge); color: var(--iris); font-size: var(--text-micro); font-style: normal; }
 
 .signal-path {
@@ -562,6 +2180,7 @@
 }
 
 .signal-legend .is-latency { background: var(--hold-mark); }
+
 .signal-legend .is-error { background: var(--fault-mark); }
 
 .attention-list {
@@ -596,8 +2215,11 @@
 }
 
 .attention-item:last-child { border-bottom: 0; }
+
 .attention-item:hover { background: var(--surface-sunken); }
+
 .attention-item > svg:first-child { color: var(--hold); }
+
 .attention-item--critical > svg:first-child { color: var(--fault); }
 
 .attention-item strong,
@@ -630,7 +2252,9 @@
 
 .all-clear strong,
 .all-clear small { display: block; }
+
 .all-clear strong { font-size: var(--text-base); }
+
 .all-clear small {
   margin-top: var(--space-1);
   color: var(--text-muted);
@@ -738,7 +2362,10 @@
   border: 1px solid var(--edge-strong);
   border-radius: var(--radius-fitting);
   color: var(--text-muted);
-  font: 500 var(--text-micro) / var(--leading-snug) var(--font-label);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  font-weight: 500;
+  line-height: var(--leading-snug);
   letter-spacing: var(--track-label);
   vertical-align: 1px;
 }
@@ -793,8 +2420,11 @@
 }
 
 .limit-cell:last-child { border-right: 0; }
+
 .limit-cell--warning { box-shadow: inset 0 -2px var(--hold-mark); }
+
 .limit-cell--critical { box-shadow: inset 0 -2px var(--fault-mark); }
+
 /* An unmeasured limit is inactive rather than healthy, so it takes the idle hue
    instead of borrowing the muted text colour. */
 .limit-cell--unknown { box-shadow: inset 0 -2px var(--idle-mark); }
@@ -1115,7 +2745,9 @@
 }
 
 .headroom-readout.is-warning { border-left-color: var(--hold-mark); }
+
 .headroom-readout.is-critical { border-left-color: var(--fault-mark); }
+
 /* No ceiling to report against is not a state, so the unlimited case falls back
    to the interactive hue rather than claiming health. */
 .headroom-readout.is-unlimited { border-left-color: var(--iris); }
@@ -1154,6 +2786,7 @@
 }
 
 .headroom-readout.is-warning > div i { background: var(--hold-mark); }
+
 .headroom-readout.is-critical > div i { background: var(--fault-mark); }
 
 /* The reset line is a countdown that re-renders once a second, which is six times
@@ -1211,7 +2844,9 @@
 }
 
 .inspector-key-list button:hover { background: var(--surface-sunken); }
+
 .inspector-key-list strong { font-size: var(--text-mini); }
+
 .inspector-key-list small { color: var(--text-muted); font-size: var(--text-micro); }
 
 .inspector-actions {
@@ -1247,6 +2882,7 @@
 }
 
 .failure-list button:last-child { border-bottom: 0; }
+
 .failure-list button:hover { background: var(--surface-sunken); }
 
 .failure-code {
@@ -1381,7 +3017,6 @@
   box-shadow: var(--select-bar);
 }
 
-
 .ide-resource-list button > span:first-child {
   display: grid;
   min-width: 0;
@@ -1501,10 +3136,15 @@
 }
 
 .resource-disclosure__toggle strong { font-size: var(--text-base); }
+
 .resource-disclosure__toggle small { margin-top: var(--space-1); color: var(--text-muted); font-size: var(--text-micro); }
+
 .resource-disclosure__toggle code { color: var(--iris); font-family: var(--font-data); font-size: var(--text-micro); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
 .resource-disclosure__actions { display: flex; gap: var(--space-3); }
+
 .resource-disclosure__body { padding: 0 var(--space-5) var(--space-5); }
+
 .resource-disclosure__body .dense-table { border-color: var(--edge); }
 
 .ide-inspector-titlebar {
@@ -1515,6 +3155,7 @@
 }
 
 .ide-inspector-titlebar > div:first-child { min-width: 0; }
+
 .resource-inspector-close { display: none; }
 
 /* The two filter strips are the same shape but not the same width: the log page's
@@ -2186,7 +3827,10 @@
 
 .playground-composer > label textarea {
   min-height: 88px;
-  padding: var(--space-4) 48px var(--space-4) var(--space-4);
+  /* The right inset is the gutter the send button is positioned into, so it is
+     the one padding here that is not a spacing decision — but it is still a
+     length the scale has a name for. */
+  padding: var(--space-4) var(--space-11) var(--space-4) var(--space-4);
   color: var(--text-strong);
   background: var(--surface-sunken);
   border: 1px solid var(--edge);
@@ -2264,8 +3908,7 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
-.playground-settings-form .field > span,
-.playground-settings-form .toggle strong {
+.playground-settings-form .field > span {
   font-size: var(--text-micro);
 }
 
@@ -2286,21 +3929,8 @@
   border-top: 1px solid var(--edge);
 }
 
-/* The workbench is a fixed-height frame whose panes scroll on their own, so the
-   page has to know how much of the viewport the shell already spends. That total
-   is --shell-chrome, declared on .app-shell beside the paddings it adds up; the
-   two properties this block used to subtract, --main-pad-top and
-   --main-pad-bottom, were never declared anywhere. An invalid calc() makes the
-   whole declaration invalid, so height fell back to auto while min-height: 0
-   below still cancelled the workbench's 680px floor — the frame had neither a
-   height nor a floor and collapsed to its content.
-
-   min-height on the page, not on the workbench, is what restores the floor: the
-   workbench must be free to shrink inside the flex column, so the floor has to
-   live on the parent that flex is measuring against. dvh rather than vh so a
-   browser toolbar eats into the frame instead of pushing it off-screen. */
 @media (min-width: 1200px) {
-  .playground-page {
+.playground-page {
     display: flex;
     height: calc(100dvh - var(--shell-chrome));
     min-height: 680px;
@@ -2308,24 +3938,24 @@
     overflow: hidden;
   }
 
-  .playground-page > .page-header {
+.playground-page > .page-header {
     flex: 0 0 auto;
   }
 
-  .playground-workbench {
+.playground-workbench {
     flex: 1;
     min-height: 0;
   }
 }
 
 @media (max-width: 1199px) {
-  .playground-workbench {
+.playground-workbench {
     grid-template-columns: minmax(230px, 0.7fr) minmax(360px, 1.4fr) minmax(280px, 0.85fr);
   }
 }
 
 @media (max-width: 1050px) {
-  .playground-tabs {
+.playground-tabs {
     display: flex;
     min-height: var(--control-h-lg);
     padding: 0 var(--space-3);
@@ -2334,17 +3964,17 @@
     border-radius: var(--radius-panel) var(--radius-panel) 0 0;
   }
 
-  .playground-tabs button {
+.playground-tabs button {
     flex: 1;
   }
 
-  .playground-workbench {
+.playground-workbench {
     display: block;
     min-height: 650px;
     border-radius: 0 0 var(--radius-panel) var(--radius-panel);
   }
 
-  /* The two list panes scroll internally, so a fixed height is what keeps them
+/* The two list panes scroll internally, so a fixed height is what keeps them
      from running the page to thousands of pixels. */
   .playground-models,
   .playground-settings {
@@ -2353,7 +3983,7 @@
     border: 0;
   }
 
-  /* The runner cannot take the same treatment. Its last grid row is the composer
+/* The runner cannot take the same treatment. Its last grid row is the composer
      and the Send button, so anything the fixed height cannot fit is cut off by
      the workbench's overflow: hidden with no scrollbar to reach it — at 1024x768
      that is the one control the page exists for. A floor instead of a height
@@ -2365,27 +3995,27 @@
     border: 0;
   }
 
-  .playground-models.is-active {
+.playground-models.is-active {
     display: flex;
   }
 
-  .playground-runner.is-active {
+.playground-runner.is-active {
     display: grid;
   }
 
-  .playground-settings.is-active {
+.playground-settings.is-active {
     display: block;
   }
 }
 
 @media (max-width: 600px) {
-  .playground-models,
+.playground-models,
   .playground-settings {
     height: calc(100vh - 180px);
     min-height: 560px;
   }
 
-  /* Same reason as the 1050px block: the runner and the frame around it size to
+/* Same reason as the 1050px block: the runner and the frame around it size to
      the composer rather than clipping it. max() keeps the 560px floor that the
      height/min-height pair gave the other two panes on a short viewport. */
   .playground-workbench,
@@ -2394,35 +4024,35 @@
     min-height: max(calc(100vh - 180px), 560px);
   }
 
-  .playground-pane-title {
+.playground-pane-title {
     padding-inline: var(--space-4);
   }
 
-  .playground-protocols {
+.playground-protocols {
     overflow-x: auto;
     padding: 0 var(--space-2);
   }
 
-  .playground-protocols button {
+.playground-protocols button {
     flex: 0 0 auto;
     padding-inline: var(--space-3);
   }
 
-  .playground-live-status {
+.playground-live-status {
     grid-template-columns: 9px minmax(0, 1fr) auto;
     padding-inline: var(--space-4);
   }
 
-  .playground-live-status button {
+.playground-live-status button {
     grid-column: 2 / -1;
     justify-self: start;
   }
 
-  .playground-transcript {
+.playground-transcript {
     padding: var(--space-3);
   }
 
-  .playground-user-message,
+.playground-user-message,
   .playground-model-message {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-2);
@@ -2444,16 +4074,26 @@
 
 .model-limit-editor > header span,
 .model-limit-editor > header strong { display: block; }
+
 .model-limit-editor > header span { color: var(--iris); font-family: var(--font-label); font-size: var(--text-micro); letter-spacing: var(--track-label); text-transform: uppercase; }
+
 .model-limit-editor > header strong { margin-top: var(--space-1); font-size: var(--text-sm); }
+
 .model-limit-editor > header code { color: var(--text-muted); font-family: var(--font-data); font-size: var(--text-micro); font-variant-numeric: tabular-nums; }
+
 .model-limit-editor > p { margin: var(--space-4) 0; color: var(--text-muted); font-size: var(--text-micro); line-height: var(--leading-snug); }
+
 .model-limit-editor .rate-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+
 .model-limit-editor .field { gap: var(--space-1); }
+
 .model-limit-editor .field > span { min-height: auto; font-size: var(--text-micro); }
+
 .model-limit-editor .field input,
 .model-limit-editor .field select { min-height: var(--control-h-md); }
+
 .model-limit-editor .button-row { margin-top: var(--space-5); }
+
 .model-limit-editor .button { min-height: var(--control-h-md); padding: var(--space-3) var(--space-4); font-size: var(--text-mini); }
 
 .inspector-disclosure {
@@ -2477,11 +4117,17 @@
 
 .inspector-disclosure > button strong,
 .inspector-disclosure > button small { display: block; }
+
 .inspector-disclosure > button strong { font-size: var(--text-mini); }
+
 .inspector-disclosure > button small { margin-top: var(--space-1); color: var(--text-muted); font-size: var(--text-micro); }
+
 .inspector-disclosure__body > div { display: grid; min-height: var(--row-h-md); grid-template-columns: 8px minmax(0, 1fr) auto minmax(80px, auto); align-items: center; gap: var(--space-4); padding: var(--space-3) var(--space-5); border-top: 1px solid var(--edge); font-variant-numeric: tabular-nums; }
+
 .inspector-disclosure__body > div.has-warning { box-shadow: inset 2px 0 var(--fault-mark); }
+
 .inspector-disclosure__body strong { font-size: var(--text-mini); }
+
 .inspector-disclosure__body small { color: var(--text-muted); font-size: var(--text-micro); }
 
 .status-code {
@@ -2507,8 +4153,11 @@
 /* The tint is deliberately weak: the code text itself carries the state colour,
    and a solid fill at this size would fight the rows around it. */
 .status-code--healthy { color: var(--live); background: color-mix(in srgb, var(--live-mark) 8%, transparent); }
+
 .status-code--warning { color: var(--hold); background: color-mix(in srgb, var(--hold-mark) 9%, transparent); }
+
 .status-code--fault { color: var(--fault); background: color-mix(in srgb, var(--fault-mark) 8%, transparent); }
+
 .status-code--running { color: var(--iris); background: color-mix(in srgb, var(--iris) 10%, transparent); }
 
 .log-resource-rows > button.is-running {
@@ -2518,10 +4167,11 @@
 
 .log-disclosure .attempt-list,
 .log-disclosure .body-grid { margin: 0; }
+
 .log-disclosure .body-grid { padding: var(--space-5); }
 
 @media (min-width: 901px) {
-  /* A workbench page is a fixed-height frame whose two panes scroll on their own,
+/* A workbench page is a fixed-height frame whose two panes scroll on their own,
      so it has to know exactly how much of the viewport the shell already spends.
      --shell-chrome carries that total from .app-shell — where the paddings and the
      mobile header are actually declared — instead of the 106px literal that used
@@ -2535,17 +4185,23 @@
     overflow: hidden;
   }
 
-  .resource-page > .page-header { flex: 0 0 auto; }
-  .resource-page > .resource-layout,
+.resource-page > .page-header { flex: 0 0 auto; }
+
+.resource-page > .resource-layout,
   .resource-page > .ide-resource-workbench { flex: 1; min-height: 0; }
-  .resource-page .resource-layout,
+
+.resource-page .resource-layout,
   .resource-page .ide-resource-workbench { overflow: hidden; }
-  .resource-page .resource-list,
+
+.resource-page .resource-list,
   .resource-page .resource-inspector,
   .resource-page .ide-resource-inspector { overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
-  .resource-page .ide-resource-list { display: flex; min-height: 0; flex-direction: column; overflow: hidden; }
-  .resource-page .ide-resource-list > div:last-child { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
-  .resource-page .resource-inspector > .inspector-header,
+
+.resource-page .ide-resource-list { display: flex; min-height: 0; flex-direction: column; overflow: hidden; }
+
+.resource-page .ide-resource-list > div:last-child { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+
+.resource-page .resource-inspector > .inspector-header,
   .resource-page .ide-resource-inspector > header { position: sticky; z-index: var(--layer-pane-sticky); top: 0; background: var(--surface-raised); }
 }
 
@@ -2701,11 +4357,15 @@
 }
 
 .log-diagnosis > header > svg { color: var(--hold); }
+
 .log-diagnosis > header span,
 .log-diagnosis > header small,
 .log-diagnosis > header strong { display: block; }
+
 .log-diagnosis > header small { color: var(--hold); font-family: var(--font-label); font-size: var(--text-micro); letter-spacing: var(--track-label); text-transform: uppercase; }
+
 .log-diagnosis > header strong { margin-top: var(--space-1); font-size: var(--text-mini); }
+
 .log-diagnosis > header code { color: var(--hold); font-family: var(--font-data); font-size: var(--text-micro); font-variant-numeric: tabular-nums; }
 
 .log-diagnosis__rows > div {
@@ -2734,11 +4394,14 @@
    upstream returned — "Key 2 · HTTP 429" — so the code in it aligns with the codes on
    the rows above and below. */
 .log-diagnosis__rows strong { display: block; font-size: var(--text-mini); font-variant-numeric: tabular-nums; }
+
 .log-diagnosis__rows p { margin: var(--space-1) 0 0; color: var(--text-muted); font-size: var(--text-micro); line-height: var(--leading-snug); }
+
 /* The right-hand cell of a diagnosis row is either an attempt duration or a reset
    countdown that re-renders every second, so it takes figures; the <time> inside it
    inherits them. */
 .log-diagnosis__rows small { color: var(--text-muted); font-family: var(--font-data); font-size: var(--text-micro); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
 .log-diagnosis__rows time { color: inherit; }
 
 .log-resource-inspector .attempt-list > div > p {
@@ -2749,28 +4412,20 @@
   line-height: var(--leading-snug);
 }
 
-/* The console panel holds two blocks, not the three the base shell's track list
-   allows for, so above the reflow it drops the trailing auto column and below it
-   the two simply stack. Both have to stay inside width queries: as a base-layer
-   rule the two-column form also beat the 1280px reflow in styles.css, so the panel
-   held a 520px minimum across every width down to 900px and pushed the page into a
-   horizontal scroll on a laptop screen. Stacking here rather than leaning on that
-   reflow avoids its empty third track, which would otherwise leave a gap's worth of
-   dead space down the right edge. */
 @media (min-width: 1281px) {
-  .access-key-panel {
+.access-key-panel {
     grid-template-columns: minmax(240px, 0.9fr) minmax(280px, 1.3fr);
   }
 }
 
 @media (max-width: 1280px) {
-  .access-key-panel {
+.access-key-panel {
     grid-template-columns: minmax(0, 1fr);
     align-items: start;
     gap: var(--space-6);
   }
 
-  .access-key-panel > div:nth-child(2) {
+.access-key-panel > div:nth-child(2) {
     grid-column: auto;
     grid-row: auto;
   }
@@ -2802,27 +4457,19 @@
   font-size: var(--text-mini);
 }
 
-/* Four layout breakpoints, matching the ones styles.css uses: 1280 thins the
- * widest inspector-plus-grid pairings, 1050 floats the overview inspector and
- * narrows the workbenches, 900 folds every two-pane layout into one column and
- * turns the inspectors into drawers, 650 is the phone. Orphan widths — 560 and
- * 1400 — used to sit between these, so a rule written at one of them silently
- * disagreed with the next one down.
- */
-
 @media (max-width: 1280px) {
-  .ops-console__workspace.has-inspector { grid-template-columns: minmax(0, 1fr) 310px; }
+.ops-console__workspace.has-inspector { grid-template-columns: minmax(0, 1fr) 310px; }
 
-  .ops-console__workspace.has-inspector .provider-debug-head {
+.ops-console__workspace.has-inspector .provider-debug-head {
     grid-template-columns: minmax(210px, 1fr) auto;
   }
 
-  .ops-console__workspace.has-inspector .provider-debug-head .limit-preview {
+.ops-console__workspace.has-inspector .provider-debug-head .limit-preview {
     grid-column: 1 / -1;
     margin-left: var(--space-5);
   }
 
-  .ops-console__workspace.has-inspector .route-debug-columns,
+.ops-console__workspace.has-inspector .route-debug-columns,
   .ops-console__workspace.has-inspector .route-debug-row {
     min-width: 0;
     grid-template-columns: minmax(150px, 1fr) 72px 48px 58px 82px 14px;
@@ -2830,16 +4477,19 @@
 }
 
 @media (max-width: 1050px) {
-  /* Three columns, so the eight metrics become three rows. The hairlines are keyed
+/* Three columns, so the eight metrics become three rows. The hairlines are keyed
      to the column count rather than to a metric count: the right edge is cleared
      at the end of every row, and every row after the first carries a top rule. */
   .status-ledger { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .ledger-metric:nth-child(3n) { border-right: 0; }
-  .ledger-metric:nth-child(n+4) { border-top: 1px solid var(--edge); }
-  .ops-console__workspace,
+
+.ledger-metric:nth-child(3n) { border-right: 0; }
+
+.ledger-metric:nth-child(n+4) { border-top: 1px solid var(--edge); }
+
+.ops-console__workspace,
   .ops-console__workspace.has-inspector { grid-template-columns: 1fr; }
 
-  /* Below this width the inspector genuinely floats over the page, which is the
+/* Below this width the inspector genuinely floats over the page, which is the
      one place in the console that earns a shadow. */
   .overview-inspector {
     display: none;
@@ -2852,40 +4502,52 @@
     box-shadow: var(--lift-float);
   }
 
-  .overview-inspector.is-open { display: block; }
-  .overview-inspector.is-empty { display: none; }
-  .inspector-close { display: inline-grid; }
-  .ide-resource-workbench { grid-template-columns: minmax(0, 1fr) 300px; }
-  /* A 500px floor on the list column plus the 300px inspector exceeds the pane at
+.overview-inspector.is-open { display: block; }
+
+.overview-inspector.is-empty { display: none; }
+
+.inspector-close { display: inline-grid; }
+
+.ide-resource-workbench { grid-template-columns: minmax(0, 1fr) 300px; }
+
+/* A 500px floor on the list column plus the 300px inspector exceeds the pane at
      the bottom of this range, and the workbench has no scroller of its own, so the
      list is allowed to shrink instead. */
   .log-workbench { grid-template-columns: minmax(0, 1fr) 300px; }
 }
 
 @media (max-width: 900px) {
-  /* .workspace reclaims its left inset here too — the rule is in styles.css at the
+/* .workspace reclaims its left inset here too — the rule is in styles.css at the
      same width, and repeating it only made the pair drift apart. */
   .signal-grid { grid-template-columns: 1fr; }
-  .provider-debug-head {
+
+.provider-debug-head {
     grid-template-columns: minmax(0, 1fr) auto;
     padding-bottom: var(--space-5);
   }
-  .provider-debug-head .limit-preview { grid-column: 1 / -1; margin-left: var(--space-5); }
-  .ide-resource-workbench { grid-template-columns: 1fr; }
-  .ide-resource-list { border-right: 0; }
-  .ide-resource-inspector { border-top: 1px solid var(--edge); }
-  .log-workbench { grid-template-columns: 1fr; }
 
-  /* Stacked into one column, the workbench is as tall as its content, so the
+.provider-debug-head .limit-preview { grid-column: 1 / -1; margin-left: var(--space-5); }
+
+.ide-resource-workbench { grid-template-columns: 1fr; }
+
+.ide-resource-list { border-right: 0; }
+
+.ide-resource-inspector { border-top: 1px solid var(--edge); }
+
+.log-workbench { grid-template-columns: 1fr; }
+
+/* Stacked into one column, the workbench is as tall as its content, so the
      fixed-height frame and both floors come off — the page's and the workbench's
      own. Leaving the 650px floor on meant a two-row list on a phone sat above
      several hundred pixels of empty panel. */
-  .resource-page { min-height: 0; }
+  .resource-page,
   .ide-resource-workbench { min-height: 0; }
-  .provider-page .resource-list { display: block; overflow: visible; border-right: 0; }
-  .provider-page .resource-item { width: 100%; min-width: 0; border-right: 0; border-bottom: 1px solid var(--edge); }
 
-  /* The inspector becomes a drawer over the list rather than a pane beside it. It
+.provider-page .resource-list { display: block; overflow: visible; border-right: 0; }
+
+.provider-page .resource-item { width: 100%; min-width: 0; border-right: 0; border-bottom: 1px solid var(--edge); }
+
+/* The inspector becomes a drawer over the list rather than a pane beside it. It
      starts below the mobile header for the same reason the nav drawer does: the
      header stays reachable while the drawer is open. */
   .resource-page .resource-inspector,
@@ -2902,36 +4564,40 @@
     border-left: 1px solid var(--edge);
     box-shadow: var(--lift-float);
   }
-  .resource-page .resource-inspector.is-open,
+
+.resource-page .resource-inspector.is-open,
   .resource-page .ide-resource-inspector.is-open { display: block; }
-  .resource-inspector-close { display: inline-grid; }
-  .resource-page .inspector-header,
+
+.resource-inspector-close { display: inline-grid; }
+
+.resource-page .inspector-header,
   .resource-page .ide-resource-inspector > header { position: sticky; z-index: var(--layer-pane-sticky); top: 0; background: var(--surface-raised); }
-  .resource-disclosure > header { grid-template-columns: 1fr; }
-  .resource-disclosure__actions { padding-left: var(--space-8); }
+
+.resource-disclosure > header { grid-template-columns: 1fr; }
+
+.resource-disclosure__actions { padding-left: var(--space-8); }
 }
 
 @media (max-width: 650px) {
-  .main-pane { padding-top: var(--space-7); }
-
-  .ops-commandbar {
+.ops-commandbar {
     align-items: stretch;
     flex-direction: column;
     gap: 0;
   }
 
-  .ops-commandbar__actions {
+.ops-commandbar__actions {
     justify-content: space-between;
     border-top: 1px solid var(--edge);
     border-left: 0;
   }
 
-  /* Everything that can be tapped reaches 44px in both axes once the layout stops
+/* Everything that can be tapped reaches 44px in both axes once the layout stops
      being a pointer-driven dense grid. Height alone is not enough for the
      icon-only and single-glyph controls: a 30px-wide square or a "1h" range button
      is still a miss at arm's length, so each one gets a min-width too. */
   .console-refresh { min-height: var(--control-h-lg); }
-  /* The rail's own denser height only applies from 901px up now, so the drawer
+
+/* The rail's own denser height only applies from 901px up now, so the drawer
      keeps the 44px floor from styles.css without needing to be raised here. */
   .console-icon {
     width: var(--control-h-lg);
@@ -2939,10 +4605,12 @@
     min-width: var(--control-h-lg);
     min-height: var(--control-h-lg);
   }
-  .range-switcher button,
+
+.range-switcher button,
   .provider-inspect,
   .copy-base-url { min-width: var(--control-h-lg); min-height: var(--control-h-lg); }
-  .inspector-actions .button,
+
+.inspector-actions .button,
   .model-limit-editor .button,
   .model-limit-editor .field input,
   .model-limit-editor .field select,
@@ -2950,33 +4618,41 @@
   .model-filter select,
   .log-status-filter button,
   .log-status-filter input { min-height: var(--control-h-lg); }
-  /* The rows are the buttons on these three lists, so the row minimum is the
+
+/* The rows are the buttons on these three lists, so the row minimum is the
      touch target and there is no separate control to grow. */
   .inspector-key-list button,
   .resource-disclosure__toggle,
   .provider-debug-toggle { min-height: var(--control-h-lg); }
-  /* Two columns, and the same column-keyed hairlines as the 1050px step: right
+
+/* Two columns, and the same column-keyed hairlines as the 1050px step: right
      edge cleared at the end of each row, top rule on every row but the first.
      The old rules restored a border on the third cell, which the odd-child base
      rule already carried, and stopped the row separators at six cells. */
   .status-ledger { grid-template-columns: 1fr 1fr; }
-  .ledger-metric:nth-child(2n) { border-right: 0; }
-  .ledger-metric:nth-child(n+3) { border-top: 1px solid var(--edge); }
-  .signal-chart svg { height: 150px; }
-  .signal-legend { flex-wrap: wrap; }
-  .model-ranking__table { padding: 0 var(--space-4); overflow-x: auto; }
-  .model-ranking__head, .model-ranking__row { min-width: 440px; }
 
-  .provider-debug-head {
+.ledger-metric:nth-child(2n) { border-right: 0; }
+
+.ledger-metric:nth-child(n+3) { border-top: 1px solid var(--edge); }
+
+.signal-chart svg { height: 150px; }
+
+.signal-legend { flex-wrap: wrap; }
+
+.model-ranking__table { padding: 0 var(--space-4); overflow-x: auto; }
+
+.model-ranking__head, .model-ranking__row { min-width: 440px; }
+
+.provider-debug-head {
     padding: var(--space-3) var(--space-4) var(--space-4) 0;
   }
 
-  .provider-debug-head .limit-preview {
+.provider-debug-head .limit-preview {
     grid-template-columns: repeat(4, minmax(0, 1fr));
     margin: 0 0 0 var(--space-5);
   }
 
-  /* The route table keeps all five of its readouts on a phone. Traffic, the next
+/* The route table keeps all five of its readouts on a phone. Traffic, the next
      key and the bottleneck are the numbers an operator opened this page for, so
      rather than dropping the columns the list scrolls sideways inside its own
      scroller — .route-debug-list already contains that scroll and does not pass it
@@ -2992,7 +4668,7 @@
     grid-template-columns: minmax(130px, 1fr) 70px 44px 56px 78px 14px;
   }
 
-  /* The failing key and the time it failed are the whole point of this panel, so
+/* The failing key and the time it failed are the whole point of this panel, so
      they move under the model instead of disappearing: the row becomes three lines
      with the status code and the chevron spanning them. */
   .failure-list button {
@@ -3000,36 +4676,48 @@
     row-gap: var(--space-1);
   }
 
-  .failure-list button > span:first-child { grid-column: 1; grid-row: 1; }
-  .failure-list button > span:nth-child(2) { grid-column: 2; grid-row: 1; }
-  .failure-list button > span:nth-child(3) { grid-column: 2; grid-row: 2; }
-  .failure-list button > time { grid-column: 2; grid-row: 3; }
-  .failure-list button > svg { grid-column: 3; grid-row: 1 / -1; align-self: center; }
+.failure-list button > span:first-child { grid-column: 1; grid-row: 1; }
 
-  .overview-inspector { width: 100vw; }
-  /* The column labels are aria-hidden decoration, so they go; the values they
+.failure-list button > span:nth-child(2) { grid-column: 2; grid-row: 1; }
+
+.failure-list button > span:nth-child(3) { grid-column: 2; grid-row: 2; }
+
+.failure-list button > time { grid-column: 2; grid-row: 3; }
+
+.failure-list button > svg { grid-column: 3; grid-row: 1 / -1; align-self: center; }
+
+.overview-inspector { width: 100vw; }
+
+/* The column labels are aria-hidden decoration, so they go; the values they
      named all stay, restacked per page below. */
   .ide-resource-list > header,
   .log-workbench .ide-resource-list > header { display: none; }
 
-  /* The status filter drops below the search box: side by side, neither one has
+/* The status filter drops below the search box: side by side, neither one has
      room for its own longest option. */
   .model-filter,
   .log-filter { grid-template-columns: 14px minmax(0, 1fr); }
-  .model-filter label:last-child { grid-column: 2; }
-  /* The segmented control spreads to fill the row it now has to itself. */
+
+.model-filter label:last-child { grid-column: 2; }
+
+/* The segmented control spreads to fill the row it now has to itself. */
   .log-status-filter { grid-column: 2; }
-  .log-status-filter button { flex: 1; }
 
-  .console-actionbar { position: static; align-items: stretch; flex-direction: column; }
-  .console-actionbar .button { width: 100%; }
+.log-status-filter button { flex: 1; }
 
-  .model-sweep { grid-template-columns: minmax(0, 1fr); }
-  .model-sweep__track { grid-column: 1; grid-row: auto; }
-  .model-sweep .button-row { flex-wrap: wrap; justify-content: flex-start; }
-  .model-sweep .button { flex: 1; }
+.console-actionbar { position: static; align-items: stretch; flex-direction: column; }
 
-  /* Every resource row becomes two lines here instead of shedding a column: the
+.console-actionbar .button { width: 100%; }
+
+.model-sweep { grid-template-columns: minmax(0, 1fr); }
+
+.model-sweep__track { grid-column: 1; grid-row: auto; }
+
+.model-sweep .button-row { flex-wrap: wrap; justify-content: flex-start; }
+
+.model-sweep .button { flex: 1; }
+
+/* Every resource row becomes two lines here instead of shedding a column: the
      alias leads, and whatever the page put in the second cell — the provider name
      on Models and on Providers — drops underneath it indented to the alias. The
      tally keeps the right-hand column and the chevron spans both lines. */
@@ -3039,17 +4727,20 @@
     row-gap: var(--space-1);
   }
 
-  .ide-resource-list > div > button > span:first-child { grid-column: 1; grid-row: 1; }
-  .ide-resource-list > div > button > span:nth-child(2) {
+.ide-resource-list > div > button > span:first-child { grid-column: 1; grid-row: 1; }
+
+.ide-resource-list > div > button > span:nth-child(2) {
     grid-column: 1;
     grid-row: 2;
     padding-left: var(--space-6);
     font-size: var(--text-micro);
   }
-  .ide-resource-list > div > button > span:nth-child(3) { grid-column: 2; grid-row: 1; }
-  .ide-resource-list > div > button > svg { grid-column: 3; grid-row: 1 / -1; align-self: center; }
 
-  /* A log row does the same, but its second cell is the model and route rather
+.ide-resource-list > div > button > span:nth-child(3) { grid-column: 2; grid-row: 1; }
+
+.ide-resource-list > div > button > svg { grid-column: 3; grid-row: 1 / -1; align-self: center; }
+
+/* A log row does the same, but its second cell is the model and route rather
      than a provider, and the status code and latency stack on the right. The
      right-hand column is sized for the latency rather than the status code:
      "4218 ms" is the wider of the two things that land there. */
@@ -3058,49 +4749,46 @@
     grid-template-rows: auto auto;
     row-gap: var(--space-1);
   }
-  .log-workbench .log-resource-rows > button > span:first-child { grid-column: 1; grid-row: 1; }
-  .log-workbench .log-resource-rows > button > span:nth-child(2) { display: block; grid-column: 1; grid-row: 2; padding-left: var(--space-6); }
-  .log-workbench .log-resource-rows > button > strong { grid-column: 2; grid-row: 1; }
-  .log-workbench .log-resource-rows > button > small { grid-column: 2; grid-row: 2; text-align: right; }
-  .log-workbench .log-resource-rows > button > svg { grid-column: 3; grid-row: 1 / 3; }
 
-  .resource-page .resource-inspector,
+.log-workbench .log-resource-rows > button > span:first-child { grid-column: 1; grid-row: 1; }
+
+.log-workbench .log-resource-rows > button > span:nth-child(2) { display: block; grid-column: 1; grid-row: 2; padding-left: var(--space-6); }
+
+.log-workbench .log-resource-rows > button > strong { grid-column: 2; grid-row: 1; }
+
+.log-workbench .log-resource-rows > button > small { grid-column: 2; grid-row: 2; text-align: right; }
+
+.log-workbench .log-resource-rows > button > svg { grid-column: 3; grid-row: 1 / 3; }
+
+.resource-page .resource-inspector,
   .resource-page .ide-resource-inspector { width: 100vw; }
-  .inspector-header { min-height: 0; padding: var(--space-6); }
-  .inspector-header .button-row { flex-wrap: wrap; }
-  .resource-disclosure__toggle { grid-template-columns: 18px minmax(0, 1fr); }
-  .resource-disclosure__toggle code { grid-column: 2; }
-  /* The panel already stacks from 1280px down, so only the overflow guard is
+
+.inspector-header { min-height: 0; padding: var(--space-6); }
+
+.inspector-header .button-row { flex-wrap: wrap; }
+
+.resource-disclosure__toggle { grid-template-columns: 18px minmax(0, 1fr); }
+
+.resource-disclosure__toggle code { grid-column: 2; }
+
+/* The panel already stacks from 1280px down, so only the overflow guard is
      still needed here. */
   .access-key-panel > div { min-width: 0; }
 
-  /* The manual model entry pairs a text field with an Add button on one line. Below
+/* The manual model entry pairs a text field with an Add button on one line. Below
      this width the button squeezes the field down to a few characters, so the two
      stack and the button takes the full measure to stay a comfortable target. */
   .manual-model-entry { grid-template-columns: minmax(0, 1fr); }
-  .manual-model-entry .button { width: 100%; }
+
+.manual-model-entry .button { width: 100%; }
 }
 
-
-/* styles.css already collapses every duration in the document to 0.01ms, which is
- * the right blanket rule and is not repeated here. What that cannot reach is the
- * console's two pieces of continuous motion, which do not depend on a duration
- * being long: the refresh spinner loops forever, and the model sweep's progress
- * bar animates its own width as results arrive. Both are named explicitly.
- *
- * The state transforms are left in place on purpose. A disclosure chevron pointing
- * down rather than sideways is a static marker of whether the group is open, not an
- * animation — with the transition already neutralised it simply snaps, which is
- * exactly what reduced motion asks for. Opacity is left alone for the same reason:
- * a disabled button fading back is the feedback that tells an operator the press
- * registered, and removing it would leave the control looking inert.
- */
 @media (prefers-reduced-motion: reduce) {
-  .console-refresh.is-refreshing svg {
+.console-refresh.is-refreshing svg {
     animation: none !important;
   }
 
-  .model-sweep__track > span {
+.model-sweep__track > span {
     transition: none !important;
   }
 }

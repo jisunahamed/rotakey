@@ -1,0 +1,166 @@
+/* The document, before any of it is Rotakey.
+ *
+ * The reset, the element defaults, the one focus ring, and the two utilities that
+ * describe a relationship to the reader rather than a thing on the page. Nothing
+ * here names a component, and nothing here should: a rule that knows about a
+ * provider or a route belongs in one of the files after this one.
+ */
+
+html {
+  min-width: 320px;
+  min-height: 100%;
+  background: var(--surface-canvas);
+  font-family: var(--font-body);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Heights that have to fit a phone screen are measured in dvh: a mobile browser
+   reports 100vh as the viewport with its toolbars retracted, so a 100vh page is
+   taller than what the operator can actually see and the last row hides behind
+   the address bar. */
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100dvh;
+  background: var(--surface-canvas);
+  color: var(--text-strong);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+/* Focus is drawn with outline rather than box-shadow: a shadow ring is clipped
+   by the overflow:hidden panels and scrolling tables the console is built from,
+   and an invisible focus ring is the same as no focus ring. */
+:where(button, a, input, textarea, select, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--iris);
+  outline-offset: 2px;
+  border-radius: var(--radius-fitting);
+}
+
+/* Every figure in the console is set with tabular figures, and the reason is the
+   overview: it repolls every ten seconds, so a proportional 1 replaced by a 0
+   shifts everything after it sideways and a panel of steady numbers appears to
+   twitch on each refresh. Declaring it on the data face covers the readouts that
+   inherit from it; the rules below that carry figures in the body face state it
+   themselves. */
+code,
+pre,
+.mono-summary {
+  font-family: var(--font-data);
+  font-variant-ligatures: none;
+  font-variant-numeric: tabular-nums;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+/* Archivo carries a display size on tracking rather than on weight: at 2.75rem a
+   620 stem is heavy enough to read as a marketing headline, and the console is an
+   instrument. 600 with the display tracking closed keeps the authority without
+   the bulk. */
+h1 {
+  margin-bottom: var(--space-5);
+  font-family: var(--font-display);
+  font-size: clamp(var(--text-xl), 3vw, var(--text-3xl));
+  font-weight: 600;
+  line-height: var(--leading-tight);
+  letter-spacing: var(--track-display);
+}
+
+h2 {
+  margin-bottom: var(--space-3);
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: var(--track-tight);
+}
+
+h3 {
+  margin-bottom: var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: var(--track-tight);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+/* The rail carries six sections before the content starts, so keyboard and screen
+   reader users get a way past it. Visible only while focused, and above the rail. */
+.skip-link {
+  position: fixed;
+  z-index: var(--layer-skip);
+  top: var(--space-4);
+  left: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+  color: var(--text-inverse);
+  background: var(--iris);
+  border-radius: var(--radius-fitting);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-decoration: none;
+  transform: translateY(calc(-100% - var(--space-6)));
+  transition: transform var(--dur-state) var(--ease);
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+fieldset {
+  display: grid;
+  gap: var(--space-6);
+  margin: var(--space-7) 0 0;
+  padding: var(--space-6);
+  border: 1px solid var(--edge);
+}
+
+fieldset legend {
+  padding: 0 var(--space-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+*,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

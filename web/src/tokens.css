@@ -167,6 +167,22 @@
      widths, nine thousand pixels down the page. */
   --mobile-header-height: 56px;
 
+  /* The main pane's own top and bottom padding, and their total.
+     --shell-chrome is what a page has to fit inside once the pane it sits in has
+     taken its share of the window, so every full-height workbench subtracts it
+     from 100dvh. Those workbenches are pages, the padding is the shell's, and
+     with the two in separate stylesheets the total is the one number that has to
+     be readable from both — so all three are declared here rather than only the
+     one that crosses.
+
+     --shell-chrome is derived rather than restated. It had already drifted once:
+     it named the console's overridden top padding while the rule beside it
+     declared the base shell's, so the two disagreed by 16px and only looked right
+     because the console's override happened to win. */
+  --pane-pad-top: var(--space-9);
+  --pane-pad-bottom: var(--space-12);
+  --shell-chrome: calc(var(--pane-pad-top) + var(--pane-pad-bottom));
+
   /* Square things. A dot is a state; a check is something the operator toggles; a
      mark is a numeral or a glyph inside a hairline square; a box holds an icon
      that stands for a provider, a page or an account. */
@@ -311,3 +327,21 @@
  * one would have picked up a light value under system dark. The names are gone;
  * use --surface-canvas, --text-strong, --iris, --rail-* and --edge-* directly.
  */
+
+/* Below this width the sticky mobile header is part of the chrome too, so the
+ * total a full-height page has to fit inside grows by its height. The workbench
+ * frames that read it only exist above 900 — they stack into a document below —
+ * but the value has to stay truthful at every width, or the next thing to derive
+ * a height from it inherits the desktop figure and overshoots the screen by a
+ * header.
+ *
+ * The one media query in this file, and it is here rather than beside the shell
+ * for the same reason the tokens above it are: a page in another stylesheet reads
+ * the result, and a token that is right at one width and stale at another is
+ * worse than no token.
+ */
+@media (max-width: 900px) {
+  :root {
+    --shell-chrome: calc(var(--pane-pad-top) + var(--pane-pad-bottom) + var(--mobile-header-height));
+  }
+}

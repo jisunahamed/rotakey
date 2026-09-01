@@ -7,17 +7,24 @@ import ReactDOM from "react-dom/client";
 import "@fontsource-variable/archivo/wght.css";
 import "@fontsource-variable/jetbrains-mono/wght.css";
 import "@fontsource-variable/martian-mono/wght.css";
-// Order is precedence, and it runs from the most general to the most specific:
-// the tokens every rule reads, then the shell and the pages that were written
-// before there was a kit, then the kit itself, then the rotor, which is a drawing
-// and answers to nothing. The kit sits after the legacy sheets so that a page rule
-// which happens to share a name cannot outrank it — though none can today, because
-// every primitive class is prefixed `ui-`.
+// Order is precedence — there is no @layer — so this list is the cascade, and it
+// runs from what everything reads to what reads everything: the tokens, the bare
+// document, the kit, the frame the kit is arranged in, the rotor, and last the
+// pages, which are the only rules allowed to know about a provider or a route.
+//
+// The kit sits above the frame and the pages so that a page cannot quietly
+// outrank a primitive by being longer. Nothing can today — every primitive class
+// is prefixed `ui-` and no other sheet spells that prefix — and this order is
+// what keeps that true once they start sharing names.
+//
+// scripts/check-css-order.cjs reads this list to reconstruct the bundle, so a
+// sheet added here is a sheet the checks cover.
 import "./tokens.css";
-import "./styles.css";
-import "./console.css";
+import "./base.css";
 import "./ui/primitives.css";
+import "./shell.css";
 import "./rotor.css";
+import "./pages.css";
 import App from "./App";
 import { ConfirmProvider } from "./ConfirmDialog";
 import { ErrorBoundary } from "./ErrorBoundary";

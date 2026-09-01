@@ -1,0 +1,1441 @@
+/* The frame the console is drawn in.
+ *
+ * The rail, the pane, the page header, and the overlays that belong to the window
+ * rather than to any page — the palette, the sheet, the toasts, the confirm
+ * dialog, the crash panel. The sign-in and first-run screens are here too: they
+ * are the shell before there is a shell.
+ *
+ * Everything in this file would still be needed if every page were deleted, which
+ * is the test for whether a rule belongs here.
+ */
+
+/* The rail's width is a layout constant rather than a design token: the rail and
+   the workspace's left inset have to agree, and they are the only two things
+   that care. Declaring it here keeps that pair in one place. It is 214 rather
+   than a rounder number because the rail holds seven labels and three captions
+   and no more, and every pixel it does not take is measure for the list beside
+   it.
+
+   Three neighbours have left this block for tokens.css, all for one reason —
+   something outside the shell reads them. --mobile-header-height, because the
+   drawers that start underneath the header are primitives now, and a primitive
+   that reads a variable off an ancestor it may not have is not a primitive.
+   --pane-pad-top, --pane-pad-bottom and --shell-chrome, because the full-height
+   pages that subtract the shell's padding from the window are pages, and after
+   the split they are not in this file. */
+.app-shell {
+  --rail-width: 214px;
+
+  min-height: 100dvh;
+}
+
+/* The rail is dark in both themes: chrome, not content. */
+.sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: var(--layer-rail);
+  display: flex;
+  width: var(--rail-width);
+  flex-direction: column;
+  padding: var(--space-6) var(--space-4) var(--space-5);
+  color: var(--rail-text);
+  background: var(--rail);
+  border-right: 1px solid var(--rail-edge);
+}
+
+.wordmark {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-1) var(--space-4) var(--space-7);
+}
+
+.wordmark__mark {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  color: var(--text-inverse);
+  background: var(--iris);
+  border-radius: var(--radius-fitting);
+}
+
+.wordmark strong,
+.wordmark small {
+  display: block;
+}
+
+.wordmark strong {
+  font-family: var(--font-label);
+  font-size: var(--text-mini);
+  font-weight: 600;
+  letter-spacing: var(--track-label);
+}
+
+.wordmark small {
+  margin-top: var(--space-1);
+  color: var(--rail-muted);
+  font-size: var(--text-micro);
+}
+
+/* Drawn as the field it opens, not as a button, because that is what it becomes
+   the moment it is pressed. It sits above the seven destinations for the same
+   reason: it is the way to the things that are not destinations — a provider, a
+   key, one route out of forty. */
+.rail-search {
+  display: flex;
+  width: 100%;
+  min-height: var(--control-h-sm);
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-7);
+  padding: 0 var(--space-4);
+  color: var(--rail-muted);
+  background: var(--rail-raised);
+  border: 1px solid var(--rail-edge);
+  border-radius: var(--radius-fitting);
+  cursor: text;
+  font-size: var(--text-sm);
+  text-align: left;
+  transition: color var(--dur-state) var(--ease), border-color var(--dur-state) var(--ease);
+}
+
+.rail-search:hover {
+  color: var(--rail-text);
+  border-color: var(--edge-strong);
+}
+
+.rail-search span {
+  flex: 1;
+}
+
+/* The chord is printed here because this button is where an operator finds out
+   there is one. Every <kbd> in the console is this shape. */
+.rail-search kbd,
+.palette kbd,
+.shortcut kbd {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-fitting);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.rail-search kbd {
+  color: var(--rail-muted);
+  border-color: var(--rail-edge);
+}
+
+.sidebar nav {
+  display: grid;
+  gap: var(--space-6);
+}
+
+/* Seven rows in one stack read as a list to be searched. Three bands read as a
+   place to look: what you watch, what you set up, what you use. The gap between
+   groups is the whole separation — no boxes, no second background. */
+.nav-group {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.nav-group__caption {
+  margin: 0 0 var(--space-2);
+  padding: 0 var(--space-5);
+  color: var(--rail-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  font-weight: 500;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
+/* Settings is one row and belongs to no band, so it gets the hairline a caption
+   would otherwise have to invent a word for. */
+.nav-group__rule {
+  height: 0;
+  margin: 0 var(--space-5) var(--space-3);
+  border: 0;
+  border-top: 1px solid var(--rail-edge);
+}
+
+/* The rail is denser than a general control, but only while it is a rail. Once it
+   becomes a touch drawer the 44px floor has to survive, so the height is written
+   as the floor and tightened above the breakpoint rather than the other way
+   round: the version that set 38px here and patched it back at 650px left the
+   whole 651-900px range, where the drawer is already in use, on a 40px target. */
+.nav-item {
+  display: flex;
+  width: 100%;
+  min-height: var(--control-h-lg);
+  align-items: center;
+  gap: var(--space-5);
+  padding: 0 var(--space-4);
+  color: var(--rail-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-fitting);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  text-align: left;
+  text-decoration: none;
+  transition: color var(--dur-state) var(--ease), background var(--dur-state) var(--ease);
+}
+
+@media (min-width: 901px) {
+.nav-item { min-height: var(--control-h-md); }
+}
+
+.nav-item:hover {
+  color: var(--rail-text);
+  background: var(--rail-raised);
+}
+
+/* The active page is marked with an iris bar rather than a filled pill: it reads
+   at a glance and keeps the rail from looking like a stack of buttons. The bar is
+   3px for the same reason the selected row's is — this and the selected row are
+   the two "look here" markers an operator tracks at once, and a 2px rail against
+   a 3px row read as two different devices rather than one. */
+.nav-item.is-active {
+  color: var(--rail-text);
+  background: var(--rail-raised);
+  border-color: var(--rail-edge);
+  box-shadow: var(--select-bar);
+}
+
+.nav-item.is-active svg {
+  color: var(--iris);
+}
+
+/* The foot of the rail. It used to be five separate things — an update card, two
+   link rows, a name with a bare power icon beside it, and a version line — each
+   competing with the seven navigation rows above them for the same glance, none of
+   them somewhere an operator navigates to, and one of them signing out on a single
+   click. They are all still here, one control down. */
+.account {
+  position: relative;
+  margin-top: auto;
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--rail-edge);
+}
+
+.account__trigger {
+  display: flex;
+  width: 100%;
+  min-height: var(--control-h-lg);
+  align-items: center;
+  gap: var(--space-4);
+  padding: 0 var(--space-4);
+  color: var(--rail-text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-fitting);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--dur-state) var(--ease), border-color var(--dur-state) var(--ease);
+}
+
+.account__trigger:hover,
+.account__trigger.is-open {
+  background: var(--rail-raised);
+  border-color: var(--rail-edge);
+}
+
+.account__trigger > svg {
+  flex: 0 0 auto;
+  color: var(--rail-muted);
+  transition: transform var(--dur-state) var(--ease);
+}
+
+.account__trigger.is-open > svg {
+  transform: rotate(180deg);
+}
+
+.account__avatar {
+  display: grid;
+  width: var(--icon-box);
+  height: var(--icon-box);
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--text-inverse);
+  background: var(--iris);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-mini);
+  font-weight: 600;
+}
+
+.account__who {
+  min-width: 0;
+  flex: 1;
+}
+
+.account__who strong,
+.account__who small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account__who strong {
+  font-size: var(--text-sm);
+}
+
+.account__who small {
+  margin-top: var(--space-1);
+  color: var(--rail-muted);
+  font-size: var(--text-micro);
+}
+
+/* A new release is the one thing behind this menu worth interrupting for, so it
+   leaves a mark on the closed control. */
+.account__badge {
+  width: var(--icon-dot);
+  height: var(--icon-dot);
+  flex: 0 0 auto;
+  background: var(--iris);
+  border-radius: var(--radius-pill);
+}
+
+/* Opens upward, because the control it belongs to is at the bottom of the rail.
+   It is allowed to scroll: on a landscape phone the rail itself is barely taller
+   than this panel. */
+.account__menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + var(--space-3));
+  left: 0;
+  max-height: min(430px, calc(100dvh - 120px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--rail-raised);
+  border: 1px solid var(--rail-edge);
+  border-radius: var(--radius-fitting);
+  box-shadow: var(--lift-float);
+}
+
+.account__section {
+  padding: var(--space-5);
+}
+
+.account__section + .account__section {
+  border-top: 1px solid var(--rail-edge);
+}
+
+.account__caption {
+  margin: 0 0 var(--space-4);
+  color: var(--rail-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
+.account__themes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--rail);
+  border: 1px solid var(--rail-edge);
+  border-radius: var(--radius-fitting);
+}
+
+.account__theme {
+  min-height: var(--control-h-xs);
+  padding: 0 var(--space-2);
+  color: var(--rail-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-fitting);
+  cursor: pointer;
+  font-size: var(--text-mini);
+  transition: color var(--dur-state) var(--ease), background var(--dur-state) var(--ease);
+}
+
+.account__theme:hover {
+  color: var(--rail-text);
+}
+
+.account__theme.is-active {
+  color: var(--text-inverse);
+  background: var(--iris);
+}
+
+.account__item {
+  display: flex;
+  width: 100%;
+  min-height: var(--control-h-md);
+  align-items: center;
+  gap: var(--space-4);
+  padding: 0 var(--space-4);
+  color: var(--rail-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-fitting);
+  cursor: pointer;
+  font-size: var(--text-mini);
+  text-align: left;
+  text-decoration: none;
+  transition: color var(--dur-state) var(--ease), background var(--dur-state) var(--ease);
+}
+
+.account__item svg {
+  flex: 0 0 auto;
+}
+
+.account__item:hover {
+  color: var(--rail-text);
+  background: var(--rail);
+}
+
+.account__item--danger:hover {
+  color: var(--fault);
+}
+
+.account__version {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  color: var(--rail-muted);
+  border-radius: var(--radius-fitting);
+  text-decoration: none;
+}
+
+a.account__version:hover {
+  background: var(--rail);
+}
+
+.account__version strong,
+.account__version-state {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.account__version strong {
+  color: var(--rail-text);
+  font-size: var(--text-mini);
+}
+
+.account__version-state {
+  font-size: var(--text-micro);
+}
+
+.account__version-state.is-update {
+  color: var(--iris);
+}
+
+.account__version small {
+  font-size: var(--text-micro);
+  line-height: var(--leading-snug);
+}
+
+.workspace {
+  min-height: 100dvh;
+  margin-left: var(--rail-width);
+  background: var(--surface-canvas);
+}
+
+/* A wide measure with tight side gutters: these pages are tables and inspectors
+   side by side, and the gutter is the thing that gives way first. */
+.main-pane {
+  width: min(100%, 1600px);
+  margin: 0 auto;
+  padding: var(--pane-pad-top) clamp(var(--space-8), 3vw, var(--space-11)) var(--pane-pad-bottom);
+}
+
+/* The page an inspector drawer is covering. The two inspector breakpoints differ
+   — 1050px on Overview, 900px on the resource pages — so this carries no media
+   query of its own: a drawer registers itself with the shell only while it is
+   genuinely an overlay, and the class follows that registration.
+
+   Like the sheet's, the colour is a literal. No surface token is dark enough in
+   the light theme to read as "behind". */
+.drawer-scrim {
+  display: none;
+  position: fixed;
+  z-index: var(--layer-drawer-scrim);
+  inset: 0;
+  width: 100%;
+  background: rgb(8 14 19 / 0.5);
+  border: 0;
+  cursor: default;
+}
+
+.drawer-scrim.is-visible {
+  display: block;
+}
+
+.mobile-header,
+.mobile-scrim {
+  display: none;
+}
+
+.page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-9);
+  margin-bottom: var(--space-8);
+  padding-right: var(--space-9);
+}
+
+.page-header > div:first-child {
+  max-width: 760px;
+}
+
+.page-header p:last-child {
+  max-width: 670px;
+  margin-bottom: 0;
+  color: var(--text-muted);
+  line-height: var(--leading-normal);
+}
+
+.page-header__actions,
+.button-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.sheet-layer {
+  position: fixed;
+  z-index: var(--layer-sheet);
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* The scrim has to darken both themes, so it is the one place a literal earns
+   its keep: no surface token is dark enough in light mode to read as "behind". */
+.sheet-scrim {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  background: rgb(8 14 19 / 0.54);
+  border: 0;
+  cursor: default;
+  backdrop-filter: blur(2px);
+}
+
+.sheet {
+  position: relative;
+  display: flex;
+  width: min(100%, 540px);
+  height: 100%;
+  flex-direction: column;
+  background: var(--surface-raised);
+  border-left: 1px solid var(--edge);
+  border-radius: var(--radius-fitting);
+  box-shadow: var(--lift-float);
+  animation: sheet-in var(--dur-move) var(--ease);
+}
+
+.sheet--wide {
+  width: min(100%, 760px);
+}
+
+.sheet__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-7);
+  min-height: 82px;
+  padding: var(--space-6) var(--space-7);
+  border-bottom: 1px solid var(--edge);
+}
+
+.sheet__header h2,
+.sheet__header p {
+  margin-bottom: 0;
+}
+
+.sheet__body {
+  overflow-y: auto;
+  padding: var(--space-8);
+}
+
+/* The confirmation dialog. It sits above the sheet layer because a form panel is
+   what usually asks the question — delete this key, replace this limit — and the
+   answer has to be readable over the panel that raised it. */
+.confirm-layer {
+  position: fixed;
+  z-index: var(--layer-dialog);
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+}
+
+.confirm-scrim {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  background: rgb(8 14 19 / 0.58);
+  border: 0;
+  cursor: default;
+  backdrop-filter: blur(2px);
+}
+
+.confirm-dialog {
+  position: relative;
+  display: grid;
+  width: min(100%, 460px);
+  max-height: calc(100vh - var(--space-11));
+  gap: var(--space-6);
+  padding: var(--space-8);
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-dialog);
+  box-shadow: var(--lift-float);
+  animation: confirm-in var(--dur-state) var(--ease);
+}
+
+/* A destructive question is marked at its top edge rather than by colouring the
+   whole panel: the operator has to read the consequence, and a red field behind it
+   makes the text harder to read at the moment it matters most. */
+.confirm-dialog--danger {
+  border-top: 3px solid var(--fault-mark);
+}
+
+.confirm-dialog__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.confirm-dialog__head h2 {
+  margin-bottom: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 600;
+  line-height: var(--leading-snug);
+  letter-spacing: var(--track-tight);
+}
+
+.confirm-dialog__mark {
+  display: inline-flex;
+  flex: none;
+  color: var(--fault);
+}
+
+.confirm-dialog__body {
+  overflow-y: auto;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.confirm-dialog__body p {
+  margin: 0;
+}
+
+.confirm-dialog__body p + p {
+  margin-top: var(--space-5);
+}
+
+/* What is about to happen, itemised: the aliases being deleted, the counts in an
+   import. Set in the data face because every one of these is a list of names, and
+   with tabular figures because the counts sit in a stacked column the eye reads
+   down. The font shorthand resets font-variant, so the figures have to be stated
+   after it rather than before. */
+.confirm-dialog__detail {
+  max-height: 190px;
+  overflow-y: auto;
+  padding: var(--space-5);
+  background: var(--surface-sunken);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-panel);
+  color: var(--text-strong);
+  font-family: var(--font-data);
+  font-size: var(--text-mini);
+  font-weight: 500;
+  line-height: var(--leading-normal);
+  font-variant-numeric: tabular-nums;
+  white-space: pre-wrap;
+}
+
+.confirm-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-4);
+}
+
+/* Anchored near the top rather than centred: the list grows downward as the
+   operator types, and a panel that grows from the middle of the screen moves its
+   own first result away from the eye that is reading it. */
+.palette-layer {
+  position: fixed;
+  z-index: var(--layer-palette);
+  inset: 0;
+  display: grid;
+  justify-items: center;
+  padding: max(var(--space-6), 10vh) var(--space-6) var(--space-6);
+  align-content: start;
+}
+
+.palette-scrim {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  background: rgb(8 14 19 / 0.5);
+  border: 0;
+  cursor: default;
+  backdrop-filter: blur(2px);
+}
+
+.palette {
+  position: relative;
+  display: flex;
+  width: min(100%, 620px);
+  max-height: min(560px, 80vh);
+  flex-direction: column;
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-fitting);
+  box-shadow: var(--lift-float);
+  animation: confirm-in var(--dur-state) var(--ease);
+}
+
+.palette__field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: 0 var(--space-6);
+  border-bottom: 1px solid var(--edge);
+  color: var(--text-muted);
+}
+
+/* The whole strip is the field. A bordered box inside a bordered panel would draw
+   two frames around one thing, so the panel's own top edge is the frame and the
+   input carries no chrome of its own — including on focus, where the cursor is
+   already in it and nothing else on this layer can take it. */
+.palette__field input {
+  flex: 1;
+  min-height: var(--control-h-xl);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--text-strong);
+  font-family: var(--font-body);
+  font-size: var(--text-md);
+}
+
+.palette__field input:focus {
+  outline: 0;
+}
+
+.palette__results {
+  overflow-y: auto;
+  padding: var(--space-4) 0;
+  scrollbar-width: thin;
+}
+
+.palette__section {
+  margin: 0;
+  padding: var(--space-5) var(--space-6) var(--space-3);
+  color: var(--text-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  font-weight: 500;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
+/* One row: picture, name, and what distinguishes it from the others with the same
+   name. The detail is allowed to shrink to nothing and the name is not — an
+   operator scanning for "gpt-4o" needs to see the alias whole, and the provider
+   behind it only when there is room. */
+.palette__hit {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-4) var(--space-6);
+  color: var(--text-strong);
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+
+.palette__hit svg {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.palette__label {
+  flex: none;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette__detail {
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-mini);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Hover and keyboard are the same highlight, because they mean the same thing:
+   this is what Enter opens. The pointer moving over a row makes it the active one,
+   so the two can never disagree. */
+.palette__hit.is-active {
+  background: var(--select-wash);
+  box-shadow: var(--select-bar);
+}
+
+.palette__hit.is-active svg:last-child {
+  color: var(--iris);
+}
+
+.palette__empty {
+  margin: 0;
+  padding: var(--space-7) var(--space-6);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+/* Running text with keys set into it, not a row of flex items: a gap between
+   every child would put one around the separators too, and "to move ·" adrift
+   from what it separates reads as a typo. */
+.palette__hint {
+  margin: 0;
+  padding: var(--space-4) var(--space-6);
+  border-top: 1px solid var(--edge);
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+  line-height: 1.9;
+}
+
+.palette__hint kbd + kbd {
+  margin-left: var(--space-1);
+}
+
+.shortcut-groups {
+  display: grid;
+  gap: var(--space-9);
+}
+
+.shortcut-group h3 {
+  margin: 0 0 var(--space-5);
+  color: var(--text-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  font-weight: 500;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
+.shortcut-group dl {
+  display: grid;
+  margin: 0;
+  gap: var(--space-1);
+}
+
+/* Keys left, meaning right. The keys column is fixed so every description starts
+   on the same line down the page — a list of shortcuts is read by running the eye
+   down the sentences, not the glyphs. */
+.shortcut {
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--space-5);
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--edge);
+}
+
+.shortcut dt {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.shortcut dd {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.sheet-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-8);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--edge);
+}
+
+.sheet-actions > span {
+  flex: 1;
+}
+
+.page-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-6);
+}
+
+/* Notifications are anchored once, here, rather than each one pinning itself to the
+   same corner — which is what kept the console to a single visible message. The dock
+   is the fixed element and the two live regions inside it are ordinary blocks, so
+   messages stack in the corner while errors and confirmations keep the separate
+   aria-live wrappers they need. pointer-events are off on the empty dock so it never
+   swallows a click on the page underneath it, and back on for each message so its
+   dismiss button still works. */
+.toast-dock {
+  position: fixed;
+  z-index: var(--layer-toast);
+  right: 22px;
+  bottom: 22px;
+  display: flex;
+  max-width: min(420px, calc(100vw - 44px));
+  flex-direction: column;
+  gap: var(--space-4);
+  pointer-events: none;
+}
+
+.toast-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* The toast is the only thing in the console that genuinely floats over the
+   page, so it is the only thing that carries the float shadow. */
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  color: var(--text-strong);
+  background: var(--surface-raised);
+  border: 1px solid var(--edge-strong);
+  border-left: 3px solid var(--live-mark);
+  border-radius: var(--radius-fitting);
+  box-shadow: var(--lift-float);
+  font-size: var(--text-mini);
+  pointer-events: auto;
+  animation: toast-in var(--dur-state) var(--ease);
+}
+
+.toast--danger {
+  border-left-color: var(--fault-mark);
+}
+
+/* The message takes the width; the close button never shrinks or wraps under it. */
+.toast__message {
+  min-width: 0;
+  flex: 1;
+}
+
+.toast__close {
+  flex: 0 0 auto;
+}
+
+/* The crash panel is the last thing the console can show, so it says what still
+   works, what to do, and carries the error text worth reporting. */
+.crash-panel {
+  display: grid;
+  width: min(100%, 560px);
+  gap: var(--space-5);
+  padding: var(--space-9);
+  background: var(--surface-raised);
+  border: 1px solid var(--edge-strong);
+  border-top: 3px solid var(--fault-mark);
+  box-shadow: var(--lift-panel);
+}
+
+/* The same panel, rendered inside a shell that is still standing. It is wider
+   because it has a page's width to use rather than a centred card's, and it does
+   not centre itself: the navigation is still beside it and the failure belongs
+   where the page was. */
+.crash-panel--page {
+  width: 100%;
+  max-width: 760px;
+}
+
+.crash-panel p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+/* The copy button and whatever it has to say afterwards. A toast cannot answer
+   here — the notifier is part of the tree that has just stopped rendering. */
+.crash-panel__report {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.crash-panel__report span {
+  color: var(--text-muted);
+  font-size: var(--text-mini);
+}
+
+.crash-panel pre {
+  margin: 0;
+  overflow-x: auto;
+  padding: var(--space-5);
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+  border: 1px solid var(--edge);
+  font-size: var(--text-mini);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* The stack is kept but folded away: the operator needs the way out of the failure
+   before they need the text to report it. */
+.crash-panel details {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.crash-panel summary {
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: var(--text-mini);
+}
+
+.page-skeleton {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.page-skeleton span {
+  display: block;
+  height: 66px;
+  background: linear-gradient(90deg, var(--surface-sunken), var(--surface-raised), var(--surface-sunken));
+  background-size: 220% 100%;
+  border: 1px solid var(--edge);
+  animation: skeleton 1.4s linear infinite;
+}
+
+@keyframes skeleton {
+  to { background-position: -220% 0; }
+}
+
+/* The graph paper behind the sign-in card is drawn from the hairline colour, so
+   it follows the theme instead of needing a second background per theme. */
+.auth-shell {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: var(--space-9);
+  background:
+    linear-gradient(var(--edge) 1px, transparent 1px),
+    linear-gradient(90deg, var(--edge) 1px, transparent 1px),
+    var(--surface-canvas);
+  background-size: 48px 48px;
+}
+
+/* The card is the only thing on the canvas — it is not floating over anything,
+   so it takes the slab elevation the rest of the console uses rather than the
+   drop reserved for sheets, dialogs and toasts. */
+.auth-panel {
+  display: grid;
+  width: min(100%, 960px);
+  grid-template-columns: 1.05fr 0.95fr;
+  overflow: hidden;
+  background: var(--surface-raised);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--radius-fitting);
+  box-shadow: var(--lift-panel);
+}
+
+/* First-run setup asks for a bootstrap token, so it is the one screen where the
+   panel must look like part of the server rather than part of the product: the
+   dark half widens. */
+.auth-panel--setup {
+  grid-template-columns: 1.15fr 0.85fr;
+}
+
+/* The intro half is the dark side of the card in both themes, which is what
+   makes the form half read as the thing you type into. */
+.auth-panel__intro {
+  min-height: 570px;
+  padding: clamp(var(--space-9), 6vw, var(--space-12));
+  color: var(--rail-text);
+  background: var(--rail);
+}
+
+.auth-panel__intro .eyebrow {
+  color: var(--iris);
+}
+
+.auth-panel__intro h1 {
+  margin-top: var(--space-12);
+  font-size: clamp(var(--text-2xl), 4vw, var(--text-3xl));
+}
+
+.auth-panel__intro > p:not(.eyebrow) {
+  max-width: 430px;
+  color: var(--rail-muted);
+  line-height: var(--leading-normal);
+}
+
+.setup-rail {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  margin-top: var(--space-12);
+  border-top: 1px solid var(--rail-edge);
+}
+
+.setup-rail span {
+  position: relative;
+  padding-top: var(--space-5);
+  color: var(--rail-muted);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.setup-rail span::before {
+  position: absolute;
+  top: -4px;
+  left: 0;
+  width: var(--icon-dot);
+  height: var(--icon-dot);
+  background: var(--rail-edge);
+  border-radius: var(--radius-pill);
+  content: "";
+}
+
+.setup-rail .is-active {
+  color: var(--rail-text);
+}
+
+.setup-rail .is-active::before {
+  background: var(--iris);
+  box-shadow: 0 0 0 4px var(--iris-wash);
+}
+
+.auth-form {
+  display: grid;
+  align-content: center;
+  gap: var(--space-6);
+  padding: clamp(var(--space-9), 5vw, var(--space-12));
+  background: var(--surface-raised);
+}
+
+.auth-form > div:first-child {
+  margin-bottom: var(--space-5);
+}
+
+.auth-form > div:first-child p:last-child {
+  margin-bottom: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.login-panel {
+  width: min(100%, 470px);
+  overflow: hidden;
+  background: var(--surface-raised);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--radius-fitting);
+  box-shadow: var(--lift-panel);
+}
+
+/* The same wordmark, on a card instead of a rail. It only started working when
+   the two `.wordmark` rules became one: the console sheet's copy was loaded after
+   this modifier and reset the padding, so the sign-in header had been wearing the
+   rail's 2px top edge. Its sides match the form below it — the mark and the first
+   line of the card have to start on the same vertical, and 20px all round left
+   them four pixels apart. */
+.wordmark--auth {
+  color: var(--rail-text);
+  background: var(--rail);
+  padding: var(--space-7) var(--space-8);
+}
+
+.boot-sequence {
+  display: grid;
+  width: min(320px, 82vw);
+  justify-items: center;
+  gap: var(--space-6);
+  color: var(--iris);
+}
+
+/* "Checking control plane" is a status readout, not prose, so it is set in the
+   label face like every other uppercase micro-label. */
+.boot-sequence p {
+  color: var(--text-muted);
+  font-family: var(--font-label);
+  font-size: var(--text-micro);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+}
+
+.boot-line {
+  width: 100%;
+  height: 3px;
+  background: var(--edge);
+}
+
+.boot-line span {
+  display: block;
+  width: 35%;
+  height: 100%;
+  background: var(--iris);
+  animation: boot 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes boot {
+  from { transform: translateX(0); }
+  to { transform: translateX(185%); }
+}
+
+@media (max-width: 900px) {
+/* The drawer starts where the mobile header ends rather than covering it, so
+     the menu button that opened it stays visible and the drawer never overlaps
+     the header by the few pixels a separately-guessed offset would drift by.
+     Both edges are pinned, which is what bounds the scroll area below. */
+  .sidebar {
+    inset: var(--mobile-header-height) auto 0 0;
+    transform: translateX(-100%);
+    transition: transform var(--dur-move) var(--ease);
+  }
+
+.sidebar.is-open {
+    transform: translateX(0);
+  }
+
+/* Seven nav rows plus three group captions and the account control do not fit a
+     landscape phone, so the nav itself takes the overflow. Without min-height it
+     refuses to shrink below its content and the account control is pushed
+     off-screen where nothing can scroll to it. */
+  .sidebar nav {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+.account {
+    flex: 0 0 auto;
+  }
+
+/* The scrim sits over page content in both themes, so it is a literal for the
+     same reason the sheet's is: no surface token is dark enough here. */
+  .mobile-scrim {
+    position: fixed;
+    z-index: var(--layer-scrim);
+    inset: 0;
+    width: 100%;
+    background: rgb(8 14 19 / 0.5);
+    border: 0;
+  }
+
+.mobile-scrim.is-visible {
+    display: block;
+  }
+
+/* With the rail off-canvas the workspace reclaims its left inset. */
+  .workspace {
+    margin-left: 0;
+  }
+
+/* Three things: the menu button, the product name, and search. The theme control
+     that used to sit on the right went into the account menu inside the drawer,
+     which is where every other rail-level setting already was — search took its
+     place because the rail's own search button is off-canvas at this width and a
+     phone has no Ctrl+K. */
+  .mobile-header {
+    position: sticky;
+    z-index: var(--layer-sticky);
+    top: 0;
+    display: flex;
+    height: var(--mobile-header-height);
+    min-height: var(--mobile-header-height);
+    align-items: center;
+    gap: var(--space-5);
+    padding: var(--space-4) var(--space-5);
+    background: color-mix(in srgb, var(--surface-raised) 94%, transparent);
+    border-bottom: 1px solid var(--edge);
+    backdrop-filter: blur(10px);
+  }
+
+/* The header shows the product name where the rail's wordmark was, so it keeps
+     the wordmark's label face rather than turning into a page title. It takes the
+     slack so the two icon buttons stay pinned to their own edges. */
+  .mobile-header strong {
+    flex: 1;
+    font-family: var(--font-label);
+    font-size: var(--text-mini);
+    letter-spacing: var(--track-label);
+  }
+
+.main-pane {
+    padding: var(--space-9) var(--space-7) var(--space-12);
+  }
+
+.page-header {
+    padding-right: 0;
+  }
+
+.auth-panel,
+  .auth-panel--setup {
+    grid-template-columns: 1fr;
+  }
+
+.auth-panel__intro {
+    min-height: auto;
+    padding: var(--space-9);
+  }
+
+.auth-panel__intro h1 {
+    margin-top: var(--space-9);
+  }
+
+.setup-rail {
+    margin-top: var(--space-9);
+  }
+}
+
+@media (max-width: 650px) {
+.main-pane {
+    padding-right: var(--space-6);
+    padding-left: var(--space-6);
+  }
+
+.page-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--space-7);
+    margin-bottom: var(--space-8);
+  }
+
+.page-header__actions {
+    width: 100%;
+  }
+
+.page-header__actions .button {
+    width: 100%;
+  }
+
+/* The three step names are decoration for a form that already states which step
+     it is on in its own heading, so they are the one thing here that can go. */
+  .setup-rail {
+    display: none;
+  }
+
+/* Two columns of ellipsised text on a 375px screen leaves neither one readable.
+     The detail goes under the name and keeps its own line, so a route still says
+     which provider serves it. The panel takes the top of the screen outright: the
+     keyboard is about to cover the bottom half of it. */
+  .palette-layer {
+    padding: 0;
+  }
+
+.palette {
+    width: 100%;
+    max-height: 100%;
+    border: 0;
+    border-bottom: 1px solid var(--edge);
+  }
+
+.palette__hit {
+    display: grid;
+    grid-template-columns: 15px minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    align-items: center;
+    row-gap: var(--space-2);
+    padding: var(--space-4) var(--space-6);
+  }
+
+.palette__hit > svg:first-child {
+    grid-row: 1 / -1;
+  }
+
+.palette__label,
+  .palette__detail {
+    max-width: 100%;
+    grid-column: 2;
+    text-align: left;
+  }
+
+/* The row is tapped, not Entered. */
+  .palette__hit > svg:last-child {
+    display: none;
+  }
+
+/* The arrow keys it names are not on this keyboard, and the row it sits under is
+     already tappable. */
+  .palette__hint {
+    display: none;
+  }
+
+.shortcut {
+    grid-template-columns: 1fr;
+    gap: var(--space-2);
+  }
+
+.sheet {
+    width: 100%;
+    border-left: 0;
+  }
+
+.sheet__body {
+    padding: var(--space-6);
+  }
+
+.auth-shell {
+    padding: var(--space-5);
+  }
+
+.auth-panel__intro,
+  .auth-form {
+    padding: var(--space-9) var(--space-8);
+  }
+
+.auth-panel__intro h1 {
+    font-size: var(--text-2xl);
+  }
+
+.toast-dock {
+    right: 14px;
+    bottom: 14px;
+    max-width: calc(100vw - 28px);
+  }
+
+/* Two buttons side by side on a phone leaves each about 150px, and the confirm
+     label is a full action name — "Delete provider", not "OK". Stacked, each gets
+     the measure, and the destructive one stays at the bottom where the thumb is
+     less likely to be resting. */
+  .confirm-dialog {
+    padding: var(--space-7) var(--space-6);
+  }
+
+.confirm-dialog__actions {
+    flex-direction: column-reverse;
+  }
+
+.confirm-dialog__actions .button {
+    justify-content: center;
+    width: 100%;
+  }
+}
+
+.page-header h1,
+.console-panel h2,
+.overview-inspector h2 {
+  font-family: var(--font-display);
+  font-weight: 500;
+}
+
+.page-header h1 {
+  font-size: clamp(var(--text-xl), 2.3vw, var(--text-2xl));
+  letter-spacing: var(--track-display);
+}
+
+@media (max-width: 650px) {
+.main-pane { padding-top: var(--space-7); }
+}
