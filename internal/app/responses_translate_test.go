@@ -187,6 +187,132 @@ func TestPreferredResponsesPlansEveryPublicMode(t *testing.T) {
 	}
 }
 
+// chatOnlyFields and responsesOnlyFields are the two endpoints' private
+// vocabularies: a field in one list is rejected outright by the other endpoint,
+// not ignored. Fields both endpoints accept — model, stream, temperature, top_p,
+// tools, tool_choice, parallel_tool_calls, metadata, store, user — are in
+// neither list, because seeing one anywhere proves nothing.
+var (
+	chatOnlyFields = []string{
+		"messages", "max_tokens", "max_completion_tokens", "stop", "stream_options",
+		"response_format", "frequency_penalty", "presence_penalty", "n", "seed",
+		"logit_bias", "logprobs", "top_logprobs", "service_tier",
+	}
+	responsesOnlyFields = []string{
+		"input", "instructions", "max_output_tokens", "reasoning", "text",
+		"include", "previous_response_id", "truncation",
+	}
+)
+
+// TestPlanNeverMixesEndpointVocabularies is the guard the gateway did not have
+// when request req_TrwPgSoxFIVzRX9rBTjwisMX failed. A chat caller was translated
+// up into /responses correctly, and then the output cap was written onto the
+// translated payload under its Chat name, so Azure answered "Unknown parameter:
+// 'max_tokens'" and the call was lost.
+//
+// The bug's class is wider than the one field: any point that writes to a
+// payload after a translation can spell something for the endpoint the request
+// started at rather than the one it is going to. So this asserts the whole
+// vocabulary over every plan the router can build, rather than the field that
+// happened to fail. Each case runs twice, because the defect only appeared when
+// the caller named no cap and the gateway supplied the default itself.
+func TestPlanNeverMixesEndpointVocabularies(t *testing.T) {
+	server := &Server{redis: unreachableRedis()}
+	defer server.redis.Close()
+
+	responsesOnly := ModelRoute{ID: "mdl_responses", SupportsResponses: true, UpstreamModel: "gpt-upstream", DefaultMaxOutputTokens: 1024}
+	chatOnly := ModelRoute{ID: "mdl_chat", SupportsChat: true, UpstreamModel: "gpt-upstream", DefaultMaxOutputTokens: 1024}
+	switched := dispatchState{PreferNativeResponses: map[string]bool{"mdl_chat": true}}
+
+	// The turn every case sends, and the field each public protocol spells its
+	// output cap with — the one thing that differs between "the caller named a
+	// cap" and "the gateway had to invent one".
+	turn := []any{map[string]any{"role": "user", "content": "Hello"}}
+	capField := map[string]string{
+		messageModeChat:      "max_tokens",
+		messageModeResponses: "max_output_tokens",
+		messageModeAnthropic: "max_tokens",
+	}
+
+	tests := []struct {
+		name     string
+		mode     string
+		model    ModelRoute
+		state    dispatchState
+		public   map[string]any
+		wantPath string
+	}{
+		{"chat caller, Responses-only route", messageModeChat, responsesOnly, dispatchState{},
+			map[string]any{"model": "public/alias", "messages": turn}, "/responses"},
+		{"chat caller, switched by the provider", messageModeChat, chatOnly, switched,
+			map[string]any{"model": "public/alias", "messages": turn}, "/responses"},
+		{"chat caller, Chat route", messageModeChat, chatOnly, dispatchState{},
+			map[string]any{"model": "public/alias", "messages": turn}, "/chat/completions"},
+
+		{"Responses caller, Responses route", messageModeResponses, responsesOnly, dispatchState{},
+			map[string]any{"model": "public/alias", "input": "Hello"}, "/responses"},
+		{"Responses caller, switched by the provider", messageModeResponses, chatOnly, switched,
+			map[string]any{"model": "public/alias", "input": "Hello"}, "/responses"},
+		{"Responses caller, Chat-only route", messageModeResponses, chatOnly, dispatchState{},
+			map[string]any{"model": "public/alias", "input": "Hello"}, "/chat/completions"},
+
+		{"Anthropic caller, Responses-only route", messageModeAnthropic, responsesOnly, dispatchState{},
+			map[string]any{"model": "public/alias", "messages": turn}, "/responses"},
+		{"Anthropic caller, switched by the provider", messageModeAnthropic, chatOnly, switched,
+			map[string]any{"model": "public/alias", "messages": turn}, "/responses"},
+		{"Anthropic caller, Chat route", messageModeAnthropic, chatOnly, dispatchState{},
+			map[string]any{"model": "public/alias", "messages": turn}, "/chat/completions"},
+	}
+
+	for _, test := range tests {
+		for _, capped := range []bool{false, true} {
+			name := test.name + ", no cap sent"
+			if capped {
+				name = test.name + ", cap sent"
+			}
+			t.Run(name, func(t *testing.T) {
+				public := cloneMap(test.public)
+				if capped {
+					public[capField[test.mode]] = json.Number("64")
+				}
+				route := routeRuntime{Provider: Provider{APIFormat: "openai"}, Model: test.model}
+				plan, err := server.buildPlan(context.Background(), dispatchRequest{
+					PublicMode: test.mode, Alias: "public/alias", Public: public, Raw: mustJSON(public),
+				}, route, test.state)
+				if err != nil {
+					t.Fatalf("plan failed: %v", err)
+				}
+				if plan.Path != test.wantPath {
+					t.Fatalf("path = %q, want %q", plan.Path, test.wantPath)
+				}
+
+				forbidden, endpoint := responsesOnlyFields, "Chat Completions"
+				if plan.Path == "/responses" {
+					forbidden, endpoint = chatOnlyFields, "Responses"
+				}
+				for _, field := range forbidden {
+					if _, present := plan.Payload[field]; present {
+						t.Fatalf("%q reached a %s upstream, which rejects it: %s", field, endpoint, plan.Encoded)
+					}
+				}
+
+				// The cap must not merely be spelled right — it must be there. A plan
+				// that dropped it entirely would pass the check above and then reserve
+				// tokens against a limit the provider never agreed to.
+				cap := "max_tokens"
+				if plan.Path == "/responses" {
+					cap = "max_output_tokens"
+				}
+				if got := numberAsInt64(plan.Payload[cap]); got <= 0 {
+					t.Fatalf("no output cap survived as %q: %s", cap, plan.Encoded)
+				} else if capped && got != 64 {
+					t.Fatalf("the caller asked for 64 and got %d: %s", got, plan.Encoded)
+				}
+			})
+		}
+	}
+}
+
 func TestTranslateChatRequestToResponsesCoversToolsAndStructuredOutput(t *testing.T) {
 	translated, dropped, err := translateChatRequestToResponses(map[string]any{
 		"model": "gpt-upstream",

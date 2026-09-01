@@ -357,9 +357,15 @@ func (s *Server) servePooled(
 					"request_id", req.RequestID, "model", candidate.Route.Model.PublicAlias,
 					"provider", candidate.Route.Provider.Name)
 			}
+			// Believed for the rest of this request, but not written down yet. The
+			// provider naming /responses proves only that Chat was refused; whether
+			// the gateway can actually build a Responses request this provider
+			// accepts is proved by the next attempt, and that is where the
+			// preference is stored. Caching it here once cost a day of requests
+			// that failed on their first attempt with nothing in the log to say
+			// why the endpoint had changed.
 			if outcome.NativeResponsesPreferred && !state.NativeResponsesUnavailable[candidate.Route.Model.ID] {
 				state.PreferNativeResponses[candidate.Route.Model.ID] = true
-				s.rememberResponsesEndpointPreferred(r.Context(), candidate.Route.Model.ID)
 			}
 			rebuilt, rebuildErr := s.buildPoolPlans(r.Context(), req, candidates, state)
 			if rebuildErr != nil {
@@ -600,7 +606,13 @@ func (s *Server) runAttempt(
 				}
 			}
 		}
-		if !switchEndpoint && !hasReplacement && len(parameters) == 0 {
+		// A 400 the gateway can name is already excluded above. So is a 400 on an
+		// endpoint the gateway chose for itself: the key had no part in that
+		// decision and every other key in the pool would be rejected identically,
+		// so striking this one only shrinks the rotation over the gateway's own
+		// mistake. A route that publishes /responses natively is not covered —
+		// there the configuration is the operator's and the 400 is real evidence.
+		if !switchEndpoint && !hasReplacement && len(parameters) == 0 && !plan.SwitchedToResponses {
 			s.markUpstreamFailure(r.Context(), credential.ID, response.StatusCode, response.Header, errorBody)
 		}
 		return s.writeAttemptFailure(w, r, req, plan, response, errorBody, wasTruncated, record, credential, upstreamRequestID)
@@ -643,6 +655,12 @@ func (s *Server) runAttempt(
 	}
 
 	s.markCredentialSuccess(r.Context(), credential.ID)
+	// The endpoint switch is now proved rather than inferred, so later requests
+	// for this model may start at /responses. Recorded here and nowhere else: a
+	// switch that ends in a 400 teaches nothing beyond this request.
+	if plan.SwitchedToResponses {
+		s.rememberResponsesEndpointPreferred(r.Context(), candidate.Route.Model.ID)
+	}
 	if req.Stream {
 		return s.streamAttempt(w, r, req, candidate, plan, response, reserved, record, upstreamRequestID)
 	}

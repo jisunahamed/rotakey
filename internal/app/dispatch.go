@@ -212,7 +212,7 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 		plan.TokenCost = plan.InputEstimate + numberAsInt64(payload["max_tokens"])
 	} else {
 		input, output := prepareTokenReservation(
-			payload, plan.wireEndpoint(), plan.Translated,
+			payload, plan.wireEndpoint(),
 			route.Model.DefaultMaxOutputTokens, route.Model.Tokenizer, req.Raw,
 		)
 		plan.InputEstimate = input

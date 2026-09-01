@@ -39,8 +39,12 @@ var (
 		"metadata":            true,
 		"user":                true,
 	}
+	// unsupportedParameterPattern reads the parameter's name out of an upstream
+	// rejection. Providers disagree on the adjective for the same complaint:
+	// OpenAI writes "Unsupported parameter", Azure writes "Unknown parameter",
+	// and Gemini's OpenAI surface writes "Unrecognized request argument supplied".
 	unsupportedParameterPattern = regexp.MustCompile(
-		`(?i)(?:unrecognized request argument supplied|unsupported (?:request )?(?:argument|parameter)(?:\(s\))?)\s*:\s*['"` + "`" + `]?([A-Za-z][A-Za-z0-9_.-]{0,63})`,
+		`(?i)(?:unrecognized request argument supplied|(?:unsupported|unknown) (?:request )?(?:argument|parameter)(?:\(s\))?)\s*:\s*['"` + "`" + `]?([A-Za-z][A-Za-z0-9_.-]{0,63})`,
 	)
 	suggestedReplacementPattern = regexp.MustCompile(
 		`(?i)\buse\s+['"` + "`" + `]?([A-Za-z][A-Za-z0-9_.-]{0,63})['"` + "`" + `]?\s+instead\b`,
@@ -362,12 +366,7 @@ func unsupportedCompatibilityParameters(body []byte, payload map[string]any) []s
 	}
 	if json.Unmarshal(body, &envelope) == nil {
 		matches := compatibilityParameterMatches(envelope.Error.Message)
-		code, _ := envelope.Error.Code.(string)
-		signal := strings.Contains(strings.ToLower(code), "unrecognized_request_argument") ||
-			strings.Contains(strings.ToLower(code), "unsupported_parameter") ||
-			strings.Contains(strings.ToLower(envelope.Error.Type), "unsupported_parameter") ||
-			len(matches) > 0
-		if signal {
+		if unsupportedParameterCode(envelope.Error.Code, envelope.Error.Type) || len(matches) > 0 {
 			if parameter, ok := envelope.Error.Param.(string); ok {
 				candidates = append(candidates, parameter)
 			}
@@ -394,6 +393,19 @@ func unsupportedCompatibilityParameters(body []byte, payload map[string]any) []s
 		return nil
 	}
 	return parameters
+}
+
+// unsupportedParameterCode reports whether the provider's machine-readable code
+// or type says the request carried a parameter it does not accept. Both readers
+// of this signal — the strip pass and the replacement pass — need the same three
+// spellings, so the list is written once rather than drifting apart in two
+// boolean expressions.
+func unsupportedParameterCode(code any, errorType string) bool {
+	text, _ := code.(string)
+	text = strings.ToLower(text + " " + errorType)
+	return strings.Contains(text, "unsupported_parameter") ||
+		strings.Contains(text, "unknown_parameter") ||
+		strings.Contains(text, "unrecognized_request_argument")
 }
 
 func compatibilityParameterMatches(message string) [][]string {
@@ -433,9 +445,7 @@ func unsupportedCompatibilityReplacement(body []byte, payload map[string]any) (c
 		return compatibilityReplacement{}, false
 	}
 
-	code, _ := envelope.Error.Code.(string)
-	unsupported := strings.Contains(strings.ToLower(code), "unsupported_parameter") ||
-		strings.Contains(strings.ToLower(envelope.Error.Type), "unsupported_parameter") ||
+	unsupported := unsupportedParameterCode(envelope.Error.Code, envelope.Error.Type) ||
 		len(unsupportedParameterPattern.FindStringSubmatch(envelope.Error.Message)) > 1
 	if !unsupported {
 		return compatibilityReplacement{}, false
@@ -690,10 +700,19 @@ func (s *Server) rememberCompatibilityReplacement(
 	}
 }
 
+// prepareTokenReservation estimates the request's token cost and, when the caller
+// named no output cap, writes the default one in the spelling the endpoint on the
+// wire accepts: max_tokens at /chat/completions, max_output_tokens at /responses.
+//
+// The endpoint is the only thing that decides this. An earlier version also took
+// a `translated` flag and treated it as "translated down into Chat", which was
+// true when Chat was the only shape anything was translated into. Once chat and
+// anthropic callers began translating *up* into /responses, that flag put
+// max_tokens on a Responses payload and the provider rejected the whole request
+// with "Unknown parameter: 'max_tokens'".
 func prepareTokenReservation(
 	payload map[string]any,
 	endpoint string,
-	translated bool,
 	defaultOutput int,
 	tokenizerProfile string,
 	requestBody []byte,
@@ -707,7 +726,7 @@ func prepareTokenReservation(
 			break
 		}
 	}
-	if translated || endpoint == "chat" {
+	if endpoint == "chat" {
 		if numberAsInt64(payload["max_tokens"]) == 0 && numberAsInt64(payload["max_completion_tokens"]) == 0 {
 			payload["max_tokens"] = output
 		}

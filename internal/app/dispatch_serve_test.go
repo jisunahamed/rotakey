@@ -10,7 +10,39 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// responsesAnswer is a minimal successful reply from the Responses endpoint. Its
+// only job is to be translatable, so an attempt can be driven all the way to the
+// success path.
+const responsesAnswer = `{"id":"resp_1","object":"response","status":"completed","model":"gpt-5.6-sol","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}],"usage":{"input_tokens":5,"output_tokens":2}}`
+
+// unreachablePostgres does for credential state what unreachableRedis does for
+// the limiter: the pool is real and every query fails to dial. The success path
+// writes a row to credentials, and a test that has Redis but no database still
+// needs to reach the code just past that write.
+func unreachablePostgres(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	pool, err := pgxpool.New(context.Background(), "postgres://rotakey:rotakey@127.0.0.1:1/rotakey")
+	if err != nil {
+		t.Fatalf("build an unreachable pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// upstreamAnswering answers every request with 200 and one body.
+func upstreamAnswering(t *testing.T, body string) *httptest.Server {
+	t.Helper()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(upstream.Close)
+	return upstream
+}
 
 // azureResponsesDemand is the rejection Azure Foundry sends when a request
 // carries function tools that its Chat Completions route will not accept. It
@@ -169,6 +201,127 @@ func TestRunAttemptSparesACredentialFromARequestShapeRejection(t *testing.T) {
 		opaque.Client(), context.Background(), reservation{}, false)
 	if count, err := client.Exists(context.Background(), failures).Result(); err != nil || count != 1 {
 		t.Fatalf("an unexplained 400 was not charged to the credential (exists=%d, err=%v)", count, err)
+	}
+}
+
+// switchedPlan is the plan the gateway builds for the retry after a provider has
+// named /responses: the same request, at the other endpoint, flagged so the rest
+// of the attempt knows the gateway chose this endpoint rather than the operator.
+func switchedPlan() upstreamPlan {
+	return upstreamPlan{
+		Payload:             map[string]any{"model": "gpt-5.6-sol", "input": "Hello"},
+		Encoded:             []byte(`{"model":"gpt-5.6-sol","input":"Hello"}`),
+		Path:                "/responses",
+		Format:              "openai",
+		Translated:          true,
+		SwitchedToResponses: true,
+	}
+}
+
+// TestResponsesPreferenceIsRememberedOnlyOnceItWorks is the durability half of
+// the 3.0.1 fix. The preference used to be written to Redis the moment a
+// provider's error text named /responses — before anything had been sent there.
+// When the request the gateway then built was itself invalid, every request for
+// the next 24 hours started at /responses, failed on its first attempt, and left
+// no switch in the log to explain why the endpoint had changed.
+//
+// A provider naming /responses proves only that Chat was refused. What has to be
+// proved before it is written down is that the gateway can build a request for
+// /responses that this provider accepts — which is what a 2xx there says and
+// nothing earlier does.
+func TestResponsesPreferenceIsRememberedOnlyOnceItWorks(t *testing.T) {
+	client := integrationRedis(t)
+	ctx := context.Background()
+	modelID := fmt.Sprintf("mdl_switch_%d", time.Now().UnixNano())
+	t.Cleanup(func() { _ = client.Del(ctx, responsesPreferredKey(modelID)).Err() })
+
+	remembered := func(t *testing.T) bool {
+		t.Helper()
+		count, err := client.Exists(ctx, responsesPreferredKey(modelID)).Result()
+		if err != nil {
+			t.Fatalf("read the preference: %v", err)
+		}
+		return count == 1
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))
+	req := dispatchRequest{RequestID: "req_switch", PublicMode: messageModeChat, Alias: "azure/gpt-5.6-sol", Endpoint: "/v1/chat/completions"}
+
+	// The rejection that names the endpoint. Believed for this request, and only
+	// for this request.
+	demand := upstreamRejecting(t, http.StatusBadRequest, azureResponsesDemand)
+	server, candidate, plan := chatAttempt(t, demand.URL)
+	server.redis, server.db = client, unreachablePostgres(t)
+	candidate.Route.Model.ID = modelID
+	outcome := server.runAttempt(httptest.NewRecorder(), request, req, candidate, plan,
+		demand.Client(), ctx, reservation{}, true)
+	if !outcome.NativeResponsesPreferred {
+		t.Fatal("the provider's instruction to use /responses was not reported to the pool")
+	}
+	if remembered(t) {
+		t.Fatal("the preference was written before a single request had reached /responses")
+	}
+
+	// The retry goes to /responses and is rejected there too — which is exactly
+	// what happened in production, and exactly the case that must teach nothing.
+	rejected := upstreamRejecting(t, http.StatusBadRequest,
+		`{"error":{"message":"Unknown parameter: 'max_tokens'.","type":"invalid_request_error","param":"max_tokens","code":"unknown_parameter"}}`)
+	candidate.Route.Provider.BaseURL = rejected.URL
+	server.runAttempt(httptest.NewRecorder(), request, req, candidate, switchedPlan(),
+		rejected.Client(), ctx, reservation{}, false)
+	if remembered(t) {
+		t.Fatal("a switch that failed at /responses was still remembered for the next 24 hours")
+	}
+
+	// The switch works. Now it is worth keeping, and the next request may start
+	// at /responses instead of paying the rejection again.
+	answering := upstreamAnswering(t, responsesAnswer)
+	candidate.Route.Provider.BaseURL = answering.URL
+	success := server.runAttempt(httptest.NewRecorder(), request, req, candidate, switchedPlan(),
+		answering.Client(), ctx, reservation{}, false)
+	if !success.Done || success.Status != http.StatusOK {
+		t.Fatalf("the switched attempt did not succeed: %#v", success.Record)
+	}
+	if !remembered(t) {
+		t.Fatal("a switch that worked was not remembered, so every later request pays the rejection again")
+	}
+}
+
+// TestSwitchedEndpointRejectionSparesTheCredential covers the other cost of the
+// same bug. A 400 at an endpoint the gateway picked for itself says nothing about
+// the key that carried it — every key in the pool would have been rejected
+// identically — but each one used to count as a strike, and three in five minutes
+// put a healthy key into cooldown over the gateway's own request body.
+func TestSwitchedEndpointRejectionSparesTheCredential(t *testing.T) {
+	client := integrationRedis(t)
+	ctx := context.Background()
+	rejected := upstreamRejecting(t, http.StatusBadRequest,
+		`{"error":{"message":"Unknown parameter: 'max_tokens'.","type":"invalid_request_error","param":"max_tokens","code":"unknown_parameter"}}`)
+	server, candidate, _ := chatAttempt(t, rejected.URL)
+	server.redis, server.db = client, unreachablePostgres(t)
+	candidate.Credential.CredentialView.ID = fmt.Sprintf("cre_switch_%d", time.Now().UnixNano())
+	failures := "failures:" + candidate.Credential.ID
+	t.Cleanup(func() { _ = client.Del(ctx, failures).Err() })
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))
+	req := dispatchRequest{RequestID: "req_switch_strike", PublicMode: messageModeChat, Alias: "azure/gpt-5.6-sol", Endpoint: "/v1/chat/completions"}
+	// The budget is spent, so the rejection is delivered rather than repaired.
+	// There is no repair for this one in any case: the gateway cannot strip an
+	// output cap, so this is the path the request actually took.
+	server.runAttempt(httptest.NewRecorder(), request, req, candidate, switchedPlan(),
+		rejected.Client(), ctx, reservation{}, false)
+	if count, err := client.Exists(ctx, failures).Result(); err != nil || count != 0 {
+		t.Fatalf("a key was struck for an endpoint the gateway chose (exists=%d, err=%v)", count, err)
+	}
+
+	// The same rejection on a plan the operator configured is real evidence: the
+	// route claims /responses itself, so nothing but the key or the model is left
+	// to blame, and the strike must still land.
+	configured := switchedPlan()
+	configured.SwitchedToResponses = false
+	server.runAttempt(httptest.NewRecorder(), request, req, candidate, configured,
+		rejected.Client(), ctx, reservation{}, false)
+	if count, err := client.Exists(ctx, failures).Result(); err != nil || count != 1 {
+		t.Fatalf("a 400 on the route's own endpoint was not charged to the key (exists=%d, err=%v)", count, err)
 	}
 }
 

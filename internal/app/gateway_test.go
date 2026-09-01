@@ -159,6 +159,29 @@ func TestUnsupportedCompatibilityParameters(t *testing.T) {
 			want: []string{"reasoning_effort"},
 		},
 		{
+			// Azure's word for the same complaint. Until the gateway read it, every
+			// rejection like this one was final and cost the key a strike, even
+			// though the field it names is one the gateway is allowed to drop.
+			name: "azure unknown parameter",
+			body: `{"error":{"message":"Unknown parameter: 'stream_options'.","type":"invalid_request_error","param":"stream_options","code":"unknown_parameter"}}`,
+			payload: map[string]any{
+				"model": "gpt-5.6-sol", "stream_options": map[string]any{"include_usage": true},
+			},
+			want: []string{"stream_options"},
+		},
+		{
+			// The rejection that started this: the field is real, the spelling is
+			// now recognised, and the answer is still to leave it alone. An output
+			// cap is not a decoration the gateway may drop to make a call succeed —
+			// removing it would silently change what the caller asked for.
+			name: "an output cap is never stripped, however it is spelled",
+			body: `{"error":{"message":"Unknown parameter: 'max_tokens'.","type":"invalid_request_error","param":"max_tokens","code":"unknown_parameter"}}`,
+			payload: map[string]any{
+				"model": "gpt-5.6-sol", "max_tokens": json.Number("1024"),
+			},
+			want: nil,
+		},
+		{
 			name: "param requires unsupported signal",
 			body: `{"error":{"message":"thinking has an invalid value","param":"thinking","code":"invalid_value"}}`,
 			payload: map[string]any{
@@ -287,6 +310,31 @@ func TestUnsupportedCompatibilityReplacement(t *testing.T) {
 			},
 			want: compatibilityReplacement{From: "max_completion_tokens", To: "max_tokens"},
 			ok:   true,
+		},
+		{
+			// The one repair that does apply to an output cap: the provider named a
+			// replacement, so the field is renamed rather than dropped and the
+			// caller's limit survives. Recognising "Unknown parameter" is what puts
+			// this case in reach at Azure.
+			name: "azure unknown parameter names a replacement",
+			body: `{"error":{"message":"Unknown parameter: 'max_tokens'. Use 'max_output_tokens' instead.","type":"invalid_request_error","param":"max_tokens","code":"unknown_parameter"}}`,
+			payload: map[string]any{
+				"max_tokens": json.Number("1024"),
+			},
+			want: compatibilityReplacement{From: "max_tokens", To: "max_output_tokens"},
+			ok:   true,
+		},
+		{
+			// Without a named replacement there is nothing to rename it to, so the
+			// rejection stands. This is the exact body Azure returned for request
+			// req_TrwPgSoxFIVzRX9rBTjwisMX: no repair existed, because the fault was
+			// that the gateway wrote a Chat field onto a Responses request at all.
+			name: "an output cap alone cannot be repaired",
+			body: `{"error":{"message":"Unknown parameter: 'max_tokens'.","type":"invalid_request_error","param":"max_tokens","code":"unknown_parameter"}}`,
+			payload: map[string]any{
+				"max_tokens": json.Number("1024"),
+			},
+			ok: false,
 		},
 		{
 			name: "arbitrary rename is rejected",
