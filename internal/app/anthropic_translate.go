@@ -582,6 +582,20 @@ func translateAnthropicResponseToChat(body []byte, alias string) ([]byte, int64,
 		encoded, input, output := replaceResponseModel(body, alias)
 		return encoded, input, output, nil
 	}
+	// A body with no content field at all is not an Anthropic message — a
+	// misbehaving proxy's JSON, most likely — and fabricating an empty
+	// completion from it would hide a real fault. A content field that yields
+	// no text and no tool call is different, and it happens in production: a
+	// thinking model given a hard question and a small output budget spends
+	// the whole budget inside its own head and answers with thinking blocks
+	// alone, stop_reason max_tokens. That is a real, billed reply — OpenAI's
+	// reasoning models produce exactly this shape as an empty message
+	// finishing with "length" — so it is translated, not refused. Refusing it
+	// manufactured a 502 out of an upstream 200, and the finish reason, which
+	// tells the caller it was the budget, never reached them.
+	if _, hasContent := message["content"]; !hasContent {
+		return nil, 0, 0, fmt.Errorf("response carries no content field, so it is not an Anthropic message")
+	}
 	content := strings.Builder{}
 	toolCalls := make([]any, 0)
 	if text, ok := message["content"].(string); ok {
@@ -601,9 +615,6 @@ func translateAnthropicResponseToChat(body []byte, alias string) ([]byte, int64,
 				})
 			}
 		}
-	}
-	if content.Len() == 0 && len(toolCalls) == 0 {
-		return nil, 0, 0, fmt.Errorf("Anthropic response contained no text or tool calls")
 	}
 	outputMessage := map[string]any{"role": "assistant", "content": content.String()}
 	if len(toolCalls) > 0 {

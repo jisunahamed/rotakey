@@ -54,6 +54,15 @@ var (
 		regexp.MustCompile(`(?i)(?:parameter|argument)\s+['"` + "`" + `]?([A-Za-z][A-Za-z0-9_.-]{0,63})['"` + "`" + `]?\s+(?:is|has\s+been)\s+deprecated`),
 		regexp.MustCompile(`(?i)['"` + "`" + `]?([A-Za-z][A-Za-z0-9_.-]{0,63})['"` + "`" + `]?\s+(?:is|are)\s+not\s+supported\s+(?:for|with|in)\b`),
 	}
+	// parameterConstraintPattern reads a 400 that rejects a parameter not for
+	// being unknown but for the company it keeps — "The 'stream_options'
+	// parameter is only allowed when 'stream' is enabled." (Azure). The
+	// condition itself is not read: the only repair on offer is dropping the
+	// parameter, which is why this feeds the same allowlisted strip pass as
+	// the patterns above and can never touch a protected field.
+	parameterConstraintPattern = regexp.MustCompile(
+		`(?i)the\s+['"` + "`" + `]?([A-Za-z][A-Za-z0-9_.-]{0,63})['"` + "`" + `]?\s+parameter\s+is\s+(?:only\s+(?:allowed|supported|available)|not\s+allowed)\s+when\b`,
+	)
 	// responsesEndpointSuggestionPattern recognizes an upstream 400 that tells
 	// the caller to move the request to the Responses endpoint, such as Azure's
 	// "To use function tools, use /v1/responses". The verb must sit directly
@@ -410,6 +419,7 @@ func unsupportedParameterCode(code any, errorType string) bool {
 
 func compatibilityParameterMatches(message string) [][]string {
 	matches := unsupportedParameterPattern.FindAllStringSubmatch(message, -1)
+	matches = append(matches, parameterConstraintPattern.FindAllStringSubmatch(message, -1)...)
 	for _, pattern := range deprecatedParameterPatterns {
 		matches = append(matches, pattern.FindAllStringSubmatch(message, -1)...)
 	}

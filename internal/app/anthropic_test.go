@@ -275,8 +275,18 @@ func TestAnthropicStreamRejectsEmptySuccess(t *testing.T) {
 }
 
 func TestAnthropicResponseRejectsEmptyAndPreservesOpenAIEnvelope(t *testing.T) {
-	if _, _, _, err := translateAnthropicResponseToChat([]byte(`{"type":"message","content":[]}`), "public/model"); err == nil {
-		t.Fatal("empty Anthropic response was accepted")
+	// The line between refused and translated is the content field itself. A
+	// body without one is not an Anthropic message — a proxy's own JSON — and
+	// refusing it keeps a fabricated empty completion off the caller. A body
+	// whose content yields nothing visible is a real reply a thinking model
+	// produces by spending its whole budget inside its own head, and refusing
+	// those manufactured production 502s out of billed 200s — see
+	// thinking_response_test.go for that contract.
+	if _, _, _, err := translateAnthropicResponseToChat([]byte(`{"type":"message"}`), "public/model"); err == nil {
+		t.Fatal("a body with no content field was accepted")
+	}
+	if _, _, _, err := translateAnthropicResponseToChat([]byte(`{"type":"message","content":[]}`), "public/model"); err != nil {
+		t.Fatalf("an empty reply was refused: %v", err)
 	}
 	input := []byte(`{"id":"chat_1","object":"chat.completion","model":"upstream","choices":[{"message":{"role":"assistant","content":"Hello"}}],"usage":{"prompt_tokens":2,"completion_tokens":1}}`)
 	output, in, out, err := translateAnthropicResponseToChat(input, "public/model")

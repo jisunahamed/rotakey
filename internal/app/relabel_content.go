@@ -59,6 +59,29 @@ func conversationShape(format, path string) string {
 // field, so the rewrite is a rename and can lose nothing.
 var textLabels = map[string]bool{"text": true, "input_text": true, "output_text": true}
 
+// dropMisplacedStreamOptions removes stream_options from a body it cannot be
+// valid on. The parameter belongs to Chat Completions and only means anything
+// while a stream is on — it asks for a usage frame inside one — so on the
+// other two wires it is always foreign, and on Chat without stream: true it is
+// dead weight some validators shrug at and Azure refuses:
+//
+//	400 invalid_request_error
+//	The 'stream_options' parameter is only allowed when 'stream' is enabled.
+//
+// Deleting it can lose nothing the request asked for: with no stream there is
+// no frame to include the usage in. The gateway reads include_usage for its
+// own accounting before any plan is built, so that is unaffected.
+func dropMisplacedStreamOptions(payload map[string]any, shape string) bool {
+	if _, carries := payload["stream_options"]; !carries {
+		return false
+	}
+	if shape == "chat" && payload["stream"] == true {
+		return false
+	}
+	delete(payload, "stream_options")
+	return true
+}
+
 // relabelConversation rewrites foreign text labels in the payload's
 // conversation to the wire's own, and reports what it renamed as from→to
 // pairs for the plan's replaced-parameters evidence.

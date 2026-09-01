@@ -703,7 +703,15 @@ func (s *Server) runAttempt(
 	}
 	translatedBody, inputTokens, outputTokens, translateErr := translateUpstreamResponse(req, plan, body)
 	if translateErr != nil {
-		record.Error, record.ErrorMessage = "translation_failed", "Upstream response could not be translated."
+		// This 502 is manufactured here, out of an upstream 200 — the one
+		// failure in this function the provider had no part in — so the reason
+		// goes on the record and in the log, where the last one of these sat
+		// unexplained until the translator was read by hand.
+		record.Error, record.ErrorMessage = "translation_failed", "Upstream response could not be translated: "+translateErr.Error()
+		s.logger.Warn("upstream response could not be translated",
+			"request_id", req.RequestID, "model", candidate.Route.Model.PublicAlias,
+			"provider", candidate.Route.Provider.Name, "public_mode", req.PublicMode,
+			"wire", plan.wireEndpoint(), "error", translateErr)
 		s.writePoolError(w, r, req.PublicMode, http.StatusBadGateway, record.Error, record.ErrorMessage)
 		return attemptOutcome{
 			Done: true, Record: record, Status: http.StatusBadGateway,

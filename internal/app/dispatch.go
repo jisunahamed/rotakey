@@ -216,7 +216,11 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 	// conversation, replayed against a different protocol's model after a
 	// mid-chat switch — which is the thing this gateway exists to allow. See
 	// relabel_content.go.
-	relabeled := relabelConversation(payload, conversationShape(format, plan.Path))
+	shape := conversationShape(format, plan.Path)
+	relabeled := relabelConversation(payload, shape)
+	if dropMisplacedStreamOptions(payload, shape) {
+		plan.Removed = appendUniqueStrings(plan.Removed, "stream_options")
+	}
 	learned := s.learnedCompatibilityReplacements(ctx, route.Model.ID, plan.wireEndpoint())
 	if learned == nil {
 		// A Redis outage returns no learned repairs at all, and writing this
