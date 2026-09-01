@@ -13,7 +13,8 @@
     "lint:css": "node scripts/lint-css.cjs",
     "check:css-vars": "node scripts/check-css-vars.cjs",
     "check:css-classes": "node scripts/check-css-classes.cjs",
-    "check:css-order": "node scripts/check-css-order.cjs"
+    "check:css-order": "node scripts/check-css-order.cjs",
+    "check:moved": "node scripts/check-moved.cjs"
   },
   "dependencies": {
     "@fontsource-variable/archivo": "5.3.0",

@@ -46,6 +46,51 @@ import { useConfirm, useConfirmOpen, type ConfirmRequest } from "./ConfirmDialog
 import { KitchenSink } from "./dev/KitchenSink";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { isMac, useFilterHotkey, useListKeys, useShellHotkeys } from "./keyboard";
+import {
+  attemptSummary,
+  capabilityLabelFor,
+  capacityDimensions,
+  deleteRouteQuestion,
+  dimensionNames,
+  discoveryFailed,
+  humanizeErrorCode,
+  keyCheckFailed,
+  limitScopeLabel,
+  protocolLabelFor,
+  rangeLabel,
+  routingStageLabel
+} from "./lib/copy";
+import {
+  errorMessage,
+  formatChartDate,
+  formatClockTime,
+  formatCompact,
+  formatDuration,
+  formatElapsed,
+  formatLatency,
+  formatNumber,
+  formatRelativeTime,
+  formatResetTime,
+  formatUSD,
+  maskedSecret
+} from "./lib/format";
+import { useMediaQuery } from "./lib/hooks";
+import {
+  credentialBalanceNote,
+  credentialPoolState,
+  isUnusableKey,
+  readyKeyCount,
+  routeBlockReason,
+  unusableKeyReason
+} from "./lib/keys";
+import {
+  mergeModelCatalogs,
+  normalizeOverview,
+  normalizeProviders,
+  poolSizeByAlias,
+  safeNumber
+} from "./lib/normalize";
+import { defaultPublicAlias, providerSlugForUI, publishRoutingMode, useRoutingMode } from "./lib/routing-mode";
 import { closeActiveDrawerIfAny, useDrawerOpen, useScrollLock } from "./overlays";
 import { ShortcutSheet } from "./ShortcutSheet";
 import {
@@ -63,7 +108,6 @@ import {
   type Route as ConsoleRoute
 } from "./routes";
 import {
-  emptyCreditTotals,
   emptyPolicy,
   type Credential,
   type CreditTotals,
@@ -81,51 +125,6 @@ import {
 } from "./types";
 
 type AuthPhase = "loading" | "setup" | "login" | "app";
-
-// The routing mode decides whether a new public alias carries the provider slug,
-// so it is fetched once and shared by every form that proposes an alias. The
-// subscriber set is what makes it shared rather than merely cached: when Settings
-// saves a new mode, every mounted form re-labels itself instead of waiting for a
-// remount, and concurrent mounts await one request instead of each firing their own.
-let routingModeCache: RoutingMode | null = null;
-let routingModeRequest: Promise<RoutingMode> | null = null;
-const routingModeSubscribers = new Set<(mode: RoutingMode) => void>();
-
-export function publishRoutingMode(mode: RoutingMode) {
-  routingModeCache = mode;
-  routingModeSubscribers.forEach((notifySubscriber) => notifySubscriber(mode));
-}
-
-function useRoutingMode(): RoutingMode {
-  const [mode, setMode] = useState<RoutingMode>(routingModeCache ?? "provider");
-  useEffect(() => {
-    routingModeSubscribers.add(setMode);
-    if (routingModeCache) {
-      setMode(routingModeCache);
-    } else {
-      routingModeRequest ??= api<Settings>("/api/admin/settings")
-        .then((settings) => (settings.routing_mode === "model" ? "model" : "provider"))
-        .finally(() => { routingModeRequest = null; });
-      void routingModeRequest.then(publishRoutingMode).catch(() => undefined);
-    }
-    return () => { routingModeSubscribers.delete(setMode); };
-  }, []);
-  return mode;
-}
-
-/** Reads a media query in JS so behaviour (focus order, inert) can follow the
- *  same breakpoint the stylesheets use, rather than a second guess at it. */
-function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
-  useEffect(() => {
-    const list = window.matchMedia(query);
-    const onChange = () => setMatches(list.matches);
-    onChange();
-    list.addEventListener("change", onChange);
-    return () => list.removeEventListener("change", onChange);
-  }, [query]);
-  return matches;
-}
 
 type Note = { id: number; tone: "success" | "danger"; message: string };
 
@@ -1384,20 +1383,6 @@ function SignalTimeline({ overview }: { overview: Overview }) {
   );
 }
 
-/** The range is a URL enum, and reading it out raw produced labels like "all
- *  gateway status" and "Traffic · all". These are the same words the range
- *  switcher's own buttons announce, so a heading and its control agree. */
-const rangeNames: Record<Overview["range"], string> = {
-  "1h": "Last hour",
-  "24h": "Last 24 hours",
-  "7d": "Last 7 days",
-  all: "All time"
-};
-
-function rangeLabel(range: Overview["range"]) {
-  return rangeNames[range] ?? String(range);
-}
-
 function ModelUsageRanking({ routes, range }: { routes: Overview["routes"]; range: Overview["range"] }) {
   const ranking = [...routes].filter((route) => route.requests > 0).sort((a, b) => b.estimated_cost_usd - a.estimated_cost_usd || b.tokens - a.tokens || b.requests - a.requests).slice(0, 6);
   return <section className="console-panel model-ranking"><ConsolePanelHeader eyebrow="Usage ledger" title="Model ranking" detail={`${rangeLabel(range)} · ranked by estimated cost`} />
@@ -1798,13 +1783,6 @@ function Definition({ label, value, mono = false }: { label: string; value: stri
   return <div><span>{label}</span><strong className={mono ? "is-mono" : ""} title={value}>{value}</strong></div>;
 }
 
-/** A limit is either the provider's shared key limit or one set for a single model.
- *  The enum reaching the screen said "shared" and "model" with no noun, which reads
- *  as a category rather than as the limit doing the limiting. */
-function limitScopeLabel(scope: string | undefined) {
-  return scope === "model" ? "model limit" : "shared key limit";
-}
-
 function HeadroomReadout({ label, headroom }: { label: string; headroom?: Overview["routes"][number]["next_request_headroom"] }) {
   if (!headroom) {
     return <div className="headroom-readout is-unlimited"><span>{label}</span><strong>Unlimited</strong><small>No rate limit is set on this path.</small></div>;
@@ -1891,29 +1869,6 @@ function LiveResetTime({ value }: { value: string }) {
     return () => window.clearInterval(timer);
   }, [value]);
   return <time dateTime={value}>{formatResetTime(value, now)}</time>;
-}
-
-function formatResetTime(value: string, now = Date.now()) {
-  const reset = new Date(value).getTime();
-  if (Number.isNaN(reset)) return "unknown";
-  const milliseconds = reset - now;
-  if (milliseconds <= 0) return "now";
-  if (milliseconds < 60_000) return `in ${Math.ceil(milliseconds / 1000)}s`;
-  if (milliseconds < 3_600_000) return `in ${Math.ceil(milliseconds / 60_000)}m`;
-  return `at ${new Date(reset).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-}
-
-function formatRelativeTime(value: string) {
-  const stamp = new Date(value).getTime();
-  // Every comparison against NaN is false, so an unparseable timestamp used to
-  // fall through this ladder and render the literal text "NaNd ago".
-  if (Number.isNaN(stamp)) return "at an unknown time";
-  const seconds = Math.max(0, Math.floor((Date.now() - stamp) / 1000));
-  if (seconds < 10) return "just now";
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
 }
 
 function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" | "danger") => void }) {
@@ -2280,68 +2235,6 @@ function LimitSummary({ policy }: { policy: RatePolicy }) {
   return <span className="mono-summary">{active.slice(0, 2).map(([key, value]) => `${key.toUpperCase()} ${value}`).join(" · ")}{active.length > 2 ? ` +${active.length - 2}` : ""}</span>;
 }
 
-/** credentialBalanceNote appends the credit left to a key's row, and returns an
- * empty string for untracked keys so the pool list looks unchanged on installs
- * that do not use balances. */
-function credentialBalanceNote(credential: Credential) {
-  if (credential.balance_usd === null || credential.balance_usd === undefined) return "";
-  const remaining = Math.max(0, credential.balance_usd - credential.balance_spent_usd);
-  return remaining <= 0 ? " · out of balance" : ` · ${formatUSD(remaining)} left`;
-}
-
-/** The one state name that describes whether the router will reach for this key,
- *  folding together the three separate reasons it might not: the operator turned it
- *  off, its balance is spent, or the upstream put it in cooldown or quarantine.
- *  The rotor and the status dot both need that single answer — a key that is
- *  `healthy` but out of balance is skipped, and drawing it green would be a lie. */
-function credentialPoolState(credential: Credential) {
-  if (!credential.enabled) return "disabled";
-  if (credential.balance_usd != null && credential.balance_usd - credential.balance_spent_usd <= 0) return "exhausted";
-  return credential.status;
-}
-
-/** How many keys the router would actually reach for on this route — the one
- *  definition of "ready", used by every count, dot and label that claims it.
- *  Two contradictory ones used to sit a hundred lines apart on the same page, and
- *  neither asked whether the provider itself was switched on, so a route on a
- *  turned-off provider was drawn green with "3/3 keys ready" beside it. */
-function readyKeyCount(route: { provider: { enabled: boolean }; credentials: Credential[] }) {
-  if (!route.provider.enabled) return 0;
-  return route.credentials.filter((credential) => credentialPoolState(credential) === "healthy").length;
-}
-
-/** The single sentence explaining why a route cannot serve, or "" when it can.
- *  Kept beside `readyKeyCount` because a count of zero always needs the reason:
- *  "waiting for a healthy API key" is wrong when the provider is off, and wrong
- *  again when no key was ever added. */
-function routeBlockReason(route: { provider: { enabled: boolean; name: string }; credentials: Credential[]; enabled: boolean }) {
-  if (!route.enabled) return "route turned off";
-  if (!route.provider.enabled) return `${route.provider.name} is turned off`;
-  if (route.credentials.length === 0) return `no API key on ${route.provider.name}`;
-  if (readyKeyCount(route) === 0) return "no API key is ready";
-  return "";
-}
-
-/** A key that cannot serve and will not recover on its own, which is the exact set
- *  the delete button acts on. It reads `credentialPoolState` rather than the raw
- *  fields so the banner's count, the rotor and the status dot can never disagree.
- *
- *  Deliberately not included: a key whose only signal is `validation_error`, which
- *  is also written for a key saved without a successful check or imported from a
- *  config bundle and still routes; and a key in cooldown, which clears itself. */
-function isUnusableKey(credential: Credential) {
-  const state = credentialPoolState(credential);
-  return state === "quarantined" || state === "exhausted";
-}
-
-/** unusableKeyReason is the one-line "why" shown beside each key in the confirm
- *  dialog, so the operator reads what is going before agreeing to it. */
-function unusableKeyReason(credential: Credential) {
-  return credentialPoolState(credential) === "quarantined"
-    ? "rejected by the provider"
-    : "out of balance";
-}
-
 /** ProviderCreditStat reports what is left across the account rather than what was
  * loaded, and stays silent when no key on the provider tracks a balance. Spend the
  * gateway could not pin on one key still comes off the figure, because the operator
@@ -2359,20 +2252,6 @@ function ProviderCreditStat({ provider }: { provider: Provider }) {
     </span>
   );
 }
-
-const capacityDimensions = ["rps", "rpm", "rpd", "tps", "tpm", "tpd", "tpr"] as const;
-
-/** Spoken names for the seven buckets. "RPS" read aloud is three letters, so each
- *  cell of the capacity grid carries the words instead. */
-const dimensionNames: Record<(typeof capacityDimensions)[number], string> = {
-  rps: "requests per second",
-  rpm: "requests per minute",
-  rpd: "requests per day",
-  tps: "tokens per second",
-  tpm: "tokens per minute",
-  tpd: "tokens per day",
-  tpr: "tokens per request"
-};
 
 function ProviderCapacityStrip({ provider }: { provider: Provider }) {
   const capacity = provider.capacity;
@@ -4097,10 +3976,6 @@ type PlaygroundRequestState = {
   error?: string;
 };
 
-function formatElapsed(milliseconds: number) {
-  return `${(milliseconds / 1000).toFixed(1)}s`;
-}
-
 function playgroundRequestLabel(phase: PlaygroundRequestState["phase"]) {
   switch (phase) {
     case "sending": return "Request sent";
@@ -5279,109 +5154,6 @@ function logErrorTitle(log: RequestLog) {
   return "Gateway request failed";
 }
 
-/** The same question is asked from the edit panel and from the models inspector. It
- *  was written out twice, so a change to one wording silently disagreed with the
- *  other about what deleting a route does. */
-function deleteRouteQuestion(alias: string) {
-  return {
-    title: `Delete route ${alias}?`,
-    body: "Requests using this alias stop immediately, and the route cannot be restored — you would add it again from scratch.",
-    confirmLabel: "Delete route"
-  } as const;
-}
-
-/** What the console says when a provider turns a key away. Three call sites showed
- *  this — the credential panel, the provider wizard and the overview inspector —
- *  and all three used to say only "API key validation failed", which names the
- *  step that failed and no way out of it. */
-const keyCheckFailed =
-  "The provider rejected this key. Replace it, or check it again if you have just created it.";
-
-/** Loading a provider's catalog fails for one of two reasons and the operator can
- *  act on both, so both are named. The two call sites — the load-models panel's
- *  toast and its notice — used to word this differently, which read as two
- *  different failures. */
-const discoveryFailed =
-  "The provider did not return a model list. Check the API key and the base URL, then try again.";
-
-/** The capability enum comes off the route row as a database value —
- *  `probe_verified`, `catalog_verified`, `unverified` — and the inspector used to
- *  print it with the underscore swapped for a space, which told the operator how
- *  the column is stored rather than what is known about the route. */
-const capabilityPhrase: Record<string, string> = {
-  probe_verified: "Checked live",
-  catalog_verified: "Listed by the provider",
-  failed: "Unavailable",
-  unverified: "Not checked yet"
-};
-
-/** The per-protocol capability enum, same reasoning. "translated" on its own does
- *  not say who translates or that the call still works. */
-const protocolPhrase: Record<string, string> = {
-  native: "Native",
-  translated: "Translated by the gateway",
-  off: "Off",
-  unknown: "Not checked yet"
-};
-
-function capabilityLabelFor(value: string | undefined) {
-  return capabilityPhrase[value ?? "unverified"] ?? capabilityPhrase.unverified;
-}
-
-function protocolLabelFor(value: string | undefined) {
-  return protocolPhrase[value ?? "unknown"] ?? protocolPhrase.unknown;
-}
-
-/** One attempt's outcome as a single line. An attempt that never reached a status
- *  code carries only an error, and the old expression printed it on both sides of
- *  the separator — "connection_error · connection_error". replaced_parameters was
- *  truthy-checked as an object, so an empty map left a dangling "· replaced". */
-function attemptSummary(attempt: RequestLog["attempts"][number]) {
-  const parts: string[] = [];
-  if (attempt.status_code) parts.push(String(attempt.status_code));
-  if (attempt.error) parts.push(attempt.error);
-  if (parts.length === 0) parts.push("no response");
-  if (attempt.removed_parameters?.length) parts.push(`removed ${attempt.removed_parameters.join(", ")}`);
-  const replaced = Object.entries(attempt.replaced_parameters ?? {});
-  if (replaced.length) parts.push(`replaced ${replaced.map(([from, to]) => `${from} → ${to}`).join(", ")}`);
-  if (attempt.switched_endpoint) parts.push(`switched to /${attempt.switched_endpoint}`);
-  return parts.join(" · ");
-}
-
-/** What served the request, which is usually an API key but not always: a call the
- *  gateway rejected on its own never reached one. The inspector labels this row
- *  "Served by" rather than "API key" because two of the three fallbacks below are
- *  not keys, and a label that names the wrong thing is worse than a general one. */
-function routingStageLabel(log: RequestLog) {
-  if (log.credential_label) return log.credential_label;
-  if (log.provider_name === "gateway") return "Gateway validation";
-  if (log.attempts?.length) return "No key was reached";
-  return "Rejected before routing";
-}
-
-function humanizeErrorCode(code: string) {
-  const messages: Record<string, string> = {
-    rate_limit_exceeded: "Every configured API key was at capacity, in cooldown, or blocked by a request/token limit.",
-    no_credentials: "No enabled healthy API key is configured for this model.",
-    limiter_unavailable: "Redis was unavailable, so Rotakey failed closed instead of bypassing limits.",
-    upstream_unavailable: "The upstream connection failed before a response started.",
-    connection_error: "The upstream connection failed before a response started.",
-    upstream_response_too_large: "The upstream response exceeded Rotakey's configured response size limit.",
-    translation_failed: "The upstream response could not be translated to the requested API format.",
-    stream_interrupted: "The response stream ended unexpectedly after it started.",
-    unsupported_parameter: "The upstream model rejected a request parameter.",
-    unrecognized_request_argument: "The upstream model did not recognize a request parameter.",
-    responses_endpoint_missing: "This provider has no Responses endpoint, so the request was retried as Chat Completions. Turn off \"Responses natively\" on this route to skip the extra attempt.",
-  };
-  return messages[code] || code.replaceAll("_", " ");
-}
-
-function formatDuration(milliseconds: number) {
-  if (milliseconds < 60_000) return `${Math.max(1, Math.ceil(milliseconds / 1_000))}s`;
-  if (milliseconds < 3_600_000) return `${Math.ceil(milliseconds / 60_000)}m`;
-  return `${Math.ceil(milliseconds / 3_600_000)}h`;
-}
-
 function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNewKey: (key: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
   const ask = useConfirm();
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -5856,10 +5628,6 @@ function automaticCredentialEntries(provider: Provider, secrets: string[], prefe
   });
 }
 
-function maskedSecret(secret: string) {
-  return secret.length <= 4 ? "••••" : `•••• ${secret.slice(-4)}`;
-}
-
 let credentialDraftSequence = 0;
 
 function newCredentialDraft(): CredentialDraft {
@@ -5927,31 +5695,6 @@ function credentialInputs(value: CredentialDraft[], limits: RatePolicy, unverifi
     }));
 }
 
-function mergeModelCatalogs(catalogs: DiscoveredModel[][]): DiscoveredModel[] {
-  const byID = new Map<string, DiscoveredModel>();
-  for (const catalog of catalogs) {
-    for (const model of catalog ?? []) {
-      if (!byID.has(model.id)) byID.set(model.id, model);
-    }
-  }
-  return [...byID.values()].sort((left, right) => left.id.localeCompare(right.id));
-}
-
-function defaultPublicAlias(providerSlug: string, upstreamModel: string, mode: RoutingMode = "provider") {
-  // Model-wise routing pools every provider publishing the same alias, so a new
-  // route must not carry the provider slug that would keep them separate.
-  const raw = mode === "model" || upstreamModel.startsWith(`${providerSlug}/`)
-    ? upstreamModel
-    : `${providerSlug}/${upstreamModel}`;
-  const safe = raw.replace(/[^A-Za-z0-9._:/-]+/g, "-").replace(/^-+|-+$/g, "");
-  return safe.slice(0, 128);
-}
-
-function providerSlugForUI(name: string) {
-  const slug = name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 63);
-  return slug.length >= 2 ? slug : "provider";
-}
-
 function routeInputsFromSelection(selected: Record<string, string>, catalogIDs = new Set<string>()): ModelDraft[] {
   return Object.entries(selected).map(([upstreamModel, publicAlias]) => ({
     public_alias: publicAlias.trim(),
@@ -5969,161 +5712,6 @@ function routeInputsFromSelection(selected: Record<string, string>, catalogIDs =
     strip_parameters: [],
     enabled: true,
   }));
-}
-
-// poolSizeByAlias counts how many provider routes publish each public alias, so
-// model-wise mode can show that one name is backed by several providers.
-function poolSizeByAlias(providers: Provider[]): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const provider of providers) {
-    for (const model of provider.models) {
-      counts[model.public_alias] = (counts[model.public_alias] ?? 0) + 1;
-    }
-  }
-  return counts;
-}
-
-function normalizeProviders(providers: Provider[] | null | undefined): Provider[] {
-  return (providers ?? []).map((provider) => ({
-    ...provider,
-    api_format: provider.api_format ?? "openai",
-    anthropic_version: provider.anthropic_version ?? "2023-06-01",
-    extra_headers: provider.extra_headers ?? {},
-    // An absent balance is "not tracked", which is deliberately not the same as
-    // zero: zero is what stops a key receiving traffic. Only the spend figures are
-    // defaulted to a number.
-    default_key_balance_usd: provider.default_key_balance_usd ?? null,
-    balance_spent_usd: safeNumber(provider.balance_spent_usd),
-    models: (provider.models ?? []).map((model) => ({ ...model, supports_messages: model.supports_messages ?? true, strip_parameters: model.strip_parameters ?? [], capability_status: model.capability_status ?? "unverified", capability_profile: model.capability_profile ?? {}, input_cost_per_million_usd: model.input_cost_per_million_usd ?? 0, output_cost_per_million_usd: model.output_cost_per_million_usd ?? 0, request_cost_usd: model.request_cost_usd })),
-    credentials: (provider.credentials ?? []).map((credential) => ({
-      ...credential,
-      validation_error: credential.validation_error ?? "",
-      balance_usd: credential.balance_usd ?? null,
-      balance_spent_usd: safeNumber(credential.balance_spent_usd),
-      // Go serialises an empty map as null, so both of these arrive as null from
-      // a key that has never had a limit set. Every render path indexes them
-      // directly, and without an error boundary a null map takes the console
-      // to a blank page rather than to a missing number.
-      limits: credential.limits ?? emptyPolicy(),
-      model_limits: credential.model_limits ?? {},
-    })),
-  }));
-}
-
-/** Absent numbers arrive from a partially-populated payload; `Intl` turns them
- *  into the literal string "NaN", which is worse than a zero in a readout. */
-function safeNumber(value: number | null | undefined) {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
-/** The overview is the one payload every widget on the landing page indexes into
- *  without checking, so a missing array or a missing credit block used to take
- *  the whole console down. Defaulted here once instead of at forty call sites. */
-function normalizeOverview(overview: Overview): Overview {
-  const summary = overview.summary ?? ({} as Overview["summary"]);
-  return {
-    ...overview,
-    summary: {
-      ...summary,
-      providers_total: safeNumber(summary.providers_total),
-      providers_ready: safeNumber(summary.providers_ready),
-      routes_total: safeNumber(summary.routes_total),
-      routes_ready: safeNumber(summary.routes_ready),
-      keys_total: safeNumber(summary.keys_total),
-      keys_ready: safeNumber(summary.keys_ready),
-      keys_warning: safeNumber(summary.keys_warning),
-      requests: safeNumber(summary.requests),
-      tokens: safeNumber(summary.tokens),
-      estimated_cost_usd: safeNumber(summary.estimated_cost_usd),
-      errors: safeNumber(summary.errors),
-      error_rate: safeNumber(summary.error_rate),
-      latency_p50_ms: safeNumber(summary.latency_p50_ms),
-      latency_p95_ms: safeNumber(summary.latency_p95_ms),
-      max_wait_ms: safeNumber(summary.max_wait_ms),
-      gateway_key_ready: summary.gateway_key_ready ?? false,
-      credit: summary.credit ?? emptyCreditTotals()
-    },
-    series: overview.series ?? [],
-    providers: (overview.providers ?? []).map((provider) => ({
-      ...provider,
-      models_total: safeNumber(provider.models_total),
-      models_ready: safeNumber(provider.models_ready),
-      keys_total: safeNumber(provider.keys_total),
-      keys_ready: safeNumber(provider.keys_ready),
-      keys_warning: safeNumber(provider.keys_warning),
-      validation_warnings: safeNumber(provider.validation_warnings),
-      capacity: provider.capacity ?? {},
-      credit: provider.credit ?? emptyCreditTotals()
-    })),
-    // The route rows render these figures straight into text, so a payload that
-    // omits one produced "NaN% err" and "undefined ms" in the table rather than a
-    // zero. Only the arrays used to be defaulted here.
-    routes: (overview.routes ?? []).map((route) => ({
-      ...route,
-      requests: safeNumber(route.requests),
-      errors: safeNumber(route.errors),
-      tokens: safeNumber(route.tokens),
-      estimated_cost_usd: safeNumber(route.estimated_cost_usd),
-      error_rate: safeNumber(route.error_rate),
-      latency_p95_ms: safeNumber(route.latency_p95_ms),
-      healthy_credentials: safeNumber(route.healthy_credentials),
-      unavailable_credentials: safeNumber(route.unavailable_credentials),
-      total_credentials: safeNumber(route.total_credentials),
-      default_max_output_tokens: safeNumber(route.default_max_output_tokens),
-      strip_parameters: route.strip_parameters ?? [],
-      segments: route.segments ?? []
-    })),
-    alerts: overview.alerts ?? [],
-    recent_failures: overview.recent_failures ?? []
-  };
-}
-
-function formatNumber(value: number) {
-  const safe = safeNumber(value);
-  return new Intl.NumberFormat("en", { notation: safe > 9999 ? "compact" : "standard", maximumFractionDigits: 1 }).format(safe);
-}
-
-function formatCompact(value: number) {
-  return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(safeNumber(value));
-}
-
-function formatUSD(value: number) {
-  const safe = safeNumber(value);
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: safe < 1 ? 4 : 2 }).format(safe);
-}
-
-function formatLatency(value: number) {
-  const safe = safeNumber(value);
-  return safe >= 1000 ? `${(safe / 1000).toFixed(safe >= 10_000 ? 0 : 1)}s` : `${Math.round(safe)}ms`;
-}
-
-function formatChartDate(value?: string) {
-  if (!value) return "—";
-  const parsed = new Date(value);
-  // Intl throws a RangeError on an invalid date rather than returning a string,
-  // and this runs inside the overview's render path, so one malformed timestamp
-  // in the series would take the whole page down.
-  if (Number.isNaN(parsed.getTime())) return "—";
-  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(parsed);
-}
-
-/** The wall-clock time a request landed. Every row in the log list renders one,
- *  so an unparseable stamp has to degrade to a dash rather than to "Invalid
- *  Date" in the row and in its accessible name. */
-function formatClockTime(value?: string) {
-  if (!value) return "—";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return "—";
-  return parsed.toLocaleTimeString();
-}
-
-function errorMessage(caught: unknown) {
-  if (caught instanceof APIError || caught instanceof Error) return caught.message;
-  // Everything the console throws is an Error, so this fallback only fires when a
-  // rejection carries no message at all — a dropped connection, or a request the
-  // browser cancelled. There is nothing to report except the one thing that helps:
-  // the request never landed, so trying it again is safe.
-  return "The gateway did not answer. Try again.";
 }
 
 export default App;
