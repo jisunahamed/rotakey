@@ -217,7 +217,7 @@ export function learnedFactSentence(fact: LearnedFact) {
       return `Asking for at least ${floor} reply tokens when the caller sets no limit of their own. A smaller budget came back spent entirely on the model's own reasoning, with no visible reply in it.`;
     }
     case "detach_replayed_ids":
-      return "Sending the conversation's earlier messages without their ids. The provider demanded each id's original reasoning record, which the app that sent the request does not have to give.";
+      return "Sending the conversation's earlier messages and tool calls without their ids. The provider demanded each id's original reasoning record, which the app that sent the request does not have to give.";
     case "strip_item_fields": {
       // The path, not the bare name. These fields are put there by the caller's
       // own client rather than by Rotakey or by the operator, so the sentence has

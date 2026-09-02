@@ -177,11 +177,62 @@ func TestOrphanedPairingIsRepairedByDetachingIDs(t *testing.T) {
 	if message["content"].([]any)[0].(map[string]any)["text"] != "working on it" {
 		t.Fatal("the message lost more than its id")
 	}
-	// A function_call pairs with its output by call_id; its id is not replayed
-	// state and stays.
+	// The tool call loses its id too — the validator demands the reasoning
+	// pair for whichever id it reads next, and detaching only the messages
+	// moved the rejection one item down in production. Its real pairing,
+	// call_id, stays whole.
 	call := payload["input"].([]any)[2].(map[string]any)
-	if call["id"] != "fc_1" || call["call_id"] != "call_1" {
-		t.Fatalf("a non-message item was touched: %v", call)
+	if _, carries := call["id"]; carries {
+		t.Fatalf("the replayed tool call kept its id: %v", call)
+	}
+	if call["call_id"] != "call_1" || call["name"] != "read" {
+		t.Fatalf("the tool call lost more than its id: %v", call)
+	}
+}
+
+// TestFunctionCallPairingIsTheSameRejection is req_KKeCnoB9R9xF5CRlN2LfuQz2,
+// the morning after the message repair shipped: with the message ids gone,
+// the validator read the next id-bearing item and demanded the same pair.
+//
+//	Item 'fc_…' of type 'function_call' was provided without its required
+//	'reasoning' item: 'rs_…'.
+//
+// The payload here is exactly what the plan carried at that moment — message
+// ids already detached, tool-call ids still on — so this test is also the
+// guard for detection working mid-repair, where the first version failed:
+// it looked for replayed ids only on messages, found none, and let the
+// rejection go final with a strike.
+func TestFunctionCallPairingIsTheSameRejection(t *testing.T) {
+	rejection := []byte(`{"error":{"code":"invalid_request_error","message":"Item 'fc_0bee41ea7484eb39006a97ec31451c81919c5afd0ecdbfa006' of type 'function_call' was provided without its required 'reasoning' item: 'rs_0bee41ea7484eb39006a97ec2bccf481918773ada1072a17cf'."}}`)
+	payload := map[string]any{"input": []any{
+		map[string]any{"role": "user", "content": "run the tests"},
+		map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "running"}}},
+		map[string]any{"type": "function_call", "id": "fc_0bee41ea7484eb39006a97ec31451c81919c5afd0ecdbfa006", "call_id": "call_9", "name": "bash", "arguments": "{}"},
+		map[string]any{"type": "function_call_output", "id": "fco_1", "call_id": "call_9", "output": "ok"},
+		map[string]any{"type": "item_reference", "id": "msg_referenced"},
+	}}
+
+	if !orphanedReasoningPairing(rejection, payload) {
+		t.Fatal("the function_call rejection was not recognised")
+	}
+	if !stripReplayedItemIDs(payload) {
+		t.Fatal("nothing was detached")
+	}
+	items := payload["input"].([]any)
+	call := items[2].(map[string]any)
+	if _, carries := call["id"]; carries {
+		t.Fatalf("the tool call kept its id: %v", call)
+	}
+	output := items[3].(map[string]any)
+	if _, carries := output["id"]; carries {
+		t.Fatalf("the tool output kept its id: %v", output)
+	}
+	if call["call_id"] != "call_9" || output["call_id"] != "call_9" {
+		t.Fatal("the call_id pairing was broken")
+	}
+	// An item_reference IS an id; removing it removes the item's meaning.
+	if items[4].(map[string]any)["id"] != "msg_referenced" {
+		t.Fatal("an item_reference lost its id")
 	}
 }
 

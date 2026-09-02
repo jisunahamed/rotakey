@@ -20,17 +20,43 @@ import (
 //	Item 'msg_…' of type 'message' was provided without its required
 //	'reasoning' item: 'rs_…'.
 //
-// The id is the whole problem. A replayed message carries one only as an
-// echo of the reply it came from; nothing in the request needs it, and
-// without it the item is plain history the validator takes as it is. So when
-// a provider rejects the pairing, every replayed message in the conversation
-// goes back without its id, and the lesson is remembered for a day like the
-// other repairs. It is learned rather than unconditional because those ids
-// are harmless almost everywhere, and a rewrite that fires only where it has
-// seen the rejection cannot surprise the providers that never do.
+// The id is the whole problem. A replayed item carries one only as an echo of
+// the reply it came from; nothing in the request needs it, and without it the
+// item is plain history the validator takes as it is. So when a provider
+// rejects the pairing, every replayed item in the conversation goes back
+// without its id, and the lesson is remembered for a day like the other
+// repairs. It is learned rather than unconditional because those ids are
+// harmless almost everywhere, and a rewrite that fires only where it has seen
+// the rejection cannot surprise the providers that never do.
+//
+// "Every replayed item" is deliberate, and it is the second version of this
+// sentence. The first read "every replayed message", on the reasoning that a
+// function_call's pairing is real — and it is, but it lives in call_id, not
+// in the item id. The validator demands a reasoning pair for whichever
+// id-bearing item it reads next, so detaching the messages alone just moved
+// the same rejection one item down:
+//
+//	Item 'fc_…' of type 'function_call' was provided without its required
+//	'reasoning' item: 'rs_…'.
+//
+// The two items whose ids survive are the two whose ids carry meaning of
+// their own: an item_reference IS an id, and a reasoning item's id is the
+// pairing — a client replaying reasoning items intact never sees this
+// rejection, and one that cannot replay them has nothing to pair anyway.
 
 var orphanedPairingPattern = regexp.MustCompile(
-	`(?i)of type ['"` + "`" + `]?message['"` + "`" + `]? was provided without its required ['"` + "`" + `]?reasoning['"` + "`" + `]? item`)
+	`(?i)was provided without its required ['"` + "`" + `]?reasoning['"` + "`" + `]? item`)
+
+// replayedIDCarrier reports whether an input item is one whose id is an echo
+// this repair may remove: a turn with a role, or a tool call and its output,
+// whose real pairing is call_id.
+func replayedIDCarrier(object map[string]any) bool {
+	if role, _ := object["role"].(string); role != "" {
+		return true
+	}
+	kind, _ := object["type"].(string)
+	return kind == "function_call" || kind == "function_call_output"
+}
 
 // orphanedReasoningPairing reads the rejection above out of an upstream 400,
 // and confirms the request actually carries a replayed message id to remove.
@@ -56,10 +82,7 @@ func payloadCarriesReplayedIDs(payload map[string]any) bool {
 	}
 	for _, item := range items {
 		object, isObject := item.(map[string]any)
-		if !isObject {
-			continue
-		}
-		if role, _ := object["role"].(string); role == "" {
+		if !isObject || !replayedIDCarrier(object) {
 			continue
 		}
 		if id, _ := object["id"].(string); id != "" {
@@ -69,12 +92,12 @@ func payloadCarriesReplayedIDs(payload map[string]any) bool {
 	return false
 }
 
-// stripReplayedItemIDs removes the id from every message item in input[] and
-// reports whether anything changed. Only items with a role are touched: a
-// function_call pairs with its output by call_id and an item_reference IS an
-// id, so both keep theirs. Changed items are copied first, for the same
-// reason every pass over these arrays copies — the items are the caller's
-// own objects, shared by every candidate's plan.
+// stripReplayedItemIDs removes the id from every replayed turn, tool call and
+// tool output in input[] and reports whether anything changed. call_id, name
+// and arguments stay — that pairing is real and is not what the validator was
+// demanding. Changed items are copied first, for the same reason every pass
+// over these arrays copies — the items are the caller's own objects, shared
+// by every candidate's plan.
 func stripReplayedItemIDs(payload map[string]any) bool {
 	items, ok := payload["input"].([]any)
 	if !ok {
@@ -84,13 +107,11 @@ func stripReplayedItemIDs(payload map[string]any) bool {
 	changed := false
 	for index, item := range items {
 		object, isObject := item.(map[string]any)
-		if !isObject {
+		if !isObject || !replayedIDCarrier(object) {
 			copied[index] = item
 			continue
 		}
-		role, _ := object["role"].(string)
-		id, _ := object["id"].(string)
-		if role == "" || id == "" {
+		if id, _ := object["id"].(string); id == "" {
 			copied[index] = item
 			continue
 		}
