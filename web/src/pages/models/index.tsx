@@ -223,7 +223,6 @@ export function ModelsPage({
     let cursor = 0;
     let done = 0;
     let passed = 0;
-    let listed = 0;
     let failed = 0;
     // One announcement per route is two hundred announcements on a real install,
     // which is a screen reader talking over itself for a minute. The bar keeps
@@ -242,8 +241,8 @@ export function ModelsPage({
           signal: controller.signal
         });
         if (result.warning) {
-          listed++;
-          if (mounted.current) setChecks((current) => ({ ...current, [route.id]: { state: "listed", note: result.warning } }));
+          failed++;
+          if (mounted.current) setChecks((current) => ({ ...current, [route.id]: { state: "failed", note: result.warning } }));
         } else {
           passed++;
           if (mounted.current) setChecks((current) => ({ ...current, [route.id]: { state: "passed" } }));
@@ -291,8 +290,8 @@ export function ModelsPage({
     if (!mounted.current) return;
     setSweeping(false);
     const stopped = stopSweep.current;
-    const summary = `${passed} answered${listed ? `, ${listed} listed by the provider` : ""}${
-      failed ? `, ${failed} refused` : ""
+    const summary = `${passed} answered${
+      failed ? `, ${failed} failed` : ""
     }${skipped.length ? `, ${skipped.length} could not be checked` : ""}.`;
     setSweepNote(stopped ? `Stopped after ${done} of ${targets.length}. ${summary}` : summary);
     notify(stopped ? `Stopped after ${done} of ${targets.length}. ${summary}` : summary, failed ? "danger" : "success");
@@ -314,7 +313,7 @@ export function ModelsPage({
     // at once, so the operator has to be able to read what goes.
     if (
       !(await ask({
-        title: `Delete ${aliases.length} route${aliases.length === 1 ? "" : "s"} the provider refused?`,
+        title: `Delete ${aliases.length} route${aliases.length === 1 ? "" : "s"} that failed the live check?`,
         body: "Requests using these names stop immediately, and the routes cannot be restored.",
         confirmLabel: `Delete ${aliases.length} route${aliases.length === 1 ? "" : "s"}`,
         detail: aliases.join("\n")
@@ -449,8 +448,8 @@ export function ModelsPage({
                       onSelect={deleteFailed}
                     >
                       {failedIDs.length === 0
-                        ? "No refused routes to delete"
-                        : `Delete the ${failedIDs.length} route${failedIDs.length === 1 ? "" : "s"} the provider refused`}
+                        ? "No failed routes to delete"
+                        : `Delete the ${failedIDs.length} route${failedIDs.length === 1 ? "" : "s"} that failed the live check`}
                     </MenuItem>
                   </Menu>
                 </Toolbar>

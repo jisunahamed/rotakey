@@ -90,8 +90,8 @@ export function RouteInspector({
     try {
       const result = await api<{ warning?: string }>(`/api/admin/models/${route.id}/probe`, { method: "POST" });
       if (result.warning) {
-        onChecked({ state: "listed", note: result.warning });
-        notify("The provider lists this model. The live check came back neither way, so the route stays available.");
+        onChecked({ state: "failed", note: result.warning });
+        notify(result.warning, "danger");
       } else {
         onChecked({ state: "passed" });
         notify(`${route.public_alias} answered.`);

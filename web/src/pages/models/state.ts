@@ -32,7 +32,7 @@ export type Route = ModelRoute & { provider: Provider; credentials: Credential[]
  *  keys first. A route on a provider switched off half a minute ago is not
  *  "Ready" because it answered a probe before that. */
 export type CheckResult = {
-  state: "checking" | "passed" | "listed" | "blocked" | "failed";
+  state: "checking" | "passed" | "blocked" | "failed";
   /** The provider's own words, when it gave any. */
   note?: string;
 };
@@ -43,7 +43,7 @@ export function routeState(route: Route, check?: CheckResult): ConsoleState {
   if (readyKeyCount(route) === 0) return "unavailable";
   if (check?.state === "failed") return "failed";
   if (check?.state === "blocked") return "unavailable";
-  if (check?.state === "passed" || check?.state === "listed") return "healthy";
+  if (check?.state === "passed") return "healthy";
   if (route.capability_status === "failed") return "failed";
   if (route.capability_status === "probe_verified" || route.capability_status === "catalog_verified") return "healthy";
   return "unverified";
@@ -63,7 +63,6 @@ export function routeStateNote(route: Route, check?: CheckResult): string {
   if (readyKeyCount(route) === 0) return `None of ${route.provider.name}'s ${countOf(route.credentials.length, "API key")} can serve a request right now.`;
   if (check?.state === "blocked") return check.note || "Rotakey had nothing to run the check with.";
   if (check?.state === "failed") return check.note || "The provider refused the check.";
-  if (check?.state === "listed") return check.note || "The provider lists this model, and the live check came back neither way. The route stays available.";
   if (check?.state === "passed") return "";
   if (route.capability_status === "failed") return route.capability_error || "The provider refused the last check.";
   if (route.capability_status === "catalog_verified") return "The provider lists this model. Nothing has been sent to it yet.";
