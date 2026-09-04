@@ -48,6 +48,31 @@ import { routeState, routeStateNote, upstreamEndpoints, type CheckResult, type R
 
 export { RouteSheet, routeDraftFrom, type RouteDraft } from "./RouteForm";
 
+const sweepConcurrency = 6;
+
+/** Mix providers through the queue so one slow provider cannot hold every
+ *  worker while routes on healthy providers wait behind it. */
+function interleaveRoutesByProvider(routes: Route[]): Route[] {
+  const groups = new Map<string, Route[]>();
+  for (const route of routes) {
+    const group = groups.get(route.provider.id) ?? [];
+    group.push(route);
+    groups.set(route.provider.id, group);
+  }
+
+  const queue: Route[] = [];
+  let remaining = routes.length;
+  while (remaining > 0) {
+    for (const group of groups.values()) {
+      const route = group.shift();
+      if (!route) continue;
+      queue.push(route);
+      remaining--;
+    }
+  }
+  return queue;
+}
+
 export function ModelsPage({
   navigate,
   notify
@@ -86,19 +111,21 @@ export function ModelsPage({
   // What the live region says, as opposed to the counter the eye reads. A sweep of
   // two hundred routes announced every single one; this speaks at quarters.
   const [sweepNote, setSweepNote] = useState("");
-  // A sweep issues one request per route and there is no way to abort them all, so
-  // it is stopped between routes: the loop checks this before taking the next one.
   const stopSweep = useRef(false);
+  const sweepRunning = useRef(false);
+  const sweepControllers = useRef(new Set<AbortController>());
   // Set false on unmount so the sweep stops writing to state and raising toasts for
   // a page the operator has already left.
   const mounted = useRef(true);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
       mounted.current = false;
       stopSweep.current = true;
-    },
-    []
-  );
+      for (const controller of sweepControllers.current) controller.abort();
+      sweepControllers.current.clear();
+    };
+  }, []);
 
   // Loads are versioned so a slow reply cannot overwrite a newer one. A route
   // deleted from the inspector triggers an immediate reload while a background one
@@ -174,25 +201,24 @@ export function ModelsPage({
     .map((route) => route.id);
 
   const checkEverything = async () => {
-    if (sweeping || routes.length === 0) return;
-    const targets = routes.filter((route) => readyKeyCount(route) > 0);
+    if (sweepRunning.current || routes.length === 0) return;
+    sweepRunning.current = true;
+    const targets = interleaveRoutesByProvider(routes.filter((route) => readyKeyCount(route) > 0));
     const skipped = routes.filter((route) => readyKeyCount(route) === 0);
     // A route that cannot serve states its own reason. "Waiting for a healthy API
     // key" is a lie when the provider is switched off or has no keys at all.
     setChecks(
       Object.fromEntries(
-        routes.map((route) => [
-          route.id,
-          readyKeyCount(route) > 0
-            ? ({ state: "checking" } as CheckResult)
-            : ({ state: "blocked", note: routeBlockReason(route) } as CheckResult)
-        ])
+        skipped.map((route) => [route.id, { state: "blocked", note: routeBlockReason(route) } as CheckResult])
       )
     );
     setSweep({ done: skipped.length, total: routes.length });
     setSweeping(true);
     stopSweep.current = false;
-    setSweepNote(`Checking ${targets.length} route${targets.length === 1 ? "" : "s"}.`);
+    const workerCount = Math.min(sweepConcurrency, targets.length);
+    setSweepNote(
+      `Checking ${targets.length} route${targets.length === 1 ? "" : "s"} with ${workerCount} at a time.`
+    );
 
     let cursor = 0;
     let done = 0;
@@ -203,11 +229,18 @@ export function ModelsPage({
     // which is a screen reader talking over itself for a minute. The bar keeps
     // ticking for the eye; the live region speaks at quarters and at the end.
     const milestone = Math.max(1, Math.ceil(targets.length / 4));
-    while (cursor < targets.length) {
-      if (stopSweep.current || !mounted.current) break;
-      const route = targets[cursor++];
+    const checkRoute = async (route: Route) => {
+      if (stopSweep.current || !mounted.current) return;
+      const controller = new AbortController();
+      sweepControllers.current.add(controller);
+      if (mounted.current) {
+        setChecks((current) => ({ ...current, [route.id]: { state: "checking" } }));
+      }
       try {
-        const result = await api<{ warning?: string }>(`/api/admin/models/${route.id}/probe`, { method: "POST" });
+        const result = await api<{ warning?: string }>(`/api/admin/models/${route.id}/probe`, {
+          method: "POST",
+          signal: controller.signal
+        });
         if (result.warning) {
           listed++;
           if (mounted.current) setChecks((current) => ({ ...current, [route.id]: { state: "listed", note: result.warning } }));
@@ -216,6 +249,16 @@ export function ModelsPage({
           if (mounted.current) setChecks((current) => ({ ...current, [route.id]: { state: "passed" } }));
         }
       } catch (caught) {
+        if (controller.signal.aborted) {
+          if (mounted.current) {
+            setChecks((current) => {
+              const next = { ...current };
+              delete next[route.id];
+              return next;
+            });
+          }
+          return;
+        }
         const blocked = caught instanceof APIError && caught.code === "model_probe_blocked";
         if (!blocked) failed++;
         if (mounted.current) {
@@ -225,15 +268,26 @@ export function ModelsPage({
           }));
         }
       } finally {
-        done++;
-        if (mounted.current) {
-          setSweep({ done: done + skipped.length, total: routes.length });
-          if (done % milestone === 0 && done < targets.length) setSweepNote(`${done} of ${targets.length} checked.`);
-        }
+        sweepControllers.current.delete(controller);
       }
-    }
+      done++;
+      if (mounted.current) {
+        setSweep({ done: done + skipped.length, total: routes.length });
+        if (done % milestone === 0 && done < targets.length) setSweepNote(`${done} of ${targets.length} checked.`);
+      }
+    };
+
+    const worker = async () => {
+      while (!stopSweep.current && mounted.current) {
+        const index = cursor++;
+        if (index >= targets.length) return;
+        await checkRoute(targets[index]);
+      }
+    };
+    await Promise.all(Array.from({ length: workerCount }, worker));
     // The page can be left while a sweep of two hundred routes is running, and
     // every write after that point is against a component that is gone.
+    sweepRunning.current = false;
     if (!mounted.current) return;
     setSweeping(false);
     const stopped = stopSweep.current;
@@ -243,6 +297,13 @@ export function ModelsPage({
     setSweepNote(stopped ? `Stopped after ${done} of ${targets.length}. ${summary}` : summary);
     notify(stopped ? `Stopped after ${done} of ${targets.length}. ${summary}` : summary, failed ? "danger" : "success");
     await load(true);
+  };
+
+  const stopChecking = () => {
+    if (!sweepRunning.current) return;
+    stopSweep.current = true;
+    setSweepNote("Stopping active checks…");
+    for (const controller of sweepControllers.current) controller.abort();
   };
 
   const deleteFailed = async () => {
@@ -372,9 +433,7 @@ export function ModelsPage({
                     {sweeping ? (
                       <MenuItem
                         icon={<Activity size={14} aria-hidden="true" />}
-                        onSelect={() => {
-                          stopSweep.current = true;
-                        }}
+                        onSelect={stopChecking}
                       >
                         Stop checking
                       </MenuItem>
