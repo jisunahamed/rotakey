@@ -31,6 +31,7 @@ type Server struct {
 	logger         *slog.Logger
 	handler        http.Handler
 	activeRequests sync.Map
+	repairWorkers  chan struct{}
 	release        releaseCache
 }
 
@@ -63,6 +64,7 @@ func NewServer(ctx context.Context, cfg Config, logger *slog.Logger) (*Server, e
 	server := &Server{
 		cfg: cfg, db: db, redis: redisClient, vault: vault,
 		limiter: newLimiter(redisClient), logger: logger,
+		repairWorkers: make(chan struct{}, 4),
 	}
 	server.handler = server.routes()
 	go server.retentionLoop(ctx)
@@ -289,6 +291,7 @@ func (s *Server) runRetention(ctx context.Context) {
 		DELETE FROM request_logs
 		WHERE created_at < NOW() - ($1::text || ' days')::interval
 	`, settings.MetadataRetentionDays)
+	_, _ = s.db.Exec(ctx, `DELETE FROM repair_incidents WHERE created_at < NOW() - ($1::text || ' days')::interval`, settings.MetadataRetentionDays)
 }
 
 type requestIDContextKey struct{}

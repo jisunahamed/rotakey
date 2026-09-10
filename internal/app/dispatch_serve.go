@@ -22,8 +22,24 @@ func (s *Server) resolveRoutes(ctx context.Context, alias string, mode string) (
 	if err != nil {
 		return nil, err
 	}
-	if normalizeRoutingMode(mode) != routingModeModel && len(routes) > 1 {
-		return routes[:1], nil
+	if normalizeRoutingMode(mode) != routingModeModel {
+		primary := routes[0]
+		// An explicit provider alias remains first. Only identical upstream model
+		// identifiers qualify as fallback; different models are never substituted.
+		rows, queryErr := s.db.Query(ctx, `SELECT `+routeColumns+` FROM model_routes m JOIN providers p ON p.id=m.provider_id WHERE m.upstream_model=$1 AND m.id<>$2 AND `+routeFilter+` ORDER BY m.created_at,m.id`, primary.Model.UpstreamModel, primary.Model.ID)
+		if queryErr != nil {
+			return []routeRuntime{primary}, nil
+		}
+		defer rows.Close()
+		fallbacks := []routeRuntime{primary}
+		for rows.Next() {
+			route, scanErr := scanRoute(rows)
+			if scanErr == nil {
+				route.FallbackOnly = true
+				fallbacks = append(fallbacks, route)
+			}
+		}
+		return fallbacks, nil
 	}
 	return routes, nil
 }
@@ -208,6 +224,7 @@ func (s *Server) servePooled(
 	forcedCredential string,
 ) {
 	primary := routes[0]
+	req.DeferFailures = true
 	candidates, err := s.loadPoolCandidates(r.Context(), routes)
 	if err != nil {
 		s.rejectPool(w, r, req, primary, http.StatusServiceUnavailable, "credentials_unavailable", "Provider credentials could not be loaded.")
@@ -229,6 +246,7 @@ func (s *Server) servePooled(
 	// keeps the two from trading a request back and forth across requests.
 	modelIDs := routeModelIDs(routes)
 	state := dispatchState{
+		Scoped:                     map[string]compatibilityScope{},
 		Replaced:                   map[string]string{},
 		MinOutputTokens:            map[string]int64{},
 		DetachReplayedIDs:          map[string]bool{},
@@ -259,9 +277,12 @@ func (s *Server) servePooled(
 	defer cancelRetries()
 
 	clients := newClientCache()
+	recovery := s.newRepairSession(r.Context(), req, routes)
+	defer recovery.finish()
 	skipped := map[string]bool{}
+	repairCandidateKey := ""
 	compatibilityRetriesRemaining := 2
-	maxAttempts := len(candidates) + compatibilityRetriesRemaining
+	maxAttempts := min(12, len(candidates)+compatibilityRetriesRemaining+3)
 	attempts := make([]AttemptRecord, 0, maxAttempts)
 	decisions := make([]RoutingDecision, 0)
 
@@ -271,13 +292,26 @@ func (s *Server) servePooled(
 	}
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt+recovery.extraCalls >= 12 {
+			break
+		}
+		recovery.targetCalls = attempt + 1
+		recovery.refreshPolicy(retryContext)
 		if len(skipped) >= len(candidates) {
 			// Every candidate has been tried. Surface the last upstream failure
 			// rather than the limiter's "at capacity" answer.
 			break
 		}
+		preparedPlans := map[string]upstreamPlan{}
+		for i := range candidates {
+			candidates[i].repairPreferred = candidates[i].key() == repairCandidateKey
+		}
+		repairCandidateKey = ""
+		for _, c := range candidates {
+			preparedPlans[c.Route.Model.ID] = recovery.prepare(c.Route, plans[c.Route.Model.ID])
+		}
 		selected, reserved, retryAfter, routing, selectErr := s.selectPoolCandidate(
-			retryContext, req.Alias, candidates, planTokenCosts(plans), skipped, req.MaxWait,
+			retryContext, req.Alias, candidates, planTokenCosts(preparedPlans), skipped, req.MaxWait,
 		)
 		decisions = append(decisions, routing...)
 		if selectErr != nil {
@@ -311,7 +345,10 @@ func (s *Server) servePooled(
 			return
 		}
 		candidate := *selected
-		plan := plans[candidate.Route.Model.ID]
+		plan := preparedPlans[candidate.Route.Model.ID]
+		if timeout := recovery.timeouts[candidate.Route.Provider.ID]; timeout > 0 {
+			candidate.Route.Provider.TimeoutSeconds = timeout
+		}
 		result.Route, result.Credential = candidate.Route, candidate.Credential
 		result.InputTokens = plan.InputEstimate
 		skipped[candidate.key()] = true
@@ -332,7 +369,30 @@ func (s *Server) servePooled(
 			continue
 		}
 
-		outcome := s.runAttempt(w, r, req, candidate, plan, client, retryContext, reserved, compatibilityRetriesRemaining > 0)
+		outcome := s.runAttempt(w, r, req, candidate, plan, client, retryContext, reserved, compatibilityRetriesRemaining > 0 && recovery.tests < 3)
+		if recovery.handle(retryContext, &candidate, plan, &outcome, clients) {
+			delete(skipped, candidate.key())
+			repairCandidateKey = candidate.key()
+			if credentialID := recovery.selectedCredentials[candidate.Route.Model.ID]; credentialID != "" {
+				for _, c := range candidates {
+					if c.Route.Model.ID == candidate.Route.Model.ID {
+						if c.Credential.ID == credentialID {
+							delete(skipped, c.key())
+							repairCandidateKey = c.key()
+						} else {
+							skipped[c.key()] = true
+						}
+					}
+				}
+			}
+		}
+		if !outcome.Done && !outcome.Compatibility && (outcome.Status == 400 || outcome.Status == 422) && !outcome.Record.RecoveryRetry {
+			for _, other := range candidates {
+				if other.Route.Model.ID == candidate.Route.Model.ID {
+					skipped[other.key()] = true
+				}
+			}
+		}
 		attempts = append(attempts, outcome.Record)
 		if outcome.Status != 0 {
 			result.Status = outcome.Status
@@ -353,6 +413,18 @@ func (s *Server) servePooled(
 			if outcome.LearnedItemStrip.Field != "" && !slices.Contains(state.RemovedItemFields, outcome.LearnedItemStrip) {
 				state.RemovedItemFields = append(state.RemovedItemFields, outcome.LearnedItemStrip)
 			}
+			scope := state.Scoped[candidate.Route.Model.ID]
+			scope.Removed = appendUniqueStrings(scope.Removed, outcome.LearnedStrip...)
+			if scope.Replaced == nil {
+				scope.Replaced = map[string]string{}
+			}
+			for from, to := range outcome.LearnedReplace {
+				scope.Replaced[from] = to
+			}
+			if outcome.LearnedItemStrip.Field != "" {
+				scope.Items = append(scope.Items, outcome.LearnedItemStrip)
+			}
+			state.Scoped[candidate.Route.Model.ID] = scope
 			if outcome.LearnedReplyFloor > state.MinOutputTokens[candidate.Route.Model.ID] {
 				state.MinOutputTokens[candidate.Route.Model.ID] = outcome.LearnedReplyFloor
 			}
@@ -396,7 +468,8 @@ func (s *Server) servePooled(
 			compatibilityRetriesRemaining--
 		}
 		if outcome.ResetSkips {
-			skipped = map[string]bool{}
+			delete(skipped, candidate.key())
+			repairCandidateKey = candidate.key()
 		}
 
 		if outcome.Done {
@@ -611,7 +684,9 @@ func (s *Server) runAttempt(
 			case hasReplacement:
 				record.Retryable = true
 				record.ReplacedParameters = map[string]string{replacement.From: replacement.To}
-				s.rememberCompatibilityReplacement(r.Context(), candidate.Route.Model.ID, plan.wireEndpoint(), replacement)
+				if !req.DeferFailures {
+					s.rememberCompatibilityReplacement(r.Context(), candidate.Route.Model.ID, plan.wireEndpoint(), replacement)
+				}
 				s.logger.Info("learned upstream parameter replacement",
 					"request_id", req.RequestID, "model", candidate.Route.Model.PublicAlias,
 					"provider", candidate.Route.Provider.Name, "from", replacement.From, "to", replacement.To)
@@ -623,7 +698,9 @@ func (s *Server) runAttempt(
 			case len(parameters) > 0:
 				record.Retryable = true
 				record.RemovedParameters = parameters
-				s.rememberCompatibilityParameters(r.Context(), candidate.Route.Model.ID, parameters)
+				if !req.DeferFailures {
+					s.rememberCompatibilityParameters(r.Context(), candidate.Route.Model.ID, parameters)
+				}
 				s.logger.Info("learned unsupported upstream parameters",
 					"request_id", req.RequestID, "model", candidate.Route.Model.PublicAlias,
 					"provider", candidate.Route.Provider.Name, "parameters", strings.Join(parameters, ","))
@@ -635,7 +712,9 @@ func (s *Server) runAttempt(
 			case hasItemStrip:
 				record.Retryable = true
 				record.RemovedParameters = []string{itemStrip.String()}
-				s.rememberItemFieldStrip(r.Context(), candidate.Route.Model.ID, itemStrip)
+				if !req.DeferFailures {
+					s.rememberItemFieldStrip(r.Context(), candidate.Route.Model.ID, itemStrip)
+				}
 				s.logger.Info("learned unsupported field inside the caller's turns",
 					"request_id", req.RequestID, "model", candidate.Route.Model.PublicAlias,
 					"provider", candidate.Route.Provider.Name, "field", itemStrip.String())
@@ -647,7 +726,9 @@ func (s *Server) runAttempt(
 			case hasDetach:
 				record.Retryable = true
 				record.RemovedParameters = []string{"input[].id"}
-				s.rememberDetachReplayedIDs(r.Context(), candidate.Route.Model.ID)
+				if !req.DeferFailures {
+					s.rememberDetachReplayedIDs(r.Context(), candidate.Route.Model.ID)
+				}
 				s.logger.Info("provider refused a replayed message id's pairing; retrying without the ids",
 					"request_id", req.RequestID, "model", candidate.Route.Model.PublicAlias,
 					"provider", candidate.Route.Provider.Name)
@@ -664,7 +745,7 @@ func (s *Server) runAttempt(
 		// so striking this one only shrinks the rotation over the gateway's own
 		// mistake. A route that publishes /responses natively is not covered —
 		// there the configuration is the operator's and the 400 is real evidence.
-		if !switchEndpoint && !hasReplacement && len(parameters) == 0 && !hasItemStrip && !hasDetach && !plan.SwitchedToResponses {
+		if !req.DeferFailures && !switchEndpoint && !hasReplacement && len(parameters) == 0 && !hasItemStrip && !hasDetach && !plan.SwitchedToResponses {
 			s.markUpstreamFailure(r.Context(), credential.ID, response.StatusCode, response.Header, errorBody)
 		}
 		return s.writeAttemptFailure(w, r, req, plan, response, errorBody, wasTruncated, record, credential, upstreamRequestID)
@@ -690,7 +771,9 @@ func (s *Server) runAttempt(
 				NativeResponsesMissing: true,
 			}
 		}
-		s.markUpstreamFailure(r.Context(), credential.ID, response.StatusCode, response.Header, body)
+		if response.StatusCode != http.StatusUnprocessableEntity {
+			s.markUpstreamFailure(r.Context(), credential.ID, response.StatusCode, response.Header, body)
+		}
 		if anthropicRetryableStatus(response.StatusCode) {
 			// Nothing has been written yet, so another provider may still serve
 			// this request. The caller decides whether budget remains.
@@ -710,12 +793,12 @@ func (s *Server) runAttempt(
 	// The endpoint switch is now proved rather than inferred, so later requests
 	// for this model may start at /responses. Recorded here and nowhere else: a
 	// switch that ends in a 400 teaches nothing beyond this request.
-	if plan.SwitchedToResponses {
+	if plan.SwitchedToResponses && !req.DeferFailures {
 		s.rememberResponsesEndpointPreferred(r.Context(), candidate.Route.Model.ID)
 	}
 	// Same proved-not-inferred rule for the reply budget: the raised cap is
 	// remembered only on the attempt that actually answered under it.
-	if plan.ReplyFloor > 0 {
+	if plan.ReplyFloor > 0 && !req.DeferFailures {
 		s.rememberReplyFloor(r.Context(), candidate.Route.Model.ID, plan.ReplyFloor)
 	}
 	if req.Stream {
@@ -754,6 +837,7 @@ func (s *Server) runAttempt(
 				Record: record, Status: response.StatusCode,
 				UpstreamRequestID: upstreamRequestID, Compatibility: true, ResetSkips: true,
 				LearnedReplyFloor: escalated,
+				InputTokens:       usedInput, OutputTokens: usedOutput,
 			}
 		}
 	}
@@ -778,6 +862,10 @@ func (s *Server) runAttempt(
 	if inputTokens+outputTokens > 0 {
 		_ = s.limiter.AdjustTokens(r.Context(), reserved, inputTokens+outputTokens)
 	}
+	if plan.Recovered && !validRepairResponse(translatedBody, req.PublicMode) {
+		record.Error, record.ErrorMessage, record.Retryable = "invalid_repair_response", "Repair produced no valid answer or tool call.", true
+		return attemptOutcome{Record: record, Status: http.StatusBadGateway, ErrorCode: record.Error, ErrorMessage: record.ErrorMessage, ResponseBody: translatedBody, InputTokens: inputTokens, OutputTokens: outputTokens}
+	}
 	copyResponseHeaders(w, req.PublicMode, response.Header)
 	s.setCompatibilityHeaders(w, plan)
 	w.Header().Set("Content-Type", "application/json")
@@ -794,6 +882,9 @@ func (s *Server) runAttempt(
 // drop or rename to make the request acceptable upstream, and whether it had to
 // send the request to a different endpoint than the route publishes.
 func (s *Server) setCompatibilityHeaders(w http.ResponseWriter, plan upstreamPlan) {
+	if plan.Recovered {
+		w.Header().Set("X-Rotakey-Recovery", "applied")
+	}
 	if len(plan.Removed) > 0 {
 		w.Header().Set("X-Rotakey-Removed-Parameters", strings.Join(plan.Removed, ","))
 	}
@@ -823,6 +914,10 @@ func (s *Server) writeAttemptFailure(
 	code := upstreamErrorCode(body)
 	message := upstreamFailureMessage(response.StatusCode, plan.Path, upstreamErrorMessage(body, credential.Secret))
 	record.Error, record.ErrorMessage, record.Retryable = code, message, false
+	if req.DeferFailures {
+		record.Retryable = true
+		return attemptOutcome{Record: record, Status: response.StatusCode, ErrorCode: code, ErrorMessage: message, ResponseBody: body, Truncated: truncated, UpstreamRequestID: upstreamRequestID}
+	}
 	copyResponseHeaders(w, req.PublicMode, response.Header)
 	sameProtocol := (req.PublicMode == messageModeAnthropic) == (upstreamProtocolIsAnthropic(response))
 	if sameProtocol {

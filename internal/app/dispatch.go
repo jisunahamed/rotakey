@@ -9,9 +9,10 @@ import (
 // dispatchRequest carries everything about a public request that stays constant
 // while the gateway fails over between candidates.
 type dispatchRequest struct {
-	RequestID string
-	Started   time.Time
-	Endpoint  string
+	DeferFailures bool
+	RequestID     string
+	Started       time.Time
+	Endpoint      string
 	// PublicMode is the protocol the caller spoke: messageModeChat,
 	// messageModeResponses or messageModeAnthropic.
 	PublicMode         string
@@ -28,6 +29,7 @@ type dispatchRequest struct {
 // request. They are reapplied to every later attempt, including attempts against
 // a different provider, because the offending field came from the caller.
 type dispatchState struct {
+	Scoped   map[string]compatibilityScope
 	Removed  []string
 	Replaced map[string]string
 	// RemovedItemFields holds fields rejected from inside a turn rather than from
@@ -54,6 +56,7 @@ type dispatchState struct {
 
 // upstreamPlan is one candidate's translated view of the public request.
 type upstreamPlan struct {
+	Recovered bool
 	// Payload is the decoded body that produced Encoded. Compatibility repairs
 	// inspect it to decide which field an upstream rejected.
 	Payload       map[string]any
@@ -125,6 +128,10 @@ type attemptOutcome struct {
 // provider expects. Model-wise pools can mix Anthropic and OpenAI providers
 // behind the same public alias, so every attempt gets its own translation.
 func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route routeRuntime, state dispatchState) (upstreamPlan, error) {
+	if state.Scoped != nil {
+		scope := state.Scoped[route.Model.ID]
+		state.Removed, state.Replaced, state.RemovedItemFields = scope.Removed, scope.Replaced, scope.Items
+	}
 	format := route.Provider.APIFormat
 	if format == "" {
 		format = "openai"
@@ -134,7 +141,7 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 		Replaced:             map[string]string{},
 		ResponsesUnavailable: state.NativeResponsesUnavailable[route.Model.ID],
 	}
-	payload := cloneMap(req.Public)
+	payload := cloneRequest(req.Public)
 	var err error
 
 	switch {

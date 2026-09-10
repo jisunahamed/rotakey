@@ -149,11 +149,14 @@ type credentialRuntime struct {
 }
 
 type routeRuntime struct {
-	Model    ModelRoute
-	Provider Provider
+	FallbackOnly bool
+	Model        ModelRoute
+	Provider     Provider
 }
 
 type AttemptRecord struct {
+	RepairIncidentID   string            `json:"repair_incident_id,omitempty"`
+	RecoveryRetry      bool              `json:"recovery_retry,omitempty"`
 	CredentialID       string            `json:"credential_id"`
 	CredentialLabel    string            `json:"credential_label"`
 	StatusCode         int               `json:"status_code"`

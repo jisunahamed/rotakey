@@ -35,6 +35,10 @@ var forbiddenProviderHeaders = map[string]bool{
 
 func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	admin := func(handler http.HandlerFunc) http.Handler { return s.requireAdmin(handler) }
+	mux.Handle("GET /api/admin/repair/policy", admin(s.handleRepairPolicy))
+	mux.Handle("PUT /api/admin/repair/policy", admin(s.handleRepairPolicy))
+	mux.Handle("GET /api/admin/repair/incidents", admin(s.handleRepairIncidents))
+	mux.Handle("GET /api/admin/repair/metrics", admin(s.handleRepairMetrics))
 	mux.Handle("GET /api/admin/overview", admin(s.handleAdminOverview))
 	mux.Handle("GET /api/admin/providers", admin(s.handleListProviders))
 	mux.Handle("POST /api/admin/providers", admin(s.handleCreateProvider))

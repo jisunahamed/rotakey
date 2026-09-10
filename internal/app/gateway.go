@@ -352,6 +352,31 @@ func cloneMap(source map[string]any) map[string]any {
 	return target
 }
 
+func cloneRequest(source map[string]any) map[string]any {
+	target := make(map[string]any, len(source))
+	for key, value := range source {
+		target[key] = cloneRequestValue(value)
+	}
+	return target
+}
+
+func cloneRequestValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		return cloneRequest(v)
+	case []any:
+		result := make([]any, len(v))
+		for i, item := range v {
+			result[i] = cloneRequestValue(item)
+		}
+		return result
+	case []string:
+		return append([]string(nil), v...)
+	default:
+		return value
+	}
+}
+
 func stripTopLevelParameters(payload map[string]any, parameters []string) []string {
 	stripped := make([]string, 0, len(parameters))
 	for _, parameter := range parameters {

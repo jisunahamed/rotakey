@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { RepairAgentSettings, RepairHistory, RepairMetrics } from "./RepairAgent";
 import {
   Activity,
   AlertTriangle,
@@ -591,7 +592,7 @@ function App() {
             {route.notFound && <NotFoundPage navigate={navigate} />}
             {!route.notFound && (
               <>
-                {route.page === "overview" && <OverviewPage navigate={navigate} notify={notify} />}
+                {route.page === "overview" && <><OverviewPage navigate={navigate} notify={notify} /><RepairMetrics /></>}
                 {route.page === "providers" && <ProvidersPage notify={notify} />}
                 {route.page === "models" && <ModelsPage navigate={navigate} notify={notify} />}
                 {route.page === "playground" && <PlaygroundPage navigate={navigate} notify={notify} />}
@@ -3637,6 +3638,7 @@ function LogsPage() {
               </InlineNotice>
             )}
             {selected.running ? <InlineNotice>Request is running. This inspector will switch to the final status automatically.</InlineNotice> : selected.status_code >= 400 && <LogDiagnosis log={selected} />}
+            <RepairHistory requestID={selected.request_id} />
             <section className={`inspector-disclosure log-disclosure${attemptsOpen ? " is-open" : ""}`}>
               <button type="button" onClick={() => setAttemptsOpen((current) => !current)} aria-expanded={attemptsOpen}><ChevronDown size={14} aria-hidden="true" /><span><strong>Routing attempts</strong><small>{selected.attempts.length} recorded</small></span></button>
               {attemptsOpen && <div className="attempt-list">{selected.attempts.length ? selected.attempts.map((attempt, index) => <div key={`${attempt.credential_id}-${index}`}><span>{index + 1}</span><strong>{attempt.credential_label}</strong><code>{attemptSummary(attempt)}</code><small>{attempt.duration_ms} ms</small>{attempt.error_message && <p>{attempt.error_message}</p>}</div>) : <p className="console-empty">No upstream attempt was needed.</p>}</div>}
@@ -4003,6 +4005,7 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
         <span>{modeChanged ? "Saving a new routing mode renames existing model aliases." : "Changes apply to new requests without restarting the gateway."}</span>
         <Button disabled={busy} onClick={saveSettings}>{busy ? "Saving…" : "Save settings"}</Button>
       </div>
+      <RepairAgentSettings providers={providers} />
       <ConfigTransfer notify={notify} onImported={adoptImportedSettings} />
       <section className="security-baseline">
         <ShieldCheck size={19} aria-hidden="true" />

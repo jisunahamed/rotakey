@@ -10,8 +10,9 @@ import (
 // routing pools candidates from every provider that publishes the same public
 // alias, so a single request can fail over across providers as well as keys.
 type routeCandidate struct {
-	Route      routeRuntime
-	Credential credentialRuntime
+	repairPreferred bool
+	Route           routeRuntime
+	Credential      credentialRuntime
 }
 
 // key identifies a candidate uniquely inside one request's skip set.
@@ -94,7 +95,23 @@ func candidateSelectionOrder(candidates []routeCandidate, cursor int64) []int {
 			break
 		}
 	}
-	return order
+	primaryOrder := make([]int, 0, len(order))
+	for _, index := range order {
+		if candidates[index].repairPreferred {
+			primaryOrder = append(primaryOrder, index)
+		}
+	}
+	for _, index := range order {
+		if !candidates[index].repairPreferred && !candidates[index].Route.FallbackOnly {
+			primaryOrder = append(primaryOrder, index)
+		}
+	}
+	for _, index := range order {
+		if !candidates[index].repairPreferred && candidates[index].Route.FallbackOnly {
+			primaryOrder = append(primaryOrder, index)
+		}
+	}
+	return primaryOrder
 }
 
 // credentialOrderForCandidates reuses the provider-wise rotation rules on a
