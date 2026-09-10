@@ -45,6 +45,7 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	mux.Handle("PUT /api/admin/providers/{id}", admin(s.handleUpdateProvider))
 	mux.Handle("DELETE /api/admin/providers/{id}", admin(s.handleDeleteProvider))
 	mux.Handle("PUT /api/admin/providers/{id}/state", admin(s.handleSetProviderEnabled))
+	mux.Handle("PUT /api/admin/providers/{id}/pin", admin(s.handleSetProviderPinned))
 	mux.Handle("POST /api/admin/providers/inspect", admin(s.handleInspectUnsavedProvider))
 	mux.Handle("POST /api/admin/providers/{id}/test", admin(s.handleTestProvider))
 	mux.Handle("POST /api/admin/providers/{id}/models", admin(s.handleCreateModel))
@@ -87,7 +88,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
-	rows, err := s.db.Query(ctx, `SELECT `+providerColumns+` FROM providers ORDER BY created_at, id`)
+	rows, err := s.db.Query(ctx, `SELECT `+providerColumns+` FROM providers ORDER BY pinned DESC, created_at, id`)
 	if err != nil {
 		return nil, err
 	}

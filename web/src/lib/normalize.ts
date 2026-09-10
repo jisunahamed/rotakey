@@ -19,6 +19,7 @@ export function normalizeProviders(providers: Provider[] | null | undefined): Pr
   return (providers ?? []).map((provider) => ({
     ...provider,
     api_format: provider.api_format ?? "openai",
+    pinned: provider.pinned ?? false,
     anthropic_version: provider.anthropic_version ?? "2023-06-01",
     extra_headers: provider.extra_headers ?? {},
     // An absent balance is "not tracked", which is deliberately not the same as

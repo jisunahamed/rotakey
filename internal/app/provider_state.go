@@ -24,6 +24,33 @@ type providerStateResult struct {
 	Warnings        []string `json:"warnings"`
 }
 
+type providerPinInput struct {
+	Pinned bool `json:"pinned"`
+}
+
+func (s *Server) handleSetProviderPinned(w http.ResponseWriter, r *http.Request) {
+	var input providerPinInput
+	if decodeJSON(w, r, 1<<10, &input) != nil {
+		return
+	}
+	providerID := r.PathValue("id")
+	var name string
+	err := s.db.QueryRow(r.Context(), `
+		UPDATE providers SET pinned=$2
+		WHERE id=$1 RETURNING name
+	`, providerID, input.Pinned).Scan(&name)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "provider_not_found", "Provider was not found.")
+		return
+	}
+	action := "provider.unpin"
+	if input.Pinned {
+		action = "provider.pin"
+	}
+	s.audit(r.Context(), adminIDFromContext(r.Context()), action, "provider", providerID, map[string]any{"name": name})
+	writeJSON(w, http.StatusOK, map[string]any{"pinned": input.Pinned})
+}
+
 func (s *Server) handleSetProviderEnabled(w http.ResponseWriter, r *http.Request) {
 	var input providerStateInput
 	if decodeJSON(w, r, 1<<10, &input) != nil {

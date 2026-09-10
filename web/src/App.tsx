@@ -14,6 +14,7 @@ import {
   Download,
   FileClock,
   Menu,
+  Pin,
   Plus,
   Power,
   RefreshCw,
@@ -21,6 +22,7 @@ import {
   ShieldCheck,
   Trash2,
   Upload,
+  Wrench,
   X
 } from "lucide-react";
 import { api, setCSRF } from "./api";
@@ -1435,6 +1437,8 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
   });
   const [testing, setTesting] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [query, setQuery] = useState("");
+  const [pinningID, setPinningID] = useState("");
   // The panel holds ids, not the records themselves. A snapshot taken when the
   // sheet opened went stale the moment the ten-second reload landed, so an edit
   // could be saved against limits or a label that had already changed upstream.
@@ -1475,6 +1479,15 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
   }, [load]);
 
   const selected = providers.find((provider) => provider.id === selectedID);
+  const visibleProviders = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return providers.filter((provider) => !needle || [
+      provider.name,
+      provider.slug,
+      provider.api_format,
+      provider.base_url
+    ].some((value) => value.toLowerCase().includes(needle)));
+  }, [providers, query]);
   useTitleDetail(selected?.name ?? "");
   // Sheets read their provider out of the live list, so the ten-second reload
   // keeps them current instead of leaving them on a snapshot.
@@ -1486,6 +1499,22 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
     setPanel(null);
     notify(message);
     void load();
+  };
+  const setProviderPinned = async (provider: Provider) => {
+    const pinned = !provider.pinned;
+    setPinningID(provider.id);
+    setProviders((current) => [...current.map((item) => item.id === provider.id ? { ...item, pinned } : item)]
+      .sort((left, right) => Number(right.pinned) - Number(left.pinned) || left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id)));
+    try {
+      await api(`/api/admin/providers/${provider.id}/pin`, { method: "PUT", json: { pinned } });
+      notify(`${provider.name} ${pinned ? "pinned to the top" : "unpinned"}.`);
+    } catch (caught) {
+      setProviders((current) => [...current.map((item) => item.id === provider.id ? { ...item, pinned: provider.pinned } : item)]
+        .sort((left, right) => Number(right.pinned) - Number(left.pinned) || left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id)));
+      notify(errorMessage(caught), "danger");
+    } finally {
+      setPinningID("");
+    }
   };
 
   // A panel holds ids, and the ten-second reload can find that one of them is gone
@@ -1553,24 +1582,39 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
         <div className="resource-layout">
           {/* The list is inert while the drawer covers it, for the same reason the
               nav drawer makes the page behind it inert. */}
-          <section className="resource-list" aria-label="Providers" inert={inspectorFloating && providerInspectorOpen && Boolean(selected)} onKeyDown={listKeys}>
-            {providers.map((provider) => {
+          <section className="resource-list provider-list" aria-label="Providers" inert={inspectorFloating && providerInspectorOpen && Boolean(selected)} onKeyDown={listKeys}>
+            <label className="provider-search">
+              <Search size={15} aria-hidden="true" />
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search providers" aria-label="Search providers" />
+              {query && <button type="button" onClick={() => setQuery("")} aria-label="Clear provider search"><X size={14} aria-hidden="true" /></button>}
+            </label>
+            {visibleProviders.map((provider) => {
               const healthy = provider.credentials.filter((credential) => credentialPoolState(credential) === "healthy").length;
               return (
-                <button
-                  key={provider.id}
-                  data-row
-                  className={`resource-item ${selectedID === provider.id ? "is-selected" : ""}`}
-                  aria-current={selectedID === provider.id}
-                  onClick={() => { setSelectedID(provider.id); setProviderInspectorOpen(true); }}
-                >
-                  <StatusDot state={!provider.enabled ? "disabled" : healthy ? "healthy" : "exhausted"} />
-                  <span><strong title={provider.name}>{provider.name} <em className={`protocol-badge is-${provider.api_format}`}>{provider.api_format === "anthropic" ? "Anthropic" : "OpenAI"}</em></strong><small title={provider.base_url}>{provider.base_url}</small></span>
-                  <span className="resource-item__count">{provider.models.length} model{provider.models.length === 1 ? "" : "s"}</span>
-                  <ChevronRight size={15} aria-hidden="true" />
-                </button>
+                <div className={`provider-list-entry ${provider.pinned ? "is-pinned" : ""}`} key={provider.id}>
+                  <button
+                    data-row
+                    className={`resource-item ${selectedID === provider.id ? "is-selected" : ""}`}
+                    aria-current={selectedID === provider.id}
+                    onClick={() => { setSelectedID(provider.id); setProviderInspectorOpen(true); }}
+                  >
+                    <StatusDot state={!provider.enabled ? "disabled" : healthy ? "healthy" : "exhausted"} />
+                    <span><strong title={provider.name}>{provider.name} <em className={`protocol-badge is-${provider.api_format}`}>{provider.api_format === "anthropic" ? "Anthropic" : "OpenAI"}</em></strong><small title={provider.base_url}>{provider.base_url}</small></span>
+                    <span className="resource-item__count">{provider.models.length} model{provider.models.length === 1 ? "" : "s"}</span>
+                    <ChevronRight size={15} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="provider-pin"
+                    aria-label={`${provider.pinned ? "Unpin" : "Pin"} ${provider.name}`}
+                    title={provider.pinned ? "Unpin provider" : "Pin provider to top"}
+                    disabled={pinningID === provider.id}
+                    onClick={() => void setProviderPinned(provider)}
+                  ><Pin size={15} aria-hidden="true" /></button>
+                </div>
               );
             })}
+            {visibleProviders.length === 0 && <div className="provider-search-empty"><Search size={18} aria-hidden="true" /><strong>No providers found</strong><small>Try a name, identifier, protocol or URL.</small></div>}
           </section>
           {selected && (
             <section className={`resource-inspector${providerInspectorOpen ? " is-open" : ""}`} ref={providerDrawer as React.Ref<HTMLElement>} tabIndex={-1}>
@@ -2569,6 +2613,11 @@ type CredentialInspection = {
   latency_ms: number;
   models: DiscoveredModel[];
   warning?: string;
+  credential_id?: string;
+  credential_label?: string;
+  credential_tries?: number;
+  auto_recovered?: boolean;
+  recovery_steps?: string[];
 };
 
 type BatchCredentialFailure = {
@@ -3224,16 +3273,22 @@ function ModelImportForm({ provider, onClose, onComplete, notify }: { provider: 
       discardMessage="Close this panel? The selected model routes have not been enabled yet."
     >
       <div className="validation-action">
-        <div><strong>Provider model catalog</strong><small>Uses the primary API key first, then records whether that key is valid.</small></div>
+        <div><strong>Provider model catalog</strong><small>Tries healthy API keys first and automatically falls back when one cannot load the catalog.</small></div>
         <Button variant="quiet" disabled={busy} onClick={() => void load()}><RefreshCw size={14} aria-hidden="true" /> Reload</Button>
       </div>
       {busy && !inspection && <PageSkeleton />}
       {inspection && (
-        <InlineNotice tone={inspection.valid ? "success" : "danger"}>
-          {inspection.valid
-            ? `${inspection.models.length} models loaded in ${inspection.latency_ms} ms.`
+        <InlineNotice tone={inspection.models.length > 0 ? "success" : inspection.valid ? "warning" : "danger"}>
+          {inspection.models.length > 0
+            ? `${inspection.models.length} models loaded${inspection.credential_label ? ` using ${inspection.credential_label}` : ""} in ${inspection.latency_ms} ms.${inspection.auto_recovered ? ` Rotakey recovered after trying ${inspection.credential_tries} keys.` : ""}`
             : inspection.warning || discoveryFailed}
         </InlineNotice>
+      )}
+      {inspection?.recovery_steps && inspection.recovery_steps.length > 0 && (
+        <div className="catalog-recovery" role="status">
+          <Wrench size={16} aria-hidden="true" />
+          <div><strong>Automatic recovery</strong>{inspection.recovery_steps.map((step) => <small key={step}>{step}</small>)}</div>
+        </div>
       )}
       {inspection?.valid && (
         <ModelCatalog

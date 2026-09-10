@@ -140,6 +140,7 @@ export type Provider = {
   extra_headers: Record<string, string>;
   timeout_seconds: number;
   enabled: boolean;
+  pinned: boolean;
   allow_private_network: boolean;
   api_format: "openai" | "anthropic";
   anthropic_version: string;

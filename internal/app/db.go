@@ -121,6 +121,7 @@ func scanProvider(row pgx.Row) (Provider, error) {
 		&extra,
 		&provider.TimeoutSeconds,
 		&provider.Enabled,
+		&provider.Pinned,
 		&provider.AllowPrivateNetwork,
 		&provider.APIFormat,
 		&provider.AnthropicVersion,
@@ -140,7 +141,7 @@ func scanProvider(row pgx.Row) (Provider, error) {
 
 const providerColumns = `
 	id, name, slug, base_url, auth_header, auth_scheme, extra_headers,
-	timeout_seconds, enabled, allow_private_network, api_format, anthropic_version,
+	timeout_seconds, enabled, pinned, allow_private_network, api_format, anthropic_version,
 	default_key_balance_usd::float8, balance_spent_usd::float8,
 	created_at, updated_at
 `
@@ -152,7 +153,7 @@ const routeColumns = `
 		m.capture_bodies, m.strip_parameters, m.capability_status, m.capability_profile,
 		m.capabilities_checked_at, m.capability_error, m.enabled, m.created_at, m.updated_at,
 		p.id, p.name, p.slug, p.base_url, p.auth_header, p.auth_scheme,
-		p.extra_headers, p.timeout_seconds, p.enabled, p.allow_private_network,
+		p.extra_headers, p.timeout_seconds, p.enabled, p.pinned, p.allow_private_network,
 		p.api_format, p.anthropic_version,
 		p.default_key_balance_usd::float8, p.balance_spent_usd::float8,
 		p.created_at, p.updated_at
@@ -210,6 +211,7 @@ func scanRoute(row pgx.Row) (routeRuntime, error) {
 		&extra,
 		&route.Provider.TimeoutSeconds,
 		&route.Provider.Enabled,
+		&route.Provider.Pinned,
 		&route.Provider.AllowPrivateNetwork,
 		&route.Provider.APIFormat,
 		&route.Provider.AnthropicVersion,

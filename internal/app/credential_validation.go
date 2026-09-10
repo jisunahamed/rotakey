@@ -25,16 +25,72 @@ type credentialInspection struct {
 	LatencyMS        int64             `json:"latency_ms"`
 	Models           []DiscoveredModel `json:"models"`
 	Warning          string            `json:"warning,omitempty"`
+	CredentialID     string            `json:"credential_id,omitempty"`
+	CredentialLabel  string            `json:"credential_label,omitempty"`
+	CredentialTries  int               `json:"credential_tries,omitempty"`
+	AutoRecovered    bool              `json:"auto_recovered,omitempty"`
+	RecoverySteps    []string          `json:"recovery_steps,omitempty"`
+}
+
+type providerModelCatalogItem struct {
+	ID          string `json:"id"`
+	OwnedBy     string `json:"owned_by"`
+	DisplayName string `json:"display_name"`
 }
 
 type providerModelCatalog struct {
-	Data []struct {
-		ID          string `json:"id"`
-		OwnedBy     string `json:"owned_by"`
-		DisplayName string `json:"display_name"`
-	} `json:"data"`
-	HasMore bool   `json:"has_more"`
-	LastID  string `json:"last_id"`
+	Data    []providerModelCatalogItem `json:"data"`
+	HasMore bool                       `json:"has_more"`
+	LastID  string                     `json:"last_id"`
+}
+
+// decodeProviderModelCatalog accepts the OpenAI data envelope as well as the
+// two common variants used by otherwise-compatible providers: {models:[...]}
+// and a direct array. Items may be objects or model-id strings.
+func decodeProviderModelCatalog(body []byte) (providerModelCatalog, error) {
+	body = []byte(strings.TrimSpace(string(body)))
+	var envelope struct {
+		Data    json.RawMessage `json:"data"`
+		Models  json.RawMessage `json:"models"`
+		HasMore bool            `json:"has_more"`
+		LastID  string          `json:"last_id"`
+	}
+	list := json.RawMessage(nil)
+	if len(body) > 0 && body[0] == '[' {
+		list = body
+	} else if err := json.Unmarshal(body, &envelope); err != nil {
+		return providerModelCatalog{}, err
+	} else if len(envelope.Data) > 0 && string(envelope.Data) != "null" {
+		list = envelope.Data
+	} else {
+		list = envelope.Models
+	}
+	var rawItems []json.RawMessage
+	if len(list) == 0 || json.Unmarshal(list, &rawItems) != nil {
+		return providerModelCatalog{}, errors.New("model list is missing")
+	}
+	catalog := providerModelCatalog{Data: make([]providerModelCatalogItem, 0, len(rawItems)), HasMore: envelope.HasMore, LastID: envelope.LastID}
+	for _, raw := range rawItems {
+		var id string
+		if json.Unmarshal(raw, &id) == nil {
+			catalog.Data = append(catalog.Data, providerModelCatalogItem{ID: id})
+			continue
+		}
+		var item struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			Model       string `json:"model"`
+			OwnedBy     string `json:"owned_by"`
+			DisplayName string `json:"display_name"`
+		}
+		if json.Unmarshal(raw, &item) == nil {
+			catalog.Data = append(catalog.Data, providerModelCatalogItem{
+				ID:      valueOr(strings.TrimSpace(item.ID), valueOr(strings.TrimSpace(item.Model), strings.TrimSpace(item.Name))),
+				OwnedBy: item.OwnedBy, DisplayName: item.DisplayName,
+			})
+		}
+	}
+	return catalog, nil
 }
 
 func inspectProviderSecret(ctx context.Context, provider Provider, secret []byte) credentialInspection {
@@ -95,8 +151,8 @@ func inspectProviderSecretWithProtocol(ctx context.Context, provider Provider, s
 		return result
 	}
 
-	var payload providerModelCatalog
-	if err := json.Unmarshal(body, &payload); err != nil {
+	payload, catalogErr := decodeProviderModelCatalog(body)
+	if catalogErr != nil {
 		if provider.APIFormat == "anthropic" {
 			result.Valid = true
 			result.Warning = "The Anthropic model catalog has a non-standard response. Add a model ID manually; Rotakey will validate it with Messages before use."
@@ -128,8 +184,8 @@ func inspectProviderSecretWithProtocol(ctx context.Context, provider Provider, s
 				result.Warning = fmt.Sprintf("The provider model catalog ended at HTTP %d; loaded models remain selectable.", pageResponse.StatusCode)
 				break
 			}
-			var next providerModelCatalog
-			if json.Unmarshal(pageBody, &next) != nil {
+			next, nextErr := decodeProviderModelCatalog(pageBody)
+			if nextErr != nil {
 				result.Warning = "The provider model catalog returned an invalid later page; loaded models remain selectable."
 				break
 			}
@@ -430,29 +486,70 @@ func (s *Server) handleDiscoverModels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "provider_not_found", "Provider was not found.")
 		return
 	}
-	var credentialID string
-	var ciphertext []byte
+	type catalogCredential struct {
+		ID, Label  string
+		Ciphertext []byte
+	}
 	query := `
-		SELECT id, secret_cipher FROM credentials
+		SELECT id, label, secret_cipher FROM credentials
 		WHERE provider_id=$1 AND enabled=TRUE`
 	args := []any{provider.ID}
 	if strings.TrimSpace(input.CredentialID) != "" {
 		query += ` AND id=$2`
 		args = append(args, strings.TrimSpace(input.CredentialID))
 	}
-	query += ` ORDER BY is_primary DESC, created_at, id LIMIT 1`
-	if err := s.db.QueryRow(r.Context(), query, args...).Scan(&credentialID, &ciphertext); err != nil {
+	query += ` ORDER BY (status='healthy') DESC, is_primary DESC,
+		(cooldown_until IS NULL OR cooldown_until <= NOW()) DESC, created_at, id LIMIT 8`
+	rows, err := s.db.Query(r.Context(), query, args...)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "API keys could not be loaded.")
+		return
+	}
+	defer rows.Close()
+	candidates := []catalogCredential{}
+	for rows.Next() {
+		var candidate catalogCredential
+		if rows.Scan(&candidate.ID, &candidate.Label, &candidate.Ciphertext) == nil {
+			candidates = append(candidates, candidate)
+		}
+	}
+	if rows.Err() != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "API keys could not be loaded.")
+		return
+	}
+	if len(candidates) == 0 {
 		writeError(w, http.StatusConflict, "credential_required", "Add an enabled API key before loading models.")
 		return
 	}
-	secret, err := s.vault.Decrypt(ciphertext)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "credential_unavailable", "API key could not be decrypted.")
-		return
+	best := credentialInspection{Models: []DiscoveredModel{}, RecoverySteps: []string{}}
+	for index, candidate := range candidates {
+		secret, decryptErr := s.vault.Decrypt(candidate.Ciphertext)
+		if decryptErr != nil {
+			best.Warning = "One stored API key could not be decrypted; Rotakey tried the next enabled key."
+			continue
+		}
+		inspection := inspectProviderSecretWithProtocol(r.Context(), provider, secret, !input.SkipProtocolCheck)
+		inspection.CredentialID = candidate.ID
+		inspection.CredentialLabel = candidate.Label
+		inspection.CredentialTries = index + 1
+		s.recordCredentialInspection(r.Context(), candidate.ID, inspection)
+		if inspection.Valid && len(inspection.Models) > 0 {
+			if index > 0 {
+				inspection.AutoRecovered = true
+				inspection.RecoverySteps = []string{fmt.Sprintf("Skipped %d API key%s that could not load this catalog and used %s.", index, map[bool]string{true: "", false: "s"}[index == 1], candidate.Label)}
+			}
+			writeJSON(w, http.StatusOK, inspection)
+			return
+		}
+		if len(inspection.Models) > len(best.Models) || (inspection.Valid && !best.Valid) || best.Warning == "" {
+			best = inspection
+		}
 	}
-	inspection := inspectProviderSecretWithProtocol(r.Context(), provider, secret, !input.SkipProtocolCheck)
-	s.recordCredentialInspection(r.Context(), credentialID, inspection)
-	writeJSON(w, http.StatusOK, inspection)
+	best.CredentialTries = len(candidates)
+	if len(candidates) > 1 {
+		best.RecoverySteps = append(best.RecoverySteps, fmt.Sprintf("Tried %d enabled API keys; none returned a usable model catalog.", len(candidates)))
+	}
+	writeJSON(w, http.StatusOK, best)
 }
 
 func (s *Server) handleCreateModelsBulk(w http.ResponseWriter, r *http.Request) {

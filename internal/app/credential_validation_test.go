@@ -5,10 +5,38 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestDecodeProviderModelCatalogVariants(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{name: "openai envelope", body: `{"data":[{"id":"gpt-a","owned_by":"vendor"}]}`, want: []string{"gpt-a"}},
+		{name: "models envelope", body: `{"models":[{"name":"model-b"},"model-c"]}`, want: []string{"model-b", "model-c"}},
+		{name: "direct array", body: ` [{"model":"model-d"},{"id":"model-e"}] `, want: []string{"model-d", "model-e"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			catalog, err := decodeProviderModelCatalog([]byte(test.body))
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			got := make([]string, 0, len(catalog.Data))
+			for _, model := range catalog.Data {
+				got = append(got, model.ID)
+			}
+			if !slices.Equal(got, test.want) {
+				t.Fatalf("models = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
 
 func TestInspectProviderSecretLoadsModels(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -471,7 +471,36 @@ async function handle(req: Req, res: Res, url: URL): Promise<boolean> {
   }
 
   if (path === "/api/admin/providers" && method === "GET") {
-    return json(res, 200, await slowly({ providers })), true;
+    const ordered = [...providers].sort((left, right) => Number(right.pinned) - Number(left.pinned) || left.created_at.localeCompare(right.created_at));
+    return json(res, 200, await slowly({ providers: ordered })), true;
+  }
+  const pinMatch = /^\/api\/admin\/providers\/([^/]+)\/pin$/.exec(path);
+  if (pinMatch && method === "PUT") {
+    const provider = providers.find((item) => item.id === decodeURIComponent(pinMatch[1]));
+    if (!provider) return fail(res, 404, "provider_not_found", "Provider was not found."), true;
+    const body = await readBody(req);
+    provider.pinned = body.pinned === true;
+    return json(res, 200, { pinned: provider.pinned }), true;
+  }
+  const discoveryMatch = /^\/api\/admin\/providers\/([^/]+)\/models\/discover$/.exec(path);
+  if (discoveryMatch && method === "POST") {
+    const provider = providers.find((item) => item.id === decodeURIComponent(discoveryMatch[1]));
+    if (!provider) return fail(res, 404, "provider_not_found", "Provider was not found."), true;
+    return json(res, 200, await slowly({
+      valid: true,
+      catalog_available: true,
+      protocol_verified: true,
+      protocol: provider.api_format,
+      detected_protocol: provider.api_format,
+      status_code: 200,
+      latency_ms: 684,
+      models: provider.models.map((model) => ({ id: model.upstream_model, owned_by: provider.name })),
+      credential_id: provider.credentials[0]?.id,
+      credential_label: provider.credentials[0]?.label,
+      credential_tries: provider.id === "prv_azure" ? 2 : 1,
+      auto_recovered: provider.id === "prv_azure",
+      recovery_steps: provider.id === "prv_azure" ? ["Skipped 1 API key that could not load this catalog and used eastus · primary."] : []
+    }, 520)), true;
   }
   if (path === "/api/admin/repair/policy" && method === "GET") {
     return json(res, 200, { policy: repairPolicy, tools: ["set_parameter", "remove_parameter", "switch_endpoint", "set_timeout", "reset_cooldown", "refresh_connection", "select_credential", "validate_credential", "set_route_enabled"], service_restart_supported: false }), true;

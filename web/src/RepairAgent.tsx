@@ -44,7 +44,7 @@ type Incident = {
 const modes: Array<{ id: Policy["mode"]; title: string; description: string; icon: typeof Eye }> = [
   { id: "observe", title: "Watch only", description: "Explain errors, but change nothing.", icon: Eye },
   { id: "auto", title: "Fix request errors", description: "Safely adjust request settings and retry.", icon: Wrench },
-  { id: "full", title: "Manage provider too", description: "Also validate keys, connections and route settings.", icon: ShieldCheck },
+  { id: "full", title: "Full administration", description: "Use every available API, model and provider repair tool.", icon: ShieldCheck },
   { id: "custom", title: "Choose permissions", description: "Select exactly what Rotakey may change.", icon: Bot }
 ];
 
@@ -68,7 +68,7 @@ function modeSummary(policy: Policy) {
   if (!policy.enabled) return "Rotakey is using its built-in retry rules only.";
   if (policy.mode === "observe") return "Rotakey explains new errors, but it will not change requests or settings.";
   if (policy.mode === "auto") return "Rotakey can correct safe request settings, retry, and remember verified fixes.";
-  if (policy.mode === "full") return "Rotakey can repair requests and manage supported provider settings and connections.";
+  if (policy.mode === "full") return "Rotakey can use every published repair tool for API, model, key, route and connection failures.";
   return `Rotakey can use ${policy.permissions.length} selected permission${policy.permissions.length === 1 ? "" : "s"}.`;
 }
 
@@ -180,6 +180,10 @@ export function RepairAgentSettings({ providers }: { providers: Provider[] }) {
                     </label>;
                   })}
                 </div>
+
+                {policy.mode === "full" && (
+                  <p className="repair-full-access"><ShieldCheck size={16} aria-hidden="true" /> All {tools.length} available repair tools are enabled. Rotakey tests changes, rolls back failures and saves only verified fixes.</p>
+                )}
 
                 {policy.mode === "custom" && (
                   <div className="repair-permissions">

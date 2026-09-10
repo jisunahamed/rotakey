@@ -47,6 +47,7 @@ type ExportProvider struct {
 	ExtraHeaders        map[string]string `json:"extra_headers,omitempty"`
 	TimeoutSeconds      int               `json:"timeout_seconds"`
 	Enabled             bool              `json:"enabled"`
+	Pinned              bool              `json:"pinned,omitempty"`
 	AllowPrivateNetwork bool              `json:"allow_private_network"`
 	APIFormat           string            `json:"api_format"`
 	AnthropicVersion    string            `json:"anthropic_version"`
@@ -158,7 +159,7 @@ func exportProvider(provider Provider, aliasByModelID, secrets map[string]string
 		Name: provider.Name, Slug: provider.Slug, BaseURL: provider.BaseURL,
 		AuthHeader: provider.AuthHeader, AuthScheme: provider.AuthScheme,
 		ExtraHeaders: provider.ExtraHeaders, TimeoutSeconds: provider.TimeoutSeconds,
-		Enabled: provider.Enabled, AllowPrivateNetwork: provider.AllowPrivateNetwork,
+		Enabled: provider.Enabled, Pinned: provider.Pinned, AllowPrivateNetwork: provider.AllowPrivateNetwork,
 		APIFormat:            valueOr(provider.APIFormat, "openai"),
 		AnthropicVersion:     valueOr(provider.AnthropicVersion, "2023-06-01"),
 		DefaultKeyBalanceUSD: provider.DefaultKeyBalanceUSD,

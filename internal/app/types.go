@@ -35,6 +35,7 @@ type Provider struct {
 	ExtraHeaders        map[string]string `json:"extra_headers"`
 	TimeoutSeconds      int               `json:"timeout_seconds"`
 	Enabled             bool              `json:"enabled"`
+	Pinned              bool              `json:"pinned"`
 	AllowPrivateNetwork bool              `json:"allow_private_network"`
 	APIFormat           string            `json:"api_format"`
 	AnthropicVersion    string            `json:"anthropic_version"`
