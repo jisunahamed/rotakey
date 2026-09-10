@@ -59,6 +59,45 @@ const CSRF = "dev-csrf-token";
 const minted: RequestLog[] = [];
 let requestCounter = 0;
 
+let repairPolicy = {
+  enabled: true,
+  model_id: "mdl_azure_sol",
+  mode: "auto",
+  permissions: [] as string[],
+  daily_tokens: 100_000,
+  diagnosis_seconds: 10,
+  output_tokens: 2_048,
+  route_ids: [] as string[],
+  version: 3
+};
+
+const repairIncidents = [
+  {
+    id: "repair_dev_fixed",
+    request_id: "req_xA03jr5wTMT1c_Zql4rrSKDq",
+    route_id: "mdl_azure_sol",
+    route_name: "azure/gpt-5.6-sol",
+    provider_name: "Azure Foundry",
+    category: "request_incompatibility",
+    error: "max_tokens must be greater than 2",
+    status: "verified",
+    created_at: new Date(Date.now() - 6 * 60_000).toISOString(),
+    attempts: [{ proposal: { diagnosis: "The provider requires at least three output tokens.", action: "set_parameter", parameter: "max_tokens", value: 3, expected_result: "The provider accepts the request." }, before: 1, status: "verified", agent_tokens: 0, duration_ms: 0, test_tokens: 18, test_duration_ms: 641 }]
+  },
+  {
+    id: "repair_dev_observed",
+    request_id: "req_0c2PRzykMXtxStQ4NVIjItA1S",
+    route_id: "mdl_azure_sol",
+    route_name: "azure/gpt-5.6-sol",
+    provider_name: "Azure Foundry",
+    category: "provider_outage",
+    error: "The upstream connection closed before a response started.",
+    status: "observed",
+    created_at: new Date(Date.now() - 18 * 60_000).toISOString(),
+    attempts: [{ proposal: { diagnosis: "The connection may be temporarily unavailable.", action: "refresh_connection", expected_result: "The next connection succeeds." }, status: "background_observed", agent_tokens: 92, duration_ms: 812 }]
+  }
+];
+
 function json(res: Res, status: number, payload: unknown) {
   const body = JSON.stringify(payload);
   res.statusCode = status;
@@ -433,6 +472,21 @@ async function handle(req: Req, res: Res, url: URL): Promise<boolean> {
 
   if (path === "/api/admin/providers" && method === "GET") {
     return json(res, 200, await slowly({ providers })), true;
+  }
+  if (path === "/api/admin/repair/policy" && method === "GET") {
+    return json(res, 200, { policy: repairPolicy, tools: ["set_parameter", "remove_parameter", "switch_endpoint", "set_timeout", "reset_cooldown", "refresh_connection", "select_credential", "validate_credential", "set_route_enabled"], service_restart_supported: false }), true;
+  }
+  if (path === "/api/admin/repair/policy" && method === "PUT") {
+    const body = await readBody(req);
+    repairPolicy = { ...repairPolicy, ...body, version: repairPolicy.version + 1 } as typeof repairPolicy;
+    return json(res, 200, repairPolicy), true;
+  }
+  if (path === "/api/admin/repair/incidents" && method === "GET") {
+    const requestID = url.searchParams.get("request_id");
+    return json(res, 200, requestID ? repairIncidents.filter((item) => item.request_id === requestID) : repairIncidents), true;
+  }
+  if (path === "/api/admin/repair/metrics" && method === "GET") {
+    return json(res, 200, { window: "24h", requests: 248, successful_requests: 239, incidents: 9, recovered_incidents: 7, agent_tokens: 1_284, diagnosis_ms: 4_912, daily_budget_used: 1_284, test_tokens: 212, test_ms: 3_104 }), true;
   }
   if (path === "/api/admin/settings" && method === "GET") {
     return json(res, 200, await slowly(settings)), true;

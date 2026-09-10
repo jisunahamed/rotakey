@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // RepairPolicy selects an existing connection, never a caller-supplied URL or secret.
@@ -76,13 +77,16 @@ type RepairAttempt struct {
 }
 
 type RepairIncident struct {
-	ID        string          `json:"id"`
-	RequestID string          `json:"request_id"`
-	RouteID   string          `json:"route_id"`
-	Category  string          `json:"category"`
-	Error     string          `json:"error"`
-	Status    string          `json:"status"`
-	Attempts  []RepairAttempt `json:"attempts"`
+	ID           string          `json:"id"`
+	RequestID    string          `json:"request_id"`
+	RouteID      string          `json:"route_id"`
+	RouteName    string          `json:"route_name,omitempty"`
+	ProviderName string          `json:"provider_name,omitempty"`
+	Category     string          `json:"category"`
+	Error        string          `json:"error"`
+	Status       string          `json:"status"`
+	Attempts     []RepairAttempt `json:"attempts"`
+	CreatedAt    time.Time       `json:"created_at,omitempty"`
 }
 
 func repairCategory(status int) string {
@@ -159,17 +163,30 @@ func (s *Server) handleRepairPolicy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRepairIncidents(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `SELECT evidence FROM repair_incidents WHERE ($1='' OR request_id=$1) ORDER BY created_at DESC LIMIT 100`, r.URL.Query().Get("request_id"))
+	rows, err := s.db.Query(r.Context(), `
+		SELECT i.evidence, i.created_at, COALESCE(m.public_alias,''), COALESCE(p.name,'')
+		FROM repair_incidents i
+		LEFT JOIN model_routes m ON m.id=i.route_id
+		LEFT JOIN providers p ON p.id=m.provider_id
+		WHERE ($1='' OR i.request_id=$1)
+		ORDER BY i.created_at DESC LIMIT 100
+	`, r.URL.Query().Get("request_id"))
 	if err != nil {
 		writeError(w, 503, "repair_unavailable", "Repair history is unavailable.")
 		return
 	}
 	defer rows.Close()
-	items := []json.RawMessage{}
+	items := []RepairIncident{}
 	for rows.Next() {
 		var raw json.RawMessage
-		if rows.Scan(&raw) == nil {
-			items = append(items, raw)
+		var item RepairIncident
+		var createdAt time.Time
+		var routeName, providerName string
+		if rows.Scan(&raw, &createdAt, &routeName, &providerName) == nil && json.Unmarshal(raw, &item) == nil {
+			// Stored evidence predates display metadata. Keep database-owned values
+			// after decoding so a stale JSON field can never impersonate them.
+			item.CreatedAt, item.RouteName, item.ProviderName = createdAt, routeName, providerName
+			items = append(items, item)
 		}
 	}
 	if rows.Err() != nil {
