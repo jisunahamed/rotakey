@@ -82,6 +82,7 @@ type ModelRoute struct {
 	SupportsChat            bool              `json:"supports_chat"`
 	SupportsResponses       bool              `json:"supports_responses"`
 	SupportsMessages        bool              `json:"supports_messages"`
+	SupportsEmbeddings      bool              `json:"supports_embeddings"`
 	DefaultMaxOutputTokens  int               `json:"default_max_output_tokens"`
 	InputCostPerMillionUSD  float64           `json:"input_cost_per_million_usd"`
 	OutputCostPerMillionUSD float64           `json:"output_cost_per_million_usd"`

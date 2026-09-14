@@ -76,6 +76,7 @@ export function routeStateNote(route: Route, check?: CheckResult): string {
  *  this gateway, not a fact about the upstream, so it belongs in the panel and
  *  not in a row whose other three cells are all facts about the provider. */
 export function upstreamEndpoints(route: ModelRoute): string {
+  if (route.supports_embeddings) return "Embeddings";
   const parts = [
     route.supports_chat ? endpointLabel("chat") : "",
     route.supports_responses ? endpointLabel("responses") : ""

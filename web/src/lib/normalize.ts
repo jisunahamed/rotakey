@@ -27,7 +27,7 @@ export function normalizeProviders(providers: Provider[] | null | undefined): Pr
     // defaulted to a number.
     default_key_balance_usd: provider.default_key_balance_usd ?? null,
     balance_spent_usd: safeNumber(provider.balance_spent_usd),
-    models: (provider.models ?? []).map((model) => ({ ...model, supports_messages: model.supports_messages ?? true, strip_parameters: model.strip_parameters ?? [], capability_status: model.capability_status ?? "unverified", capability_profile: model.capability_profile ?? {}, input_cost_per_million_usd: model.input_cost_per_million_usd ?? 0, output_cost_per_million_usd: model.output_cost_per_million_usd ?? 0, request_cost_usd: model.request_cost_usd })),
+    models: (provider.models ?? []).map((model) => ({ ...model, supports_messages: model.supports_messages ?? true, supports_embeddings: model.supports_embeddings ?? false, strip_parameters: model.strip_parameters ?? [], capability_status: model.capability_status ?? "unverified", capability_profile: model.capability_profile ?? {}, input_cost_per_million_usd: model.input_cost_per_million_usd ?? 0, output_cost_per_million_usd: model.output_cost_per_million_usd ?? 0, request_cost_usd: model.request_cost_usd })),
     credentials: (provider.credentials ?? []).map((credential) => ({
       ...credential,
       validation_error: credential.validation_error ?? "",

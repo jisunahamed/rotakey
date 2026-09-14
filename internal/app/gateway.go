@@ -167,6 +167,10 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	s.handleGatewayRequest(w, r, "chat")
 }
 
+func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
+	s.handleGatewayRequest(w, r, "embeddings")
+}
+
 func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	s.handleGatewayRequest(w, r, "responses")
 }
@@ -226,6 +230,8 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 	}
 	if endpoint == "responses" {
 		req.PublicMode = messageModeResponses
+	} else if endpoint == "embeddings" {
+		req.PublicMode = messageModeEmbeddings
 	}
 	req.Stream, _ = publicPayload["stream"].(bool)
 	if options, ok := publicPayload["stream_options"].(map[string]any); ok {
@@ -252,6 +258,8 @@ func (s *Server) handleGatewayRequest(w http.ResponseWriter, r *http.Request, en
 		message := "This model route does not support Chat Completions."
 		if endpoint == "responses" {
 			message = "This model route does not support Responses."
+		} else if endpoint == "embeddings" {
+			message = "This model route does not support Embeddings."
 		}
 		s.rejectGatewayRequest(w, r, http.StatusBadRequest, "unsupported_endpoint", message, logInput{
 			RequestID: requestID, Route: routes[0], Endpoint: endpoint, Started: started,

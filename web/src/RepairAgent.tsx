@@ -97,7 +97,7 @@ export function RepairAgentSettings({ providers }: { providers: Provider[] }) {
   const selectedModel = useMemo(() => {
     if (!policy?.model_id) return null;
     for (const provider of providers) {
-      const model = provider.models.find((candidate) => candidate.id === policy.model_id);
+      const model = provider.models.find((candidate) => candidate.id === policy.model_id && !candidate.supports_embeddings);
       if (model) return { provider, model };
     }
     return null;
@@ -156,7 +156,7 @@ export function RepairAgentSettings({ providers }: { providers: Provider[] }) {
                   <option value="">Select a coding model…</option>
                   {providers.filter((provider) => provider.enabled).map((provider) => (
                     <optgroup key={provider.id} label={provider.name}>
-                      {provider.models.filter((model) => model.enabled).map((model) => <option key={model.id} value={model.id}>{model.public_alias}</option>)}
+                      {provider.models.filter((model) => model.enabled && !model.supports_embeddings).map((model) => <option key={model.id} value={model.id}>{model.public_alias}</option>)}
                     </optgroup>
                   ))}
                 </select>

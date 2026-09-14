@@ -118,13 +118,13 @@ func upsertImportedModel(ctx context.Context, tx pgx.Tx, providerID string, mode
 	if err == nil {
 		if _, err := tx.Exec(ctx, `
 			UPDATE model_routes SET upstream_model=$2, supports_chat=$3, supports_responses=$4,
-			    supports_messages=$5, default_max_output_tokens=$6, tokenizer=$7,
-			    input_cost_per_million_usd=$8, output_cost_per_million_usd=$9, request_cost_usd=$10,
-			    capture_bodies=$11, strip_parameters=$12, capability_status=$13,
-			    capability_profile=$14, enabled=$15, updated_at=NOW()
+			    supports_messages=$5, supports_embeddings=$6, default_max_output_tokens=$7, tokenizer=$8,
+			    input_cost_per_million_usd=$9, output_cost_per_million_usd=$10, request_cost_usd=$11,
+			    capture_bodies=$12, strip_parameters=$13, capability_status=$14,
+			    capability_profile=$15, enabled=$16, updated_at=NOW()
 			WHERE id=$1
 		`, existingID, model.UpstreamModel, model.SupportsChat, model.SupportsResponses,
-			model.SupportsMessages, model.DefaultMaxOutputTokens, model.Tokenizer,
+			model.SupportsMessages, model.SupportsEmbeddings, model.DefaultMaxOutputTokens, model.Tokenizer,
 			model.InputCostPerMillionUSD, model.OutputCostPerMillionUSD, model.RequestCostUSD,
 			model.CaptureBodies, model.StripParameters, model.CapabilityStatus, profile,
 			model.Enabled); err != nil {
@@ -139,13 +139,13 @@ func upsertImportedModel(ctx context.Context, tx pgx.Tx, providerID string, mode
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO model_routes
 		    (id, provider_id, public_alias, upstream_model, supports_chat,
-		     supports_responses, supports_messages, default_max_output_tokens, tokenizer,
+		     supports_responses, supports_messages, supports_embeddings, default_max_output_tokens, tokenizer,
 		     input_cost_per_million_usd, output_cost_per_million_usd, request_cost_usd,
 		     capture_bodies, strip_parameters, capability_status, capability_profile,
 		     capability_error, enabled)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'',$17)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'',$18)
 	`, id, providerID, model.PublicAlias, model.UpstreamModel, model.SupportsChat,
-		model.SupportsResponses, model.SupportsMessages, model.DefaultMaxOutputTokens,
+		model.SupportsResponses, model.SupportsMessages, model.SupportsEmbeddings, model.DefaultMaxOutputTokens,
 		model.Tokenizer, model.InputCostPerMillionUSD, model.OutputCostPerMillionUSD,
 		model.RequestCostUSD, model.CaptureBodies, model.StripParameters,
 		model.CapabilityStatus, profile, model.Enabled); err != nil {

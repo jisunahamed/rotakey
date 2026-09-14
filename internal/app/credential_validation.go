@@ -338,7 +338,10 @@ func verifyProviderProtocol(ctx context.Context, client *http.Client, provider P
 		"messages":   []any{map[string]any{"role": "user", "content": "Reply with one character."}},
 		"max_tokens": 16,
 	}
-	if protocol == "anthropic" {
+	if protocol == "openai" && looksLikeEmbeddingModel(model) {
+		path = "/embeddings"
+		payload = map[string]any{"model": upstreamModelForProvider(provider, model), "input": "Rotakey capability check"}
+	} else if protocol == "anthropic" {
 		path = "/messages"
 	}
 	body, _ := json.Marshal(payload)
@@ -405,6 +408,9 @@ func detectProviderProtocol(payload map[string]any) string {
 	if choices, ok := payload["choices"].([]any); ok && len(choices) > 0 {
 		return "openai"
 	}
+	if data, ok := payload["data"].([]any); ok && len(data) > 0 {
+		return "openai"
+	}
 	if rawError, ok := payload["error"].(map[string]any); ok {
 		if payload["type"] == "error" {
 			return "anthropic"
@@ -414,6 +420,12 @@ func detectProviderProtocol(payload map[string]any) string {
 		}
 	}
 	return ""
+}
+
+func looksLikeEmbeddingModel(model string) bool {
+	model = strings.ToLower(model)
+	return strings.Contains(model, "embedding") || strings.Contains(model, "embed-") ||
+		strings.Contains(model, "embed_") || strings.Contains(model, "/embed")
 }
 
 func providerFromInput(input providerInput) Provider {
@@ -650,12 +662,12 @@ func (s *Server) handleCreateModelsBulk(w http.ResponseWriter, r *http.Request) 
 		if _, err := tx.Exec(r.Context(), `
 			INSERT INTO model_routes
 			    (id, provider_id, public_alias, upstream_model, supports_chat,
-			     supports_responses, supports_messages, default_max_output_tokens, tokenizer,
+			     supports_responses, supports_messages, supports_embeddings, default_max_output_tokens, tokenizer,
 			     capture_bodies, strip_parameters, capability_status, capability_profile,
 			     capabilities_checked_at, capability_error, enabled)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'',$15)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'',$16)
 		`, id, r.PathValue("id"), model.PublicAlias, model.UpstreamModel,
-			model.SupportsChat, model.SupportsResponses, model.SupportsMessages, model.DefaultMaxOutputTokens,
+			model.SupportsChat, model.SupportsResponses, model.SupportsMessages, model.SupportsEmbeddings, model.DefaultMaxOutputTokens,
 			model.Tokenizer, model.CaptureBodies, model.StripParameters, capability.Status, profileJSON, capability.CheckedAt, model.Enabled); err != nil {
 			writeError(w, http.StatusConflict, "model_conflict", "A public model alias is already in use.")
 			return
@@ -732,6 +744,15 @@ func modelCapabilityProfile(provider Provider, input *modelInput, source string)
 		"streaming":         "gateway_normalized",
 		"json_output":       "unknown",
 	}
+	if input.SupportsEmbeddings {
+		profile["embeddings"], profile["chat"], profile["responses"], profile["messages"] = "native", "off", "off", "off"
+		profile["streaming"], profile["tools"], profile["thinking"] = "off", "off", "off"
+		if source == "catalog" {
+			profile["availability"] = "catalog_visible"
+		}
+		return profile
+	}
+	profile["embeddings"] = "off"
 	if provider.APIFormat == "anthropic" {
 		input.SupportsChat = true
 		input.SupportsMessages = true
@@ -837,7 +858,13 @@ func probeProviderModelWithSecret(ctx context.Context, provider Provider, input 
 		"messages":   []any{map[string]any{"role": "user", "content": "Reply with one character."}},
 		"max_tokens": 16,
 	}
-	if provider.APIFormat == "anthropic" {
+	if input.SupportsEmbeddings {
+		if provider.APIFormat == "anthropic" {
+			return "failed", nil, nil, 0, fmt.Errorf("Anthropic-format providers do not expose the OpenAI Embeddings endpoint")
+		}
+		path = "/embeddings"
+		payload = map[string]any{"model": upstreamModel, "input": "Rotakey capability check"}
+	} else if provider.APIFormat == "anthropic" {
 		path = "/messages"
 	} else if !input.SupportsChat && input.SupportsResponses {
 		path = "/responses"
@@ -870,6 +897,12 @@ func probeProviderModelWithSecret(ctx context.Context, provider Provider, input 
 		if provider.APIFormat == "openai" && path == "/chat/completions" {
 			if choices, ok := decoded["choices"].([]any); !ok || len(choices) == 0 {
 				return "failed", nil, nil, response.StatusCode, fmt.Errorf("Chat probe did not return a completion choice")
+			}
+		}
+		if path == "/embeddings" {
+			data, ok := decoded["data"].([]any)
+			if !ok || len(data) == 0 {
+				return "failed", nil, nil, response.StatusCode, fmt.Errorf("Embeddings probe did not return an embedding vector")
 			}
 		}
 		now := time.Now().UTC()

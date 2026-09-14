@@ -480,6 +480,10 @@ func validRepairResponse(raw []byte, mode string) bool {
 	if json.Unmarshal(raw, &body) != nil || body["error"] != nil {
 		return false
 	}
+	if mode == messageModeEmbeddings {
+		data, _ := body["data"].([]any)
+		return len(data) > 0
+	}
 	if mode == messageModeAnthropic {
 		content, _ := body["content"].([]any)
 		for _, value := range content {

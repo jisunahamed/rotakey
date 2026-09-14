@@ -43,6 +43,7 @@ export function routeDraftFrom(route: ModelRoute): RouteDraft {
     supports_chat: route.supports_chat,
     supports_responses: route.supports_responses,
     supports_messages: route.supports_messages,
+    supports_embeddings: route.supports_embeddings,
     default_max_output_tokens: route.default_max_output_tokens,
     tokenizer: route.tokenizer,
     input_cost_per_million_usd: route.input_cost_per_million_usd,
@@ -174,21 +175,31 @@ function RouteFields({
 
       <Toggle
         checked={value.supports_chat}
-        onChange={(supports_chat) => onChange({ ...value, supports_chat })}
+        onChange={(supports_chat) => onChange({ ...value, supports_chat, ...(supports_chat ? { supports_embeddings: false } : {}) })}
         label="The provider serves this model at Chat Completions"
         description="Almost every provider does. Turn it off only for one that answers at Responses and nowhere else."
       />
       <Toggle
         checked={value.supports_responses}
-        onChange={(supports_responses) => onChange({ ...value, supports_responses })}
+        onChange={(supports_responses) => onChange({ ...value, supports_responses, ...(supports_responses ? { supports_embeddings: false } : {}) })}
         label="The provider serves this model at Responses"
         description="Off means Rotakey answers a Responses call by translating it to Chat Completions. Callers see no difference; it is one extra step."
       />
       <Toggle
         checked={value.supports_messages}
-        onChange={(supports_messages) => onChange({ ...value, supports_messages })}
+        onChange={(supports_messages) => onChange({ ...value, supports_messages, ...(supports_messages ? { supports_embeddings: false } : {}) })}
         label="Offer this model on the Anthropic Messages API"
         description="Lets callers reach this name at /v1/messages. Text, images and client-side tools translate without loss; anything else does not."
+      />
+      <Toggle
+        checked={value.supports_embeddings}
+        onChange={(supports_embeddings) => onChange({
+          ...value,
+          supports_embeddings,
+          ...(supports_embeddings ? { supports_chat: false, supports_responses: false, supports_messages: false } : {})
+        })}
+        label="The provider serves this model at Embeddings"
+        description="Use this for vector models reached through /v1/embeddings. Enabling it turns off the text-generation endpoints for this route."
       />
 
       <Field label="Fields to remove before sending" hint="comma separated, this route only">
@@ -260,6 +271,7 @@ export function RouteSheet({
           supports_chat: true,
           supports_responses: false,
           supports_messages: true,
+          supports_embeddings: false,
           default_max_output_tokens: 1024,
           tokenizer: "heuristic",
           input_cost_per_million_usd: 0,

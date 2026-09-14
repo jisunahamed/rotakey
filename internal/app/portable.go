@@ -66,6 +66,7 @@ type ExportModel struct {
 	SupportsChat            bool     `json:"supports_chat"`
 	SupportsResponses       bool     `json:"supports_responses"`
 	SupportsMessages        bool     `json:"supports_messages"`
+	SupportsEmbeddings      bool     `json:"supports_embeddings"`
 	DefaultMaxOutputTokens  int      `json:"default_max_output_tokens"`
 	InputCostPerMillionUSD  float64  `json:"input_cost_per_million_usd"`
 	OutputCostPerMillionUSD float64  `json:"output_cost_per_million_usd"`
@@ -172,6 +173,7 @@ func exportProvider(provider Provider, aliasByModelID, secrets map[string]string
 			PublicAlias: model.PublicAlias, UpstreamModel: model.UpstreamModel,
 			SupportsChat: model.SupportsChat, SupportsResponses: model.SupportsResponses,
 			SupportsMessages:        model.SupportsMessages,
+			SupportsEmbeddings:      model.SupportsEmbeddings,
 			DefaultMaxOutputTokens:  model.DefaultMaxOutputTokens,
 			InputCostPerMillionUSD:  model.InputCostPerMillionUSD,
 			OutputCostPerMillionUSD: model.OutputCostPerMillionUSD,

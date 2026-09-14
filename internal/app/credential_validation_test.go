@@ -38,6 +38,18 @@ func TestDecodeProviderModelCatalogVariants(t *testing.T) {
 	}
 }
 
+func TestDetectProviderProtocolRecognizesEmbeddings(t *testing.T) {
+	payload := map[string]any{"object": "list", "data": []any{map[string]any{"object": "embedding", "embedding": []any{0.1}}}}
+	if got := detectProviderProtocol(payload); got != "openai" {
+		t.Fatalf("embedding protocol = %q, want openai", got)
+	}
+	for _, model := range []string{"text-embedding-4", "vendor/embed-multilingual-v3", "snowflake-arctic-embed-m"} {
+		if !looksLikeEmbeddingModel(model) {
+			t.Fatalf("embedding model %q was not recognized", model)
+		}
+	}
+}
+
 func TestInspectProviderSecretLoadsModels(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer valid-key" {
@@ -310,6 +322,36 @@ func TestProbeProviderModelWithSecretBoundsOpenAIOutput(t *testing.T) {
 	}, &input, []byte("valid-key"))
 	if err != nil || status != "probe_verified" || statusCode != http.StatusOK || checkedAt == nil {
 		t.Fatalf("probe = status=%q profile=%#v checked=%v code=%d err=%v", status, profile, checkedAt, statusCode, err)
+	}
+}
+
+func TestProbeEmbeddingModelUsesEmbeddingsEndpoint(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/embeddings" {
+			t.Fatalf("embedding probe path = %q", r.URL.Path)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["model"] != "text-embedding-4" || payload["input"] != "Rotakey capability check" {
+			t.Fatalf("embedding probe payload = %#v", payload)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"object":"embedding","embedding":[0.1],"index":0}],"model":"text-embedding-4"}`))
+	}))
+	defer upstream.Close()
+
+	input := modelInput{UpstreamModel: "text-embedding-4", SupportsEmbeddings: true}
+	status, profile, _, code, err := probeProviderModelWithSecret(context.Background(), Provider{
+		BaseURL: upstream.URL + "/v1", APIFormat: "openai", AuthHeader: "Authorization",
+		AuthScheme: "Bearer", TimeoutSeconds: 60, AllowPrivateNetwork: true,
+	}, &input, []byte("valid-key"))
+	if err != nil || status != "probe_verified" || code != http.StatusOK {
+		t.Fatalf("embedding probe = status=%q code=%d err=%v", status, code, err)
+	}
+	if profile["embeddings"] != "native" || profile["chat"] != "off" {
+		t.Fatalf("embedding profile = %#v", profile)
 	}
 }
 

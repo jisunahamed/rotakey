@@ -15,7 +15,7 @@ Application ── Bearer gateway key ──> Rotakey /v1
 
 The gateway serves:
 
-- OpenAI: `GET /v1/models`, `POST /v1/chat/completions`, and `POST /v1/responses`
+- OpenAI: `GET /v1/models`, `POST /v1/chat/completions`, `POST /v1/responses`, and `POST /v1/embeddings`
 - Anthropic: Models, `POST /v1/messages`, token counting, Message Batches, and Files
 - `GET /health/live`
 - `GET /health/ready`

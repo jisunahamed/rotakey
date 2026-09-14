@@ -147,6 +147,7 @@ If both authentication headers are present they must contain the same key. A mis
 | `GET /v1/models/{model_alias}` | Retrieve one public alias. Aliases containing `/` are supported. |
 | `POST /v1/chat/completions` | OpenAI Chat Completions, including streaming and client tools. |
 | `POST /v1/responses` | Native Responses or the documented core translation subset. |
+| `POST /v1/embeddings` | OpenAI-compatible vector embeddings with provider/key failover and usage accounting. |
 | `POST /v1/messages` | Anthropic Messages, including named SSE events. |
 | `POST /v1/messages/count_tokens` | Exact native Anthropic token count. It consumes request-limit capacity. |
 | `POST` or `GET /v1/messages/batches` | Create or list Message Batches. |

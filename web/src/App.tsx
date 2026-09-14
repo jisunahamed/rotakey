@@ -1721,8 +1721,8 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                         <StatusDot state={model.enabled ? "healthy" : "disabled"} />
                         <span><code>{model.public_alias}</code><small>→ {model.upstream_model}</small></span>
                         <span>
-                          {model.supports_responses ? "Responses native" : "Responses translated"}
-                          {model.supports_messages ? " · Messages" : ""}
+                          {model.supports_embeddings ? "Embeddings" : model.supports_responses ? "Responses native" : "Responses translated"}
+                          {!model.supports_embeddings && model.supports_messages ? " · Messages" : ""}
                           {model.strip_parameters.length > 0 ? ` · removes ${model.strip_parameters.join(", ")}` : ""}
                         </span>
                         <ChevronRight size={14} aria-hidden="true" />
@@ -3865,11 +3865,15 @@ function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNe
         </div>
       </section>
       <section className="section-block code-example">
-        <div className="section-heading"><div><p className="eyebrow">OpenAI SDKs</p><h2>Chat Completions and Responses</h2></div><Button variant="quiet" onClick={() => void copyText(openAIURL).then(() => notify("OpenAI base URL copied.")).catch(() => notify(clipboardBlocked, "danger"))}><Clipboard size={14} aria-hidden="true" /> Copy base URL</Button></div>
+        <div className="section-heading"><div><p className="eyebrow">OpenAI SDKs</p><h2>Chat Completions, Responses and Embeddings</h2></div><Button variant="quiet" onClick={() => void copyText(openAIURL).then(() => notify("OpenAI base URL copied.")).catch(() => notify(clipboardBlocked, "danger"))}><Clipboard size={14} aria-hidden="true" /> Copy base URL</Button></div>
         <pre>{`curl "${openAIURL}/chat/completions" \\
   -H "Authorization: Bearer $ROTAKEY_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"model":"provider/model-alias","messages":[{"role":"user","content":"Hello"}]}'`}</pre>
+        <pre>{`curl "${openAIURL}/embeddings" \\
+  -H "Authorization: Bearer $ROTAKEY_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"provider/embedding-alias","input":"Text to embed"}'`}</pre>
       </section>
       <section className="section-block code-example">
         <div className="section-heading">
@@ -4306,13 +4310,16 @@ function credentialInputs(value: CredentialDraft[], limits: RatePolicy, unverifi
 }
 
 function routeInputsFromSelection(selected: Record<string, string>, catalogIDs = new Set<string>()): RouteDraft[] {
-  return Object.entries(selected).map(([upstreamModel, publicAlias]) => ({
+  return Object.entries(selected).map(([upstreamModel, publicAlias]) => {
+    const embeddings = /(^|[-_/.])embed(?:ding|dings)?($|[-_/.0-9])|embedding/i.test(upstreamModel);
+    return ({
     public_alias: publicAlias.trim(),
     upstream_model: upstreamModel,
     manual: !catalogIDs.has(upstreamModel),
-    supports_chat: true,
+    supports_chat: !embeddings,
     supports_responses: false,
-    supports_messages: true,
+    supports_messages: !embeddings,
+    supports_embeddings: embeddings,
     default_max_output_tokens: 1024,
     input_cost_per_million_usd: 0,
     output_cost_per_million_usd: 0,
@@ -4321,7 +4328,8 @@ function routeInputsFromSelection(selected: Record<string, string>, catalogIDs =
     capture_bodies: false,
     strip_parameters: [],
     enabled: true,
-  }));
+  });
+  });
 }
 
 export default App;

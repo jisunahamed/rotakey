@@ -83,7 +83,7 @@ function key(
  *  said it had been checked an hour ago. A fixture that makes up enum values is
  *  worse than no fixture: it produces exactly the screens the operator will
  *  never see, and hides the ones they will. */
-function profile(upstreamProtocol: "openai" | "anthropic", supports: { chat: boolean; responses: boolean }) {
+function profile(upstreamProtocol: "openai" | "anthropic", supports: { chat: boolean; responses: boolean; embeddings?: boolean }) {
   const common = {
     availability: "verified",
     verification: "probe",
@@ -92,7 +92,7 @@ function profile(upstreamProtocol: "openai" | "anthropic", supports: { chat: boo
     json_output: "unknown"
   };
   if (upstreamProtocol === "anthropic") {
-    return { ...common, chat: "translated", responses: "translated", messages: "native", tools: "native", thinking: "native_unverified" };
+    return { ...common, chat: "translated", responses: "translated", messages: "native", embeddings: "off", tools: "native", thinking: "native_unverified" };
   }
   const reachable = supports.chat || supports.responses;
   return {
@@ -100,6 +100,7 @@ function profile(upstreamProtocol: "openai" | "anthropic", supports: { chat: boo
     chat: supports.chat ? "native" : supports.responses ? "translated" : "off",
     responses: supports.responses ? "native" : supports.chat ? "translated" : "off",
     messages: reachable ? "translated" : "off",
+    embeddings: supports.embeddings ? "native" : "off",
     tools: reachable ? "native_unverified" : "unknown",
     thinking: "unsupported_cross_protocol"
   };
@@ -120,6 +121,7 @@ function route(
     supports_chat: true,
     supports_responses: false,
     supports_messages: true,
+    supports_embeddings: false,
     default_max_output_tokens: 4096,
     input_cost_per_million_usd: 0,
     output_cost_per_million_usd: 0,
@@ -207,9 +209,11 @@ const azure: Provider = {
       capability_status: "unverified"
     }),
     route("mdl_azure_embed", "prv_azure", "azure/embed-4", "text-embedding-4", {
+      supports_chat: false,
+      supports_embeddings: true,
       supports_messages: false,
-      capability_status: "failed",
-      capability_error: "Unknown parameter: 'max_tokens'. This model has no chat endpoint.",
+      capability_status: "probe_verified",
+      capability_profile: profile("openai", { chat: false, responses: false, embeddings: true }),
       capabilities_checked_at: ago(240)
     })
   ],

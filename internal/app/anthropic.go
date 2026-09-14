@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	messageModeAnthropic = "anthropic"
-	messageModeChat      = "chat"
-	messageModeResponses = "responses"
+	messageModeAnthropic  = "anthropic"
+	messageModeChat       = "chat"
+	messageModeResponses  = "responses"
+	messageModeEmbeddings = "embeddings"
 )
 
 func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {

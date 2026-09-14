@@ -141,6 +141,7 @@ func validateImportProviderChildren(provider *ExportProvider) error {
 			PublicAlias: model.PublicAlias, UpstreamModel: model.UpstreamModel,
 			SupportsChat: model.SupportsChat, SupportsResponses: model.SupportsResponses,
 			SupportsMessages:        model.SupportsMessages,
+			SupportsEmbeddings:      model.SupportsEmbeddings,
 			DefaultMaxOutputTokens:  model.DefaultMaxOutputTokens,
 			InputCostPerMillionUSD:  model.InputCostPerMillionUSD,
 			OutputCostPerMillionUSD: model.OutputCostPerMillionUSD,

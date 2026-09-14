@@ -111,7 +111,7 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 
 	modelRows, err := s.db.Query(ctx, `
 		SELECT id, provider_id, public_alias, upstream_model, supports_chat,
-		       supports_responses, supports_messages, default_max_output_tokens, tokenizer,
+		       supports_responses, supports_messages, supports_embeddings, default_max_output_tokens, tokenizer,
 		       input_cost_per_million_usd::float8, output_cost_per_million_usd::float8, request_cost_usd::float8,
 		       capture_bodies, strip_parameters, capability_status, capability_profile,
 		       capabilities_checked_at, capability_error, enabled, created_at, updated_at
@@ -125,7 +125,7 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 		var capabilityProfile []byte
 		if err := modelRows.Scan(
 			&model.ID, &model.ProviderID, &model.PublicAlias, &model.UpstreamModel,
-			&model.SupportsChat, &model.SupportsResponses, &model.SupportsMessages,
+			&model.SupportsChat, &model.SupportsResponses, &model.SupportsMessages, &model.SupportsEmbeddings,
 			&model.DefaultMaxOutputTokens,
 			&model.Tokenizer, &model.InputCostPerMillionUSD, &model.OutputCostPerMillionUSD, &model.RequestCostUSD,
 			&model.CaptureBodies, &model.StripParameters,
@@ -340,7 +340,7 @@ func normalizeProviderCompatibilityURL(rawURL, apiFormat string) string {
 		return parsed.String()
 	}
 	if apiFormat == "openai" && host == "api.openai.com" {
-		if path == "" || path == "/v1" || path == "/v1/models" || path == "/v1/chat/completions" || path == "/v1/responses" {
+		if path == "" || path == "/v1" || path == "/v1/models" || path == "/v1/chat/completions" || path == "/v1/responses" || path == "/v1/embeddings" {
 			parsed.Path = "/v1"
 			parsed.RawPath = ""
 			return parsed.String()
@@ -380,7 +380,7 @@ func azureCompatibilityRoot(host, path, apiFormat string) (string, bool) {
 		// Foundry serves Claude natively at /anthropic/v1, with no Models API.
 		"anthropic": {"", "/anthropic", "/anthropic/v1", "/anthropic/v1/messages", "/anthropic/v1/models"},
 		// Azure's v1 OpenAI surface needs no api-version and serves all three paths.
-		"openai": {"", "/openai", "/openai/v1", "/openai/v1/models", "/openai/v1/chat/completions", "/openai/v1/responses"},
+		"openai": {"", "/openai", "/openai/v1", "/openai/v1/models", "/openai/v1/chat/completions", "/openai/v1/responses", "/openai/v1/embeddings"},
 	}
 	prefix := map[string]string{"anthropic": "/anthropic/v1", "openai": "/openai/v1"}[apiFormat]
 	if prefix == "" {
@@ -600,6 +600,7 @@ type modelInput struct {
 	SupportsChat            bool     `json:"supports_chat"`
 	SupportsResponses       bool     `json:"supports_responses"`
 	SupportsMessages        bool     `json:"supports_messages"`
+	SupportsEmbeddings      bool     `json:"supports_embeddings"`
 	DefaultMaxOutputTokens  int      `json:"default_max_output_tokens"`
 	InputCostPerMillionUSD  float64  `json:"input_cost_per_million_usd"`
 	OutputCostPerMillionUSD float64  `json:"output_cost_per_million_usd"`
@@ -617,8 +618,11 @@ func validateModelInput(input *modelInput) error {
 	if !aliasPattern.MatchString(input.PublicAlias) || input.UpstreamModel == "" || len(input.UpstreamModel) > 255 {
 		return fmt.Errorf("model alias or upstream model is invalid")
 	}
-	if !input.SupportsChat && !input.SupportsResponses && !input.SupportsMessages {
+	if !input.SupportsChat && !input.SupportsResponses && !input.SupportsMessages && !input.SupportsEmbeddings {
 		return fmt.Errorf("at least one upstream endpoint must be supported")
+	}
+	if input.SupportsEmbeddings && (input.SupportsChat || input.SupportsResponses || input.SupportsMessages) {
+		return fmt.Errorf("an embeddings route cannot also be a text-generation route")
 	}
 	if input.DefaultMaxOutputTokens == 0 {
 		input.DefaultMaxOutputTokens = 1024
@@ -679,13 +683,13 @@ func (s *Server) handleCreateModel(w http.ResponseWriter, r *http.Request) {
 	_, err = s.db.Exec(r.Context(), `
 		INSERT INTO model_routes
 		    (id, provider_id, public_alias, upstream_model, supports_chat,
-		     supports_responses, supports_messages, default_max_output_tokens, tokenizer,
+		     supports_responses, supports_messages, supports_embeddings, default_max_output_tokens, tokenizer,
 		     input_cost_per_million_usd, output_cost_per_million_usd, request_cost_usd,
 		     capture_bodies, strip_parameters, capability_status, capability_profile,
 		     capabilities_checked_at, capability_error, enabled)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'',$18)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'',$19)
 	`, id, r.PathValue("id"), input.PublicAlias, input.UpstreamModel,
-		input.SupportsChat, input.SupportsResponses, input.SupportsMessages, input.DefaultMaxOutputTokens,
+		input.SupportsChat, input.SupportsResponses, input.SupportsMessages, input.SupportsEmbeddings, input.DefaultMaxOutputTokens,
 		input.Tokenizer, input.InputCostPerMillionUSD, input.OutputCostPerMillionUSD, input.RequestCostUSD, input.CaptureBodies, input.StripParameters, status, profileJSON, checkedAt, input.Enabled)
 	if err != nil {
 		writeError(w, http.StatusConflict, "model_conflict", "Model alias already exists or provider was not found.")
@@ -705,13 +709,16 @@ func (s *Server) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var providerID, currentUpstream, capabilityStatus string
+	var currentChat, currentResponses, currentMessages, currentEmbeddings bool
 	var capabilityProfile []byte
 	var checkedAt *time.Time
-	if err := s.db.QueryRow(r.Context(), `SELECT provider_id, upstream_model, capability_status, capability_profile, capabilities_checked_at FROM model_routes WHERE id=$1`, r.PathValue("id")).Scan(&providerID, &currentUpstream, &capabilityStatus, &capabilityProfile, &checkedAt); err != nil {
+	if err := s.db.QueryRow(r.Context(), `SELECT provider_id, upstream_model, supports_chat, supports_responses, supports_messages, supports_embeddings, capability_status, capability_profile, capabilities_checked_at FROM model_routes WHERE id=$1`, r.PathValue("id")).Scan(&providerID, &currentUpstream, &currentChat, &currentResponses, &currentMessages, &currentEmbeddings, &capabilityStatus, &capabilityProfile, &checkedAt); err != nil {
 		writeError(w, http.StatusNotFound, "model_not_found", "Model was not found.")
 		return
 	}
-	if input.UpstreamModel != currentUpstream {
+	if input.UpstreamModel != currentUpstream || input.SupportsChat != currentChat ||
+		input.SupportsResponses != currentResponses || input.SupportsMessages != currentMessages ||
+		input.SupportsEmbeddings != currentEmbeddings {
 		var profile map[string]string
 		var err error
 		capabilityStatus, profile, checkedAt, err = s.probeProviderModel(r.Context(), providerID, &input)
@@ -723,13 +730,13 @@ func (s *Server) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 	}
 	tag, err := s.db.Exec(r.Context(), `
 		UPDATE model_routes SET public_alias=$2, upstream_model=$3, supports_chat=$4,
-		    supports_responses=$5, supports_messages=$6, default_max_output_tokens=$7, tokenizer=$8,
-		    input_cost_per_million_usd=$9, output_cost_per_million_usd=$10, request_cost_usd=$11,
-		    capture_bodies=$12, strip_parameters=$13, capability_status=$14,
-		    capability_profile=$15, capabilities_checked_at=$16, capability_error='', enabled=$17, updated_at=NOW()
+		    supports_responses=$5, supports_messages=$6, supports_embeddings=$7, default_max_output_tokens=$8, tokenizer=$9,
+		    input_cost_per_million_usd=$10, output_cost_per_million_usd=$11, request_cost_usd=$12,
+		    capture_bodies=$13, strip_parameters=$14, capability_status=$15,
+		    capability_profile=$16, capabilities_checked_at=$17, capability_error='', enabled=$18, updated_at=NOW()
 		WHERE id=$1
 	`, r.PathValue("id"), input.PublicAlias, input.UpstreamModel, input.SupportsChat,
-		input.SupportsResponses, input.SupportsMessages, input.DefaultMaxOutputTokens, input.Tokenizer,
+		input.SupportsResponses, input.SupportsMessages, input.SupportsEmbeddings, input.DefaultMaxOutputTokens, input.Tokenizer,
 		input.InputCostPerMillionUSD, input.OutputCostPerMillionUSD, input.RequestCostUSD, input.CaptureBodies, input.StripParameters, capabilityStatus, capabilityProfile, checkedAt, input.Enabled)
 	if err != nil || tag.RowsAffected() == 0 {
 		writeError(w, http.StatusConflict, "model_update_failed", "Model could not be updated.")
@@ -748,12 +755,12 @@ func (s *Server) handleProbeModel(w http.ResponseWriter, r *http.Request) {
 	var input modelInput
 	if err := s.db.QueryRow(r.Context(), `
 		SELECT provider_id, public_alias, upstream_model, supports_chat, supports_responses,
-		       supports_messages, default_max_output_tokens, tokenizer, capture_bodies,
+		       supports_messages, supports_embeddings, default_max_output_tokens, tokenizer, capture_bodies,
 		       strip_parameters, enabled
 		FROM model_routes WHERE id=$1
 	`, r.PathValue("id")).Scan(
 		&providerID, &input.PublicAlias, &input.UpstreamModel, &input.SupportsChat,
-		&input.SupportsResponses, &input.SupportsMessages, &input.DefaultMaxOutputTokens,
+		&input.SupportsResponses, &input.SupportsMessages, &input.SupportsEmbeddings, &input.DefaultMaxOutputTokens,
 		&input.Tokenizer, &input.CaptureBodies, &input.StripParameters, &input.Enabled,
 	); err != nil {
 		writeError(w, http.StatusNotFound, "model_not_found", "Model was not found.")
@@ -772,11 +779,11 @@ func (s *Server) handleProbeModel(w http.ResponseWriter, r *http.Request) {
 	}
 	profileJSON, _ := json.Marshal(profile)
 	_, err = s.db.Exec(r.Context(), `
-		UPDATE model_routes SET supports_chat=$2, supports_responses=$3, supports_messages=$4,
-		       capability_status=$5, capability_profile=$6, capabilities_checked_at=$7,
+		UPDATE model_routes SET supports_chat=$2, supports_responses=$3, supports_messages=$4, supports_embeddings=$5,
+		       capability_status=$6, capability_profile=$7, capabilities_checked_at=$8,
 		       capability_error='', updated_at=NOW()
 		WHERE id=$1
-	`, r.PathValue("id"), input.SupportsChat, input.SupportsResponses, input.SupportsMessages,
+	`, r.PathValue("id"), input.SupportsChat, input.SupportsResponses, input.SupportsMessages, input.SupportsEmbeddings,
 		status, profileJSON, checkedAt)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "model_probe_save_failed", "Capability result could not be saved.")

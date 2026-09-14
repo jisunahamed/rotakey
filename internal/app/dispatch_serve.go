@@ -546,6 +546,10 @@ func copyResponseHeaders(w http.ResponseWriter, publicMode string, source http.H
 // endpoint rather than from a translated flag, because a route may now be sent
 // to /responses from any of the three public protocols.
 func translateUpstreamResponse(req dispatchRequest, plan upstreamPlan, body []byte) ([]byte, int64, int64, error) {
+	if req.PublicMode == messageModeEmbeddings {
+		payload, input, output := replaceResponseModel(body, req.Alias)
+		return payload, input, output, nil
+	}
 	if plan.Format == "anthropic" {
 		switch req.PublicMode {
 		case messageModeAnthropic:
@@ -947,6 +951,8 @@ func upstreamFailureMessage(status int, path, message string) string {
 		return ""
 	}
 	switch path {
+	case "/embeddings":
+		return "The provider has no Embeddings endpoint at this base URL, or this is not an embedding model. Check the route type, upstream model ID and provider base URL."
 	case "/responses":
 		return "The provider has no Responses endpoint at this base URL. Turn off \"Upstream supports Responses natively\" for this route, or correct the provider base URL."
 	case "/messages":

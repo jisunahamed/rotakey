@@ -83,6 +83,52 @@ func TestTranslateUpstreamResponseCoversEveryPoolCombination(t *testing.T) {
 	}
 }
 
+func TestEmbeddingsPlanAndResponseStayOnEmbeddingsProtocol(t *testing.T) {
+	public := map[string]any{"model": "azure/embed-4", "input": []any{"one", "two"}, "dimensions": json.Number("256")}
+	req := dispatchRequest{PublicMode: messageModeEmbeddings, Alias: "azure/embed-4", Public: public, Raw: []byte(`{"model":"azure/embed-4","input":["one","two"],"dimensions":256}`)}
+	route := routeRuntime{
+		Model:    ModelRoute{UpstreamModel: "text-embedding-4", SupportsEmbeddings: true, Tokenizer: "heuristic"},
+		Provider: Provider{APIFormat: "openai"},
+	}
+	plan, err := (&Server{}).buildPlan(t.Context(), req, route, dispatchState{})
+	if err != nil {
+		t.Fatalf("build embeddings plan: %v", err)
+	}
+	if plan.Path != "/embeddings" || plan.wireEndpoint() != "embeddings" {
+		t.Fatalf("embedding wire = path %q endpoint %q", plan.Path, plan.wireEndpoint())
+	}
+	if plan.Payload["model"] != "text-embedding-4" || plan.Payload["dimensions"] != json.Number("256") {
+		t.Fatalf("embedding payload changed unexpectedly: %#v", plan.Payload)
+	}
+	body := []byte(`{"object":"list","data":[{"object":"embedding","embedding":[0.1,0.2],"index":0}],"model":"text-embedding-4","usage":{"prompt_tokens":7,"total_tokens":7}}`)
+	translated, input, output, err := translateUpstreamResponse(req, plan, body)
+	if err != nil {
+		t.Fatalf("translate embeddings: %v", err)
+	}
+	var decoded map[string]any
+	if json.Unmarshal(translated, &decoded) != nil || decoded["model"] != "azure/embed-4" {
+		t.Fatalf("public embedding response = %s", translated)
+	}
+	if input != 7 || output != 0 {
+		t.Fatalf("embedding usage = %d/%d, want 7/0", input, output)
+	}
+}
+
+func TestEmbeddingsRouteIsolation(t *testing.T) {
+	embeddings := dispatchRequest{PublicMode: messageModeEmbeddings}
+	if !routeSupportsRequest(routeRuntime{Model: ModelRoute{SupportsEmbeddings: true}, Provider: Provider{APIFormat: "openai"}}, embeddings) {
+		t.Fatal("OpenAI embedding route was refused")
+	}
+	for _, route := range []routeRuntime{
+		{Model: ModelRoute{SupportsChat: true}, Provider: Provider{APIFormat: "openai"}},
+		{Model: ModelRoute{SupportsEmbeddings: true}, Provider: Provider{APIFormat: "anthropic"}},
+	} {
+		if routeSupportsRequest(route, embeddings) {
+			t.Fatalf("non-embedding route was admitted: %#v", route)
+		}
+	}
+}
+
 // TestRouteSupportsRequestAdmitsEveryTranslatableRoute pins the contract that a
 // caller's choice of protocol is never a reason to refuse a route. Every public
 // protocol can be translated into every upstream shape, so the only route that

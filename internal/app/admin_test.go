@@ -66,6 +66,7 @@ func TestNormalizeOfficialProviderCompatibilityURLs(t *testing.T) {
 		{"openai root", "https://api.openai.com", "openai", "https://api.openai.com/v1"},
 		{"openai model endpoint", "https://api.openai.com/v1/models", "openai", "https://api.openai.com/v1"},
 		{"openai chat endpoint", "https://api.openai.com/v1/chat/completions", "openai", "https://api.openai.com/v1"},
+		{"openai embeddings endpoint", "https://api.openai.com/v1/embeddings", "openai", "https://api.openai.com/v1"},
 		{"anthropic root", "https://api.anthropic.com", "anthropic", "https://api.anthropic.com/v1"},
 		{"anthropic model endpoint", "https://api.anthropic.com/v1/models", "anthropic", "https://api.anthropic.com/v1"},
 		{"anthropic messages endpoint", "https://api.anthropic.com/v1/messages", "anthropic", "https://api.anthropic.com/v1"},
@@ -96,6 +97,7 @@ func TestNormalizeAzureFoundryCompatibilityURLs(t *testing.T) {
 		{"azure openai root", "https://my-resource.openai.azure.com", "openai", azureOpenAI},
 		{"azure openai chat endpoint", "https://my-resource.openai.azure.com/openai/v1/chat/completions", "openai", azureOpenAI},
 		{"azure openai responses endpoint", "https://my-resource.openai.azure.com/openai/v1/responses?api-version=preview", "openai", azureOpenAI},
+		{"azure openai embeddings endpoint", "https://my-resource.openai.azure.com/openai/v1/embeddings", "openai", azureOpenAI},
 		// The protocols do not borrow each other's prefix, and an unfamiliar path
 		// is left exactly as typed rather than guessed at.
 		{"foundry anthropic path under openai format", "https://my-resource.services.ai.azure.com/anthropic/v1", "openai", "https://my-resource.services.ai.azure.com/anthropic/v1"},

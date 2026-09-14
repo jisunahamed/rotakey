@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -143,6 +144,18 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 	}
 	payload := cloneRequest(req.Public)
 	var err error
+	if req.PublicMode == messageModeEmbeddings {
+		if format == "anthropic" || !route.Model.SupportsEmbeddings {
+			return upstreamPlan{}, fmt.Errorf("model does not support embeddings")
+		}
+		plan.Path = "/embeddings"
+		plan.InputEstimate = estimateInputTokens(req.Raw, route.Model.Tokenizer)
+		plan.TokenCost = plan.InputEstimate
+		payload["model"] = upstreamModelForProvider(route.Provider, route.Model.UpstreamModel)
+		plan.Payload = payload
+		plan.Encoded, err = json.Marshal(payload)
+		return plan, err
+	}
 
 	switch {
 	case format == "anthropic" && req.PublicMode == messageModeAnthropic:
@@ -323,6 +336,9 @@ func prefersNativeResponses(route routeRuntime, state dispatchState) bool {
 // wireEndpoint names the upstream endpoint for compatibility learning, which is
 // keyed per endpoint shape rather than per public protocol.
 func (p upstreamPlan) wireEndpoint() string {
+	if p.Path == "/embeddings" {
+		return "embeddings"
+	}
 	if p.Path == "/responses" {
 		return "responses"
 	}
@@ -334,6 +350,9 @@ func (p upstreamPlan) wireEndpoint() string {
 // cannot serve is one whose upstream publishes no usable endpoint at all. A
 // caller's choice of protocol is no longer a reason to refuse.
 func routeSupportsRequest(route routeRuntime, req dispatchRequest) bool {
+	if req.PublicMode == messageModeEmbeddings {
+		return route.Provider.APIFormat != "anthropic" && route.Model.SupportsEmbeddings
+	}
 	if route.Provider.APIFormat == "anthropic" {
 		return route.Model.SupportsMessages || route.Model.SupportsChat || route.Model.SupportsResponses
 	}

@@ -26,6 +26,7 @@ export type ModelRoute = {
   supports_chat: boolean;
   supports_responses: boolean;
   supports_messages: boolean;
+  supports_embeddings: boolean;
   default_max_output_tokens: number;
   input_cost_per_million_usd: number;
   output_cost_per_million_usd: number;

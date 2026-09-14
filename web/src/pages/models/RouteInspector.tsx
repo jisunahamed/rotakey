@@ -161,6 +161,7 @@ export function RouteInspector({
           <Dot state={state} label="" />
           <span>{states[state].phrase}</span>
           {route.supports_messages && <Tag>Messages API</Tag>}
+          {route.supports_embeddings && <Tag>Embeddings API</Tag>}
           {pooled > 1 && <Tag tone="accent">Pooled ×{pooled}</Tag>}
         </>
       }
@@ -209,6 +210,7 @@ export function RouteInspector({
         <Fact label="Chat Completions" value={protocolLabelFor(route.capability_profile?.chat || (route.supports_chat ? "native" : "off"))} />
         <Fact label="Responses" value={protocolLabelFor(route.capability_profile?.responses || (route.supports_responses ? "native" : "translated"))} />
         <Fact label="Messages" value={protocolLabelFor(route.capability_profile?.messages || (route.supports_messages ? "native" : "off"))} />
+        <Fact label="Embeddings" value={protocolLabelFor(route.capability_profile?.embeddings || (route.supports_embeddings ? "native" : "off"))} />
         <Fact label="Streaming" value={protocolLabelFor(route.capability_profile?.streaming)} />
         <Fact label="Tools" value={protocolLabelFor(route.capability_profile?.tools)} />
         <Fact label="Thinking" value={protocolLabelFor(route.capability_profile?.thinking)} />

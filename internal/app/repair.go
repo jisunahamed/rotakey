@@ -139,8 +139,9 @@ func (s *Server) handleRepairPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if p.Enabled {
-		if _, err := s.repairRoute(r.Context(), p.ModelID); err != nil {
-			writeError(w, 400, "invalid_repair_model", "Choose an enabled model route.")
+		route, err := s.repairRoute(r.Context(), p.ModelID)
+		if err != nil || (!route.Model.SupportsChat && !route.Model.SupportsResponses && !route.Model.SupportsMessages) {
+			writeError(w, 400, "invalid_repair_model", "Choose an enabled text-generation model route.")
 			return
 		}
 	}
