@@ -502,6 +502,9 @@ async function handle(req: Req, res: Res, url: URL): Promise<boolean> {
       recovery_steps: provider.id === "prv_azure" ? ["Skipped 1 API key that could not load this catalog and used eastus · primary."] : []
     }, 520)), true;
   }
+  if (path === "/api/admin/models/aliases/normalize" && method === "POST") {
+    return json(res, 200, await slowly({ rewritten: 6, removed: 2, conflicts: [] }, 420)), true;
+  }
   if (path === "/api/admin/repair/policy" && method === "GET") {
     return json(res, 200, { policy: repairPolicy, tools: ["set_parameter", "remove_parameter", "switch_endpoint", "set_timeout", "reset_cooldown", "refresh_connection", "select_credential", "validate_credential", "set_route_enabled"], service_restart_supported: false }), true;
   }

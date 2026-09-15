@@ -23,7 +23,7 @@ Client -> Rotakey /v1 -> public model alias -> provider -> eligible API key -> u
 3. Add a provider, choose OpenAI-compatible or Anthropic-compatible, and enter its protocol base URL.
 4. Add API keys one at a time or in bulk. Primary is optional.
 5. Let Rotakey validate the keys and discover the provider's model list. If an Anthropic catalog is unavailable, enter a model ID manually; Rotakey probes Messages before saving it.
-6. Select the models to expose, choose globally unique public aliases, and configure limits.
+6. Select the models to expose and configure limits. In provider-wise mode aliases remain provider-specific. In model-wise mode Rotakey automatically reuses the existing alias for matching model families across providers and consolidates dated or differently-cased duplicates from one catalog. Use **Auto-fix all aliases** in the provider model loader to normalize existing routes across every provider; unrelated alias collisions are reported and left unchanged.
 7. Test the provider, enable it, and copy the unified `/v1` base URL.
 
 Use the same gateway key for all enabled public models. Only the request body's `model` value changes.
@@ -53,7 +53,7 @@ Providers are collapsed by default. Their header shows the total remaining capac
 
 The model list shows traffic, ready keys, the next key, and the model override state. **Shared only** means that model has no extra override and uses the provider key's shared policy. Selecting a model opens its inspector. The API-key path stays collapsed until you need individual key details, so long providers do not repeat the same pool on every row.
 
-Use **Model routes → Check all models** to run a bounded live capability probe across every configured route that has a healthy key. Routes whose provider has no healthy key are shown as **waiting for keys**, not as model failures. The sweep rail shows progress and retains the exact provider failure on each checked row. **Delete failed** lists the genuinely unavailable aliases and requires confirmation before removing only those routes. Provider model catalogs also include a master checkbox: without a search it selects every loaded model; with a search it selects or clears every visible result.
+Use **Model routes → Check all models** to run a bounded live capability probe across every configured route that has a healthy key. Routes whose provider has no healthy key are shown as **waiting for keys**, not as model failures. The sweep rail shows progress and retains the exact provider failure on each checked row. **Delete failed** lists the genuinely unavailable aliases and requires confirmation before removing only those routes. Provider model catalogs also include a master checkbox: without a search it selects every loaded model; with a search it selects or clears every visible result. Reloading a provider catalog shows routed models even when the provider no longer returns them; uncheck any existing route and save to remove it in the same atomic update as newly selected routes.
 
 In **Model routes → Model override**, choose **All API keys** to enter a policy once and apply it to the whole provider key pool, or choose one API key for an exception. **Use shared only** removes the selected model override and restores the key's shared provider policy. Shared and model-specific policies are both enforced whenever an override exists.
 

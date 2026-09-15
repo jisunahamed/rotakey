@@ -43,6 +43,92 @@ func TestAliasPrefixRoundTrip(t *testing.T) {
 	}
 }
 
+func TestModelFamilyKeyMatchesProviderCatalogVariants(t *testing.T) {
+	cases := map[string]string{
+		"DeepSeek-V4-Flash":                      "deepseek-v4-flash",
+		"deepseek-v4-flash-0731":                 "deepseek-v4-flash",
+		"vendor/deepseek_v4_flash_2026-07-31":    "deepseek-v4-flash",
+		"accounts/acme/models/gemini-3.0-latest": "gemini-3-0",
+		"deepseek-v4-flash-vision-exp":           "deepseek-v4-flash-vision-exp",
+	}
+	for input, want := range cases {
+		if got := modelFamilyKey(input); got != want {
+			t.Errorf("modelFamilyKey(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestConsolidateBulkModelsInModelMode(t *testing.T) {
+	models := []modelInput{
+		{PublicAlias: "deepseek-v4-flash", UpstreamModel: "deepseek-v4-flash-0731"},
+		{PublicAlias: "deepseek-v4-flash", UpstreamModel: "DeepSeek-V4-Flash"},
+		{PublicAlias: "deepseek-v4-flash-vision-exp", UpstreamModel: "deepseek-v4-flash-vision-exp"},
+	}
+	got, skipped, err := consolidateBulkModels(models, routingModeModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skipped != 1 || len(got) != 2 {
+		t.Fatalf("got %d models and %d skipped, want 2 and 1", len(got), skipped)
+	}
+	if got[0].UpstreamModel != "DeepSeek-V4-Flash" {
+		t.Fatalf("kept %q, want the base catalog ID", got[0].UpstreamModel)
+	}
+}
+
+func TestConsolidateBulkModelsRejectsUnrelatedCollision(t *testing.T) {
+	models := []modelInput{
+		{PublicAlias: "fast", UpstreamModel: "deepseek-v4-flash"},
+		{PublicAlias: "fast", UpstreamModel: "qwen3.8-flash"},
+	}
+	if _, _, err := consolidateBulkModels(models, routingModeModel); err == nil {
+		t.Fatal("unrelated models sharing an alias were accepted")
+	}
+	if _, _, err := consolidateBulkModels(models[:1], routingModeProvider); err != nil {
+		t.Fatalf("one provider-wise model failed: %v", err)
+	}
+}
+
+func TestPlanCanonicalAliasesPoolsProvidersAndConsolidatesDuplicates(t *testing.T) {
+	rows := []routeAliasRow{
+		{ModelID: "m1", ProviderID: "p1", Alias: "nvidia/DeepSeek-V4-Flash", UpstreamModel: "DeepSeek-V4-Flash"},
+		{ModelID: "m2", ProviderID: "p1", Alias: "nvidia/deepseek-v4-flash-0731", UpstreamModel: "deepseek-v4-flash-0731"},
+		{ModelID: "m3", ProviderID: "p2", Alias: "openrouter/deepseek-v4-flash", UpstreamModel: "deepseek/deepseek-v4-flash"},
+		{ModelID: "m4", ProviderID: "p2", Alias: "vision", UpstreamModel: "deepseek-v4-flash-vision-exp"},
+	}
+	plan := planCanonicalAliases(rows)
+	if !reflect.DeepEqual(plan.RemoveIDs, []string{"m2"}) {
+		t.Fatalf("remove IDs = %#v", plan.RemoveIDs)
+	}
+	want := []aliasRewrite{
+		{ModelID: "m1", From: "nvidia/DeepSeek-V4-Flash", To: "deepseek-v4-flash"},
+		{ModelID: "m3", From: "openrouter/deepseek-v4-flash", To: "deepseek-v4-flash"},
+		{ModelID: "m4", From: "vision", To: "deepseek-v4-flash-vision-exp"},
+	}
+	if !reflect.DeepEqual(plan.Rewrites, want) {
+		t.Fatalf("rewrites = %#v, want %#v", plan.Rewrites, want)
+	}
+	if len(plan.Conflicts) != 0 {
+		t.Fatalf("conflicts = %#v", plan.Conflicts)
+	}
+}
+
+func TestPlanCanonicalAliasesKeepsUnrelatedOwner(t *testing.T) {
+	rows := []routeAliasRow{
+		{ModelID: "m1", ProviderID: "p1", Alias: "deepseek-v4-flash", UpstreamModel: "some-other-model"},
+		{ModelID: "m2", ProviderID: "p1", Alias: "old-name", UpstreamModel: "deepseek-v4-flash-0731"},
+	}
+	plan := planCanonicalAliases(rows)
+	if !reflect.DeepEqual(plan.Conflicts, []string{"deepseek-v4-flash"}) {
+		t.Fatalf("conflicts = %#v", plan.Conflicts)
+	}
+	for _, rewrite := range plan.Rewrites {
+		if rewrite.ModelID == "m2" {
+			t.Fatalf("conflicting route was rewritten: %#v", rewrite)
+		}
+	}
+}
+
 func TestPlanAliasRewritesToModelMode(t *testing.T) {
 	rows := []routeAliasRow{
 		{ModelID: "m1", ProviderID: "p1", ProviderSlug: "azure", Alias: "azure/opus-5"},

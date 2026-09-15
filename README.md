@@ -129,7 +129,7 @@ In **Providers → Add provider**:
 1. Choose **OpenAI-compatible** or **Anthropic-compatible**, then enter the provider base URL. Use the official quick setup buttons for OpenAI or Anthropic; Rotakey also normalizes their root, `/models`, and inference endpoint URLs to `/v1`. The Anthropic setup uses `x-api-key` and `anthropic-version: 2023-06-01`. **Use Foundry Claude** fills in the Azure AI Foundry contract, which the [operator guide](docs/OPERATOR-GUIDE.md) describes in full.
 2. Enter API keys in separate fields. Use **Add another API key** for more keys, and optionally mark one key as **Primary**.
 3. Choose **Check keys & load models**. Rotakey loads the authenticated upstream `/models` catalog before any route is created. Official OpenAI and Anthropic catalogs validate the key directly; custom compatibility providers also receive a one-token protocol check. If an Anthropic-compatible catalog returns `305`, `404`, `405`, or a non-standard response, add the model ID manually; Rotakey validates manually created routes with a minimal Messages probe.
-4. Select the models to expose and edit their globally unique public aliases, such as `groq/llama-3.3-70b`.
+4. Select the models to expose. Provider-wise routing proposes provider-prefixed aliases such as `groq/llama-3.3-70b`. Model-wise routing normalizes casing, separators, namespaces and dated deployment suffixes, then reuses an existing alias for the same model family across providers. **Auto-fix all aliases** applies the same analysis to existing routes and consolidates redundant variants inside one provider. You can still edit any proposed alias.
 5. Set any combination of RPS, RPM, RPD, TPS, TPM, TPD, and TPR. Blank fields are unlimited. An API key's shared limits are consumed by every model under that provider; optional model-specific limits add a narrower limit for that model.
 6. Review and create the provider. Keys are validated again before they are encrypted and saved.
 
@@ -200,7 +200,7 @@ Files use the **Default Anthropic resource provider** selected in System setting
 
 ## Routing and limits
 
-- The public alias selects exactly one provider route; there is no cross-provider model fallback.
+- In provider-wise mode a public alias selects one provider route. In model-wise mode every enabled provider route publishing the same alias forms a fallback pool.
 - Without a primary API key, eligible keys are visited with a Redis-backed round-robin cursor.
 - If a healthy primary key is configured, Rotakey uses its available capacity first and falls back to the other keys when needed.
 - A key's shared limits span every model route under the provider. Shared limits and any extra model-specific limits must all reserve atomically.

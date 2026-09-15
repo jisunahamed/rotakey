@@ -50,6 +50,7 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/admin/providers/{id}/test", admin(s.handleTestProvider))
 	mux.Handle("POST /api/admin/providers/{id}/models", admin(s.handleCreateModel))
 	mux.Handle("POST /api/admin/providers/{id}/models/bulk", admin(s.handleCreateModelsBulk))
+	mux.Handle("POST /api/admin/models/aliases/normalize", admin(s.handleNormalizeModelAliases))
 	mux.Handle("POST /api/admin/providers/{id}/models/discover", admin(s.handleDiscoverModels))
 	mux.Handle("PUT /api/admin/models/{id}", admin(s.handleUpdateModel))
 	mux.Handle("POST /api/admin/models/{id}/probe", admin(s.handleProbeModel))

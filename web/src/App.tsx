@@ -83,7 +83,7 @@ import {
   normalizeProviders,
   safeNumber
 } from "./lib/normalize";
-import { defaultPublicAlias, providerSlugForUI, publishRoutingMode, useRoutingMode } from "./lib/routing-mode";
+import { automaticPublicAlias, providerSlugForUI, publishRoutingMode, useRoutingMode } from "./lib/routing-mode";
 import { closeActiveDrawerIfAny, useDrawerOpen, useScrollLock } from "./overlays";
 import { ModelsPage, RouteSheet, type RouteDraft } from "./pages/models";
 import { PlaygroundPage } from "./pages/playground";
@@ -1770,7 +1770,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
           )}
         </div>
       )}
-      {panel?.type === "wizard" && <ProviderWizard onClose={() => setPanel(null)} onComplete={complete} />}
+      {panel?.type === "wizard" && <ProviderWizard providers={providers} onClose={() => setPanel(null)} onComplete={complete} />}
       {/* `missingRecord` gates all four so the panel is never rendered against a
           record that has gone: one render in add-mode with the edit fields still
           filled is enough to turn the next Save into a duplicate. */}
@@ -1779,9 +1779,9 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
           looking at the provider that serves it is a reasonable moment to do it,
           but there is no second implementation of it any more. */}
       {panelProvider && !missingRecord && panel?.type === "model" && <RouteSheet providers={[panelProvider]} providerID={panelProvider.id} route={panelProvider.models.find((model) => model.id === panel.modelID)} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
-      {panelProvider && !missingRecord && panel?.type === "import" && <ModelImportForm provider={panelProvider} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
+      {panelProvider && !missingRecord && panel?.type === "import" && <ModelImportForm provider={panelProvider} knownRoutes={providers.flatMap((provider) => provider.models)} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
       {panelProvider && !missingRecord && panel?.type === "credential" && (panel.credentialID
-        ? <CredentialForm provider={panelProvider} credential={panelProvider.credentials.find((credential) => credential.id === panel.credentialID)} onClose={() => setPanel(null)} onComplete={complete} onRefresh={() => void load()} notify={notify} />
+        ? <CredentialForm provider={panelProvider} knownRoutes={providers.flatMap((provider) => provider.models)} credential={panelProvider.credentials.find((credential) => credential.id === panel.credentialID)} onClose={() => setPanel(null)} onComplete={complete} onRefresh={() => void load()} notify={notify} />
         : <CredentialBatchForm provider={panelProvider} onClose={() => setPanel(null)} onComplete={complete} onRefresh={() => void load()} notify={notify} />)}
     </div>
   );
@@ -2066,7 +2066,7 @@ async function testProvider(provider: Pick<Provider, "id">, notify: (message: st
   }
 }
 
-function ProviderWizard({ onClose, onComplete }: { onClose: () => void; onComplete: (message: string) => void }) {
+function ProviderWizard({ providers, onClose, onComplete }: { providers: Provider[]; onClose: () => void; onComplete: (message: string) => void }) {
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -2242,6 +2242,7 @@ function ProviderWizard({ onClose, onComplete }: { onClose: () => void; onComple
             provider={{ slug: providerSlugForUI(provider.name) }}
             models={discoveredModels}
             existing={[]}
+            knownRoutes={providers.flatMap((item) => item.models)}
             selected={selectedModels}
             onChange={setSelectedModels}
           />
@@ -2832,7 +2833,7 @@ function CredentialBatchForm({ provider, onClose, onComplete, onRefresh, notify 
   );
 }
 
-function CredentialForm({ provider, credential, onClose, onComplete, onRefresh, notify }: { provider: Provider; credential?: Credential; onClose: () => void; onComplete: (message: string) => void; onRefresh: () => void; notify: (message: string, tone?: "success" | "danger") => void }) {
+function CredentialForm({ provider, knownRoutes, credential, onClose, onComplete, onRefresh, notify }: { provider: Provider; knownRoutes: ModelRoute[]; credential?: Credential; onClose: () => void; onComplete: (message: string) => void; onRefresh: () => void; notify: (message: string, tone?: "success" | "danger") => void }) {
   const ask = useConfirm();
   const [label, setLabel] = useState(credential?.label ?? "");
   const [secret, setSecret] = useState("");
@@ -3076,6 +3077,7 @@ function CredentialForm({ provider, credential, onClose, onComplete, onRefresh, 
           provider={provider}
           models={inspection.models}
           existing={provider.models}
+          knownRoutes={knownRoutes}
           selected={selectedModels}
           onChange={setSelectedModels}
         />
@@ -3216,9 +3218,10 @@ function CredentialBalanceFields({ credential, balance, onBalanceChange, resetSp
   );
 }
 
-function ModelImportForm({ provider, onClose, onComplete, notify }: { provider: Provider; onClose: () => void; onComplete: (message: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
+function ModelImportForm({ provider, knownRoutes, onClose, onComplete, notify }: { provider: Provider; knownRoutes: ModelRoute[]; onClose: () => void; onComplete: (message: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
   const [inspection, setInspection] = useState<CredentialInspection | null>(null);
   const [selected, setSelected] = useState<Record<string, string>>({});
+  const [removedIDs, setRemovedIDs] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
 
   // Discovery is refetched by the Reload button and once on open, so it is a
@@ -3227,6 +3230,7 @@ function ModelImportForm({ provider, onClose, onComplete, notify }: { provider: 
     setBusy(true);
     setInspection(null);
     setSelected({});
+    setRemovedIDs(new Set());
     try {
       const result = await api<CredentialInspection>(`/api/admin/providers/${provider.id}/models/discover`, {
         method: "POST",
@@ -3243,19 +3247,44 @@ function ModelImportForm({ provider, onClose, onComplete, notify }: { provider: 
 
   useEffect(() => { void load(); }, [load]);
 
+  const autoFixAliases = async () => {
+    setBusy(true);
+    try {
+      const result = await api<{ rewritten: number; removed: number; conflicts: string[] }>("/api/admin/models/aliases/normalize", {
+        method: "POST",
+        json: {}
+      });
+      const details = [
+        result.rewritten ? `${result.rewritten} aliases fixed` : "",
+        result.removed ? `${result.removed} duplicate routes consolidated` : "",
+        result.conflicts.length ? `${result.conflicts.length} unsafe collisions left unchanged` : ""
+      ].filter(Boolean);
+      onComplete(`Automatic alias repair finished · ${details.join(" · ") || "everything was already consistent"}.`);
+    } catch (caught) {
+      notify(errorMessage(caught), "danger");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const save = async () => {
     const routes = routeInputsFromSelection(selected, new Set((inspection?.models ?? []).map((model) => model.id)));
-    if (routes.length === 0) {
-      notify("Select at least one new model route.", "danger");
+    if (routes.length === 0 && removedIDs.size === 0) {
+      notify("Select a new model or uncheck an existing route.", "danger");
       return;
     }
     setBusy(true);
     try {
-      const result = await api<{ created: number; skipped: number }>(`/api/admin/providers/${provider.id}/models/bulk`, {
+      const result = await api<{ created: number; skipped: number; removed: number }>(`/api/admin/providers/${provider.id}/models/bulk`, {
         method: "POST",
-        json: { models: routes }
+        json: { models: routes, remove_ids: [...removedIDs] }
       });
-      onComplete(`${result.created} model route${result.created === 1 ? "" : "s"} enabled${result.skipped ? ` · ${result.skipped} already existed` : ""}.`);
+      const changes = [
+        result.created ? `${result.created} enabled` : "",
+        result.removed ? `${result.removed} removed` : "",
+        result.skipped ? `${result.skipped} duplicate${result.skipped === 1 ? "" : "s"} consolidated` : ""
+      ].filter(Boolean);
+      onComplete(`Model routes updated · ${changes.join(" · ") || "no changes"}.`);
     } catch (caught) {
       notify(errorMessage(caught), "danger");
     } finally {
@@ -3269,8 +3298,8 @@ function ModelImportForm({ provider, onClose, onComplete, notify }: { provider: 
       eyebrow={provider.name}
       onClose={onClose}
       wide
-      dirty={Object.keys(selected).length > 0}
-      discardMessage="Close this panel? The selected model routes have not been enabled yet."
+      dirty={Object.keys(selected).length > 0 || removedIDs.size > 0}
+      discardMessage="Close this panel? The model route changes have not been saved yet."
     >
       <div className="validation-action">
         <div><strong>Provider model catalog</strong><small>Tries healthy API keys first and automatically falls back when one cannot load the catalog.</small></div>
@@ -3290,16 +3319,21 @@ function ModelImportForm({ provider, onClose, onComplete, notify }: { provider: 
           <div><strong>Automatic recovery</strong>{inspection.recovery_steps.map((step) => <small key={step}>{step}</small>)}</div>
         </div>
       )}
-      {inspection?.valid && (
+      {inspection && (inspection.models.length > 0 || provider.models.length > 0) && (
         <ModelCatalog
           provider={provider}
           models={inspection.models}
           existing={provider.models}
+          knownRoutes={knownRoutes}
           selected={selected}
           onChange={setSelected}
+          removedIDs={removedIDs}
+          onRemovedChange={setRemovedIDs}
+          onAutoFixAliases={autoFixAliases}
+          autoFixDisabled={busy || Object.keys(selected).length > 0 || removedIDs.size > 0}
         />
       )}
-      <div className="sheet-actions"><span /><Button disabled={busy || !inspection?.valid} onClick={() => void save()}>{busy ? "Saving…" : `Enable ${Object.keys(selected).length} selected`}</Button></div>
+      <div className="sheet-actions"><span /><Button disabled={busy || !inspection || (Object.keys(selected).length === 0 && removedIDs.size === 0)} onClick={() => void save()}>{busy ? "Saving…" : `Save ${Object.keys(selected).length + removedIDs.size} change${Object.keys(selected).length + removedIDs.size === 1 ? "" : "s"}`}</Button></div>
     </Sheet>
   );
 }
@@ -3308,14 +3342,24 @@ function ModelCatalog({
   provider,
   models,
   existing,
+  knownRoutes = existing,
   selected,
-  onChange
+  onChange,
+  removedIDs,
+  onRemovedChange,
+  onAutoFixAliases,
+  autoFixDisabled = false
 }: {
   provider: Pick<Provider, "slug">;
   models: DiscoveredModel[];
   existing: ModelRoute[];
+  knownRoutes?: ModelRoute[];
   selected: Record<string, string>;
   onChange: (selected: Record<string, string>) => void;
+  removedIDs?: Set<string>;
+  onRemovedChange?: (removed: Set<string>) => void;
+  onAutoFixAliases?: () => Promise<void>;
+  autoFixDisabled?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [manualModel, setManualModel] = useState("");
@@ -3323,15 +3367,19 @@ function ModelCatalog({
   const existingIDs = useMemo(() => new Set(existing.map((model) => model.upstream_model)), [existing]);
   const catalogModels = useMemo(() => {
     const known = new Map(models.map((model) => [model.id, model]));
+    existing.forEach((route) => {
+      if (!known.has(route.upstream_model)) known.set(route.upstream_model, { id: route.upstream_model, owned_by: "No longer in provider catalog" });
+    });
     Object.keys(selected).forEach((id) => { if (!known.has(id)) known.set(id, { id, owned_by: "Manual model ID" }); });
     return [...known.values()];
-  }, [models, selected]);
+  }, [models, existing, selected]);
   const visible = catalogModels.filter((model) => {
     const needle = query.trim().toLowerCase();
     return !needle || model.id.toLowerCase().includes(needle) || model.owned_by?.toLowerCase().includes(needle);
   });
   const selectable = visible.filter((model) => !existingIDs.has(model.id));
   const selectedCount = Object.keys(selected).length;
+  const removedCount = removedIDs?.size ?? 0;
   const selectedVisibleCount = selectable.filter((model) => selected[model.id] !== undefined).length;
   const allVisibleSelected = selectable.length > 0 && selectedVisibleCount === selectable.length;
   const manualNoteID = useId();
@@ -3345,7 +3393,7 @@ function ModelCatalog({
   const toggleVisible = (checked: boolean) => {
     const next = { ...selected };
     for (const model of selectable) {
-      if (checked) next[model.id] = next[model.id] || defaultPublicAlias(provider.slug, model.id, routingMode);
+      if (checked) next[model.id] = next[model.id] || automaticPublicAlias(provider.slug, model.id, routingMode, knownRoutes);
       else delete next[model.id];
     }
     onChange(next);
@@ -3353,11 +3401,17 @@ function ModelCatalog({
   return (
     <section className="model-catalog">
       <header>
-        <div><strong>Select models to route</strong><small>{selectedCount} selected · {existingIDs.size} already routed</small></div>
+        <div><strong>Select models to route</strong><small>{selectedCount} new · {existingIDs.size - removedCount} kept{removedCount ? ` · ${removedCount} will be removed` : ""}</small></div>
         <div className="button-row">
+          {routingMode === "model" && onAutoFixAliases && (
+            <Button type="button" variant="quiet" disabled={autoFixDisabled} onClick={() => void onAutoFixAliases()}><Wrench size={14} aria-hidden="true" /> Auto-fix all aliases</Button>
+          )}
           {selectedCount > 0 && <Button type="button" variant="quiet" onClick={() => onChange({})}>Clear all selected</Button>}
         </div>
       </header>
+      {routingMode === "model" && (
+        <p className="fieldset-note">Similar provider model IDs automatically reuse one public alias. Dated or differently-cased duplicates are consolidated when saved.</p>
+      )}
       <label className="catalog-search">
         <Search size={15} aria-hidden="true" />
         {/* The label wraps only an icon, so the field needs its own name. */}
@@ -3389,30 +3443,39 @@ function ModelCatalog({
         <Button type="button" variant="quiet" disabled={!manualModel.trim() || Boolean(manualModelNote)} onClick={() => {
           const upstream = manualModel.trim();
           if (!upstream) return;
-          onChange({ ...selected, [upstream]: defaultPublicAlias(provider.slug, upstream, routingMode) });
+          onChange({ ...selected, [upstream]: automaticPublicAlias(provider.slug, upstream, routingMode, knownRoutes) });
           setManualModel("");
         }}><Plus size={14} aria-hidden="true" /> Add model ID</Button>
         {manualModelNote && <small className="field-error manual-model-entry__note" id={manualNoteID}>{manualModelNote}</small>}
       </div>
       <div className="model-catalog__list">
         {visible.map((model) => {
-          const alreadyRouted = existingIDs.has(model.id);
-          const checked = alreadyRouted || selected[model.id] !== undefined;
+          const existingRoute = existing.find((route) => route.upstream_model === model.id);
+          const alreadyRouted = Boolean(existingRoute);
+          const removing = Boolean(existingRoute && removedIDs?.has(existingRoute.id));
+          const checked = (alreadyRouted && !removing) || selected[model.id] !== undefined;
           return (
             <div className={`catalog-model ${alreadyRouted ? "is-existing" : ""}`} key={model.id}>
               <label>
                 <input
                   type="checkbox"
                   checked={checked}
-                  disabled={alreadyRouted}
+                  disabled={alreadyRouted && !onRemovedChange}
                   onChange={(event) => {
+                    if (existingRoute && onRemovedChange) {
+                      const next = new Set(removedIDs ?? []);
+                      if (event.target.checked) next.delete(existingRoute.id);
+                      else next.add(existingRoute.id);
+                      onRemovedChange(next);
+                      return;
+                    }
                     const next = { ...selected };
-                    if (event.target.checked) next[model.id] = defaultPublicAlias(provider.slug, model.id, routingMode);
+                    if (event.target.checked) next[model.id] = automaticPublicAlias(provider.slug, model.id, routingMode, knownRoutes);
                     else delete next[model.id];
                     onChange(next);
                   }}
                 />
-                <span><code>{model.id}</code><small>{alreadyRouted ? "Already routed" : model.owned_by || "Provider model"}</small></span>
+                <span><code>{model.id}</code><small>{removing ? "Will be removed" : alreadyRouted ? (model.owned_by === "No longer in provider catalog" ? "Routed · missing from current catalog" : "Already routed") : model.owned_by || "Provider model"}</small></span>
               </label>
               {!alreadyRouted && selected[model.id] !== undefined && (
                 <label className="catalog-alias">

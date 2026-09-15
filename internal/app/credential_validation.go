@@ -566,27 +566,33 @@ func (s *Server) handleDiscoverModels(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateModelsBulk(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Models []modelInput `json:"models"`
+		Models    []modelInput `json:"models"`
+		RemoveIDs []string     `json:"remove_ids"`
 	}
 	if decodeJSON(w, r, 1<<20, &input) != nil {
 		return
 	}
-	if len(input.Models) == 0 || len(input.Models) > 500 {
-		writeError(w, http.StatusBadRequest, "invalid_models", "Select between 1 and 500 models.")
+	if (len(input.Models) == 0 && len(input.RemoveIDs) == 0) || len(input.Models) > 500 || len(input.RemoveIDs) > 500 {
+		writeError(w, http.StatusBadRequest, "invalid_models", "Select or remove between 1 and 500 models.")
 		return
 	}
-	aliases := map[string]bool{}
+	var routingMode string
+	if err := s.db.QueryRow(r.Context(), `SELECT routing_mode FROM app_settings WHERE id=1`).Scan(&routingMode); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "Routing mode could not be loaded.")
+		return
+	}
 	for index := range input.Models {
 		if err := validateModelInput(&input.Models[index]); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_model", err.Error())
 			return
 		}
-		if aliases[input.Models[index].PublicAlias] {
-			writeError(w, http.StatusBadRequest, "duplicate_model_alias", "Every selected model needs a unique public alias.")
-			return
-		}
-		aliases[input.Models[index].PublicAlias] = true
 	}
+	models, consolidated, err := consolidateBulkModels(input.Models, routingMode)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "duplicate_model_alias", err.Error()+". Give those models different public aliases.")
+		return
+	}
+	input.Models = models
 	provider, err := scanProvider(s.db.QueryRow(r.Context(), `SELECT `+providerColumns+` FROM providers WHERE id=$1`, r.PathValue("id")))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "provider_not_found", "Provider was not found.")
@@ -632,29 +638,59 @@ func (s *Server) handleCreateModelsBulk(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusNotFound, "provider_not_found", "Provider was not found.")
 		return
 	}
-	rows, err := tx.Query(r.Context(), `SELECT upstream_model FROM model_routes WHERE provider_id=$1`, r.PathValue("id"))
+	rows, err := tx.Query(r.Context(), `SELECT id, upstream_model, public_alias FROM model_routes WHERE provider_id=$1`, r.PathValue("id"))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "model_create_failed", "Existing models could not be checked.")
 		return
 	}
 	existing := map[string]bool{}
+	existingAliases := map[string]string{}
+	removing := make(map[string]bool, len(input.RemoveIDs))
+	for _, id := range input.RemoveIDs {
+		removing[id] = true
+	}
 	for rows.Next() {
-		var upstream string
-		if err := rows.Scan(&upstream); err != nil {
+		var id, upstream, alias string
+		if err := rows.Scan(&id, &upstream, &alias); err != nil {
 			rows.Close()
 			writeError(w, http.StatusInternalServerError, "model_create_failed", "Existing models could not be checked.")
 			return
 		}
+		if removing[id] {
+			continue
+		}
 		existing[upstream] = true
+		existingAliases[alias] = upstream
 	}
 	rows.Close()
 
 	created := 0
-	skipped := 0
+	skipped := consolidated
+	removed := int64(0)
+	if len(input.RemoveIDs) > 0 {
+		if _, err := tx.Exec(r.Context(), `DELETE FROM rate_policies WHERE scope_key=ANY($1)`, input.RemoveIDs); err != nil {
+			writeError(w, http.StatusInternalServerError, "model_delete_failed", "Selected model limits could not be removed.")
+			return
+		}
+		result, err := tx.Exec(r.Context(), `DELETE FROM model_routes WHERE provider_id=$1 AND id=ANY($2)`, r.PathValue("id"), input.RemoveIDs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "model_delete_failed", "Selected model routes could not be removed.")
+			return
+		}
+		removed = result.RowsAffected()
+	}
 	for _, model := range input.Models {
 		if existing[model.UpstreamModel] {
 			skipped++
 			continue
+		}
+		if upstream, found := existingAliases[model.PublicAlias]; found {
+			if routingMode == routingModeModel && modelFamilyKey(upstream) == modelFamilyKey(model.UpstreamModel) {
+				skipped++
+				continue
+			}
+			writeError(w, http.StatusConflict, "model_conflict", fmt.Sprintf("Public alias %q already points to another model on this provider.", model.PublicAlias))
+			return
 		}
 		id, _ := newID("mdl")
 		capability := capabilities[model.UpstreamModel]
@@ -673,6 +709,7 @@ func (s *Server) handleCreateModelsBulk(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		existing[model.UpstreamModel] = true
+		existingAliases[model.PublicAlias] = model.UpstreamModel
 		created++
 	}
 	if err := tx.Commit(r.Context()); err != nil {
@@ -680,9 +717,9 @@ func (s *Server) handleCreateModelsBulk(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.audit(r.Context(), adminIDFromContext(r.Context()), "model.bulk_create", "provider", r.PathValue("id"), map[string]any{
-		"created": created, "skipped": skipped,
+		"created": created, "skipped": skipped, "removed": removed,
 	})
-	writeJSON(w, http.StatusCreated, map[string]any{"created": created, "skipped": skipped})
+	writeJSON(w, http.StatusCreated, map[string]any{"created": created, "skipped": skipped, "removed": removed})
 }
 
 func (s *Server) recordCredentialInspection(ctx context.Context, credentialID string, inspection credentialInspection) {

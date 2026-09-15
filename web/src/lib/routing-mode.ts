@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { type RoutingMode, type Settings } from "../types";
+import { type ModelRoute, type RoutingMode, type Settings } from "../types";
 
 // The routing mode decides whether a new public alias carries the provider slug,
 // so it is fetched once and shared by every form that proposes an alias. The
@@ -49,6 +49,35 @@ export function defaultPublicAlias(providerSlug: string, upstreamModel: string, 
     : `${providerSlug}/${upstreamModel}`;
   const safe = raw.replace(/[^A-Za-z0-9._:/-]+/g, "-").replace(/^-+|-+$/g, "");
   return safe.slice(0, 128);
+}
+
+// Providers often publish the same model with different casing, namespaces, or
+// a dated deployment suffix (for example DeepSeek-V4-Flash and
+// deepseek-v4-flash-0731). Model-wise routing should put those routes in one
+// pool. Modality words stay in the key, so a vision or embedding model is never
+// folded into its text-only relative merely because the brand/version matches.
+export function modelFamilyKey(modelID: string) {
+  const segments = modelID.trim().toLowerCase().split("/").filter(Boolean);
+  let value = segments.at(-1) ?? "model";
+  value = value
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-(?:19|20)\d{2}(?:-?\d{2}){1,2}$/g, "")
+    .replace(/-(?:0?[1-9]|1[0-2])(?:0?[1-9]|[12]\d|3[01])$/g, "")
+    .replace(/-(?:latest|stable)$/g, "")
+    .replace(/^-+|-+$/g, "");
+  return value || "model";
+}
+
+export function automaticPublicAlias(
+  providerSlug: string,
+  upstreamModel: string,
+  mode: RoutingMode,
+  knownRoutes: Pick<ModelRoute, "public_alias" | "upstream_model">[] = []
+) {
+  if (mode === "provider") return defaultPublicAlias(providerSlug, upstreamModel, mode);
+  const family = modelFamilyKey(upstreamModel);
+  const existing = knownRoutes.find((route) => modelFamilyKey(route.upstream_model) === family);
+  return existing?.public_alias || family;
 }
 
 export function providerSlugForUI(name: string) {
