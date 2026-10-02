@@ -51,6 +51,7 @@ const modes: Array<{ id: Policy["mode"]; title: string; description: string; ico
 const toolLabels: Record<string, { title: string; description: string }> = {
   set_parameter: { title: "Adjust request values", description: "Correct token limits and supported generation values." },
   remove_parameter: { title: "Remove unsupported options", description: "Drop optional settings rejected by a provider." },
+  compact_context: { title: "Fit long conversations", description: "Remove the oldest turns when a provider proves the request exceeds its context window." },
   switch_endpoint: { title: "Switch API endpoint", description: "Move between Chat and Responses when required." },
   set_timeout: { title: "Adjust provider timeout", description: "Save a tested timeout after a successful response." },
   reset_cooldown: { title: "Clear a key cooldown", description: "Only after the key passes validation." },
@@ -262,6 +263,7 @@ function actionText(attempt: RepairAttempt) {
   if (!action || action === "none") return "No safe change was suggested";
   if (action === "set_parameter") return `Changed ${attempt.proposal.parameter ?? "a request value"} from ${JSON.stringify(attempt.before)} to ${JSON.stringify(attempt.proposal.value)}`;
   if (action === "remove_parameter") return `Removed unsupported ${attempt.proposal.parameter ?? "request option"}`;
+  if (action === "compact_context") return `Removed the oldest turns to fit ${JSON.stringify(attempt.proposal.value)} input tokens`;
   return toolLabels[action]?.title ?? action.replaceAll("_", " ");
 }
 

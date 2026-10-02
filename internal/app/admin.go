@@ -62,6 +62,7 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/admin/providers/{id}/credentials/inspect", admin(s.handleInspectProviderCredential))
 	mux.Handle("POST /api/admin/providers/{id}/credentials/delete-unusable", admin(s.handleDeleteUnusableCredentials))
 	mux.Handle("PUT /api/admin/credentials/{id}", admin(s.handleUpdateCredential))
+	mux.Handle("PUT /api/admin/credentials/{id}/enabled", admin(s.handleSetCredentialEnabled))
 	mux.Handle("DELETE /api/admin/credentials/{id}", admin(s.handleDeleteCredential))
 	mux.Handle("PUT /api/admin/credentials/{id}/model-limits/{model_id}", admin(s.handleModelLimits))
 	mux.Handle("DELETE /api/admin/credentials/{id}/model-limits/{model_id}", admin(s.handleDeleteModelLimits))
@@ -251,6 +252,10 @@ type providerInput struct {
 	// provider, which is how an operator records a top-up across a whole account
 	// at once. It is off by default so an unrelated edit cannot reset spend.
 	ApplyBalanceToExistingKeys bool `json:"apply_balance_to_existing_keys,omitempty"`
+	// ExistingKeyLimits can be copied to every saved key from the provider editor.
+	// The explicit flag keeps an ordinary provider edit from rewriting key policy.
+	ExistingKeyLimits         RatePolicy `json:"existing_key_limits,omitempty"`
+	ApplyLimitsToExistingKeys bool       `json:"apply_limits_to_existing_keys,omitempty"`
 }
 
 func validateProviderInput(input *providerInput) error {
@@ -313,6 +318,9 @@ func validateProviderInput(input *providerInput) error {
 	if input.ApplyBalanceToExistingKeys &&
 		(input.DefaultKeyBalanceUSD == nil || *input.DefaultKeyBalanceUSD <= 0) {
 		return fmt.Errorf("set a per-key balance above zero before applying it to existing keys")
+	}
+	if input.ApplyLimitsToExistingKeys && !input.ExistingKeyLimits.Valid() {
+		return fmt.Errorf("shared API key rate limits are invalid")
 	}
 	for key, value := range input.ExtraHeaders {
 		canonical := http.CanonicalHeaderKey(key)
@@ -565,6 +573,34 @@ func (s *Server) handleUpdateProvider(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "credential_update_failed",
 				"The pooled spend could not be reset, so nothing was changed.")
 			return
+		}
+	}
+	if input.ApplyLimitsToExistingKeys {
+		rows, err := tx.Query(r.Context(), `SELECT id FROM credentials WHERE provider_id=$1`, r.PathValue("id"))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "credential_update_failed", "API keys could not be loaded, so nothing was changed.")
+			return
+		}
+		credentialIDs := []string{}
+		for rows.Next() {
+			var credentialID string
+			if err := rows.Scan(&credentialID); err != nil {
+				rows.Close()
+				writeError(w, http.StatusInternalServerError, "credential_update_failed", "API keys could not be loaded, so nothing was changed.")
+				return
+			}
+			credentialIDs = append(credentialIDs, credentialID)
+		}
+		rows.Close()
+		if rows.Err() != nil {
+			writeError(w, http.StatusInternalServerError, "credential_update_failed", "API keys could not be loaded, so nothing was changed.")
+			return
+		}
+		for _, credentialID := range credentialIDs {
+			if err := upsertPolicy(r.Context(), tx, credentialID, "*", input.ExistingKeyLimits); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_limits", "Rate limits could not be applied to every API key, so nothing was changed.")
+				return
+			}
 		}
 	}
 	if err := tx.Commit(r.Context()); err != nil {
@@ -1269,11 +1305,49 @@ func (s *Server) handleUpdateCredential(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "credential_update_failed", "Credential could not be updated.")
 		return
 	}
-	_ = s.redis.Del(r.Context(), "cooldown:"+r.PathValue("id")).Err()
+	if s.redis != nil {
+		_ = s.redis.Del(r.Context(), "cooldown:"+r.PathValue("id")).Err()
+	}
 	s.audit(r.Context(), adminIDFromContext(r.Context()), "credential.update", "credential", r.PathValue("id"), map[string]any{"label": input.Label})
 	// The warning is returned so the console can say the record was saved but the
 	// key could not be confirmed, which is a different outcome from a clean save.
 	writeJSON(w, http.StatusOK, map[string]any{"models": inspection.Models, "warning": inspectionWarning})
+}
+
+// handleSetCredentialEnabled is the fast path used by the switch beside each
+// key. Explicit operator state changes must not depend on a provider catalog
+// being reachable; validation remains available as a separate action.
+func (s *Server) handleSetCredentialEnabled(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if decodeJSON(w, r, 8<<10, &input) != nil {
+		return
+	}
+	if input.Enabled == nil {
+		writeError(w, http.StatusBadRequest, "invalid_credential_state", "Choose whether the API key is enabled.")
+		return
+	}
+	status := "disabled"
+	if *input.Enabled {
+		status = "healthy"
+	}
+	var label string
+	err := s.db.QueryRow(r.Context(), `
+		UPDATE credentials
+		SET enabled=$2, status=$3, cooldown_until=NULL, consecutive_failures=0,
+		    validation_error='', updated_at=NOW()
+		WHERE id=$1 RETURNING label
+	`, r.PathValue("id"), *input.Enabled, status).Scan(&label)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "credential_not_found", "Credential was not found.")
+		return
+	}
+	if s.redis != nil {
+		_ = s.redis.Del(r.Context(), "cooldown:"+r.PathValue("id")).Err()
+	}
+	s.audit(r.Context(), adminIDFromContext(r.Context()), "credential.enabled", "credential", r.PathValue("id"), map[string]any{"enabled": *input.Enabled})
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": *input.Enabled, "status": status, "label": label})
 }
 
 func (s *Server) handleDeleteCredential(w http.ResponseWriter, r *http.Request) {

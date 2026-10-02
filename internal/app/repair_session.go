@@ -73,6 +73,7 @@ func (rs *repairSession) prepare(route routeRuntime, plan upstreamPlan) upstream
 		}
 	}
 	payload := cloneMap(plan.Payload)
+	contextCompacted := false
 	proposals := append([]RepairProposal{}, rs.server.learnedRepairs(rs.ctx, route, plan.wireEndpoint())...)
 	proposals = append(proposals, rs.proposals[route.Model.ID+":"+plan.wireEndpoint()]...)
 	for _, p := range proposals {
@@ -81,11 +82,16 @@ func (rs *repairSession) prepare(route routeRuntime, plan upstreamPlan) upstream
 			continue
 		}
 		if rs.policy.permits(p.Action) && validateRepairProposal(p, payload) == nil {
-			plan.Recovered = applyRepairProposal(payload, p) || plan.Recovered
+			changed := applyRepairProposal(payload, p)
+			plan.Recovered = changed || plan.Recovered
+			contextCompacted = contextCompacted || (changed && p.Action == "compact_context")
 		}
 	}
 	plan.Payload = payload
 	plan.Encoded, _ = json.Marshal(payload)
+	if contextCompacted {
+		plan.InputEstimate = estimateInputTokens(plan.Encoded, route.Model.Tokenizer)
+	}
 	plan.TokenCost = plan.InputEstimate + currentOutputCap(payload, plan.Format, plan.wireEndpoint())
 	return plan
 }
@@ -206,6 +212,9 @@ func (rs *repairSession) handle(ctx context.Context, candidate *routeCandidate, 
 		return false
 	}
 	proposal, known := tokenConstraintRepair(incident.Error, plan.Payload)
+	if !known {
+		proposal, known = contextConstraintRepair(incident.Error, plan.Payload, route)
+	}
 	entry := RepairAttempt{Status: "proposed"}
 	if !known {
 		remaining := time.Duration(rs.policy.DiagnosisSeconds)*time.Second - rs.diagnosisTime
@@ -277,7 +286,7 @@ func (rs *repairSession) handle(ctx context.Context, candidate *routeCandidate, 
 func (rs *repairSession) execute(ctx context.Context, candidate *routeCandidate, plan upstreamPlan, p RepairProposal, clients *clientCache) (string, string) {
 	key := candidate.Route.Model.ID + ":" + plan.wireEndpoint()
 	switch p.Action {
-	case "set_parameter", "remove_parameter":
+	case "set_parameter", "remove_parameter", "compact_context":
 		payload := cloneMap(plan.Payload)
 		if !applyRepairProposal(payload, p) {
 			return "rejected", "Proposal does not change the request"

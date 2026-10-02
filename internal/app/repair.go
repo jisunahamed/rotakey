@@ -28,7 +28,8 @@ type RepairPolicy struct {
 	Version          int64    `json:"version"`
 }
 
-var repairTools = []string{"set_parameter", "remove_parameter", "switch_endpoint", "set_timeout", "reset_cooldown", "refresh_connection", "select_credential", "validate_credential", "set_route_enabled"}
+var repairTools = []string{"set_parameter", "remove_parameter", "compact_context", "switch_endpoint", "set_timeout", "reset_cooldown", "refresh_connection", "select_credential", "validate_credential", "set_route_enabled"}
+var autoRepairTools = []string{"set_parameter", "remove_parameter", "compact_context", "switch_endpoint"}
 
 func defaultRepairPolicy() RepairPolicy {
 	return RepairPolicy{Mode: "observe", Permissions: []string{}, RouteIDs: []string{}, DailyTokens: 100000, DiagnosisSeconds: 10, OutputTokens: 2048}
@@ -38,7 +39,7 @@ func (p RepairPolicy) permits(action string) bool {
 	if !p.Enabled || p.Mode == "observe" || !slices.Contains(repairTools, action) {
 		return false
 	}
-	return p.Mode == "full" || (p.Mode == "auto" && slices.Contains(repairTools[:3], action)) || (p.Mode == "custom" && slices.Contains(p.Permissions, action))
+	return p.Mode == "full" || (p.Mode == "auto" && slices.Contains(autoRepairTools, action)) || (p.Mode == "custom" && slices.Contains(p.Permissions, action))
 }
 
 func (p RepairPolicy) validate() error {
@@ -95,7 +96,7 @@ func repairCategory(status int) string {
 		return "credential_failure"
 	case status == 429:
 		return "rate_limit"
-	case status == 400 || status == 422:
+	case status == 400 || status == 413 || status == 422:
 		return "request_incompatibility"
 	case status == 0 || status >= 500:
 		return "provider_outage"
@@ -247,6 +248,16 @@ func validateRepairProposal(p RepairProposal, payload map[string]any) error {
 		if !slices.Contains([]string{"temperature", "top_p", "frequency_penalty", "presence_penalty", "seed"}, p.Parameter) {
 			return errors.New("Parameter cannot be removed by repair")
 		}
+	case "compact_context":
+		var target int64
+		if json.Unmarshal(p.Value, &target) != nil || target < 256 || target > 1_000_000 {
+			return errors.New("Context target outside repair bounds")
+		}
+		if _, messages := payload["messages"].([]any); !messages {
+			if _, input := payload["input"].([]any); !input {
+				return errors.New("Request has no safely compactable conversation")
+			}
+		}
 	case "switch_endpoint":
 		var endpoint string
 		if json.Unmarshal(p.Value, &endpoint) != nil || !slices.Contains([]string{"chat", "responses"}, endpoint) {
@@ -285,11 +296,60 @@ func applyRepairProposal(payload map[string]any, p RepairProposal) bool {
 		payload[p.Parameter] = value
 	case "remove_parameter":
 		delete(payload, p.Parameter)
+	case "compact_context":
+		var target int64
+		if json.Unmarshal(p.Value, &target) != nil || !compactConversation(payload, target) {
+			return false
+		}
 	default:
 		return false
 	}
 	after, _ := json.Marshal(payload)
 	return string(before) != string(after)
+}
+
+// compactConversation drops only the oldest conversation turns. Instructions,
+// tools, images and output schemas live elsewhere in the request and remain
+// byte-for-byte intact; leading system/developer messages and the newest turn
+// are also retained.
+func compactConversation(payload map[string]any, target int64) bool {
+	field := "messages"
+	items, ok := payload[field].([]any)
+	if !ok {
+		field = "input"
+		items, ok = payload[field].([]any)
+	}
+	if !ok || len(items) < 2 || estimateInputTokens(mustJSON(payload), "heuristic") <= target {
+		return false
+	}
+	prefix := 0
+	for prefix < len(items)-1 {
+		item, object := items[prefix].(map[string]any)
+		role, _ := item["role"].(string)
+		if !object || (role != "system" && role != "developer") {
+			break
+		}
+		prefix++
+	}
+	for cut := prefix + 1; cut < len(items); cut++ {
+		// A tool result without its preceding assistant tool call is invalid. Skip
+		// over orphaned results and begin at the next ordinary turn.
+		for cut < len(items)-1 {
+			item, _ := items[cut].(map[string]any)
+			role, _ := item["role"].(string)
+			if role != "tool" {
+				break
+			}
+			cut++
+		}
+		candidate := append(append([]any{}, items[:prefix]...), items[cut:]...)
+		payload[field] = candidate
+		if estimateInputTokens(mustJSON(payload), "heuristic") <= target {
+			return true
+		}
+	}
+	payload[field] = items
+	return false
 }
 
 var tokenConstraintPattern = regexp.MustCompile(`(?i)\b(max_tokens|max_completion_tokens|max_output_tokens)\b.{0,35}?(greater than or equal to|greater than|at least|less than or equal to|less than|at most|>=|<=)\s*([0-9]+)\b`)
@@ -316,6 +376,34 @@ func tokenConstraintRepair(message string, payload map[string]any) (RepairPropos
 		return RepairProposal{}, false
 	}
 	p := RepairProposal{Diagnosis: "Provider rejected the output token bound.", Action: "set_parameter", Parameter: m[1], Value: json.RawMessage(strconv.FormatInt(n, 10)), ExpectedResult: "Provider accepts the output token cap."}
+	return p, validateRepairProposal(p, payload) == nil
+}
+
+var contextLimitPattern = regexp.MustCompile(`(?i)(?:maximum context length|context window|context length|max(?:imum)? input tokens)[^0-9]{0,48}([0-9][0-9,]*)`)
+
+func contextConstraintRepair(message string, payload map[string]any, route routeRuntime) (RepairProposal, bool) {
+	lower := strings.ToLower(message)
+	if !(strings.Contains(lower, "context") || strings.Contains(lower, "input token")) ||
+		!(strings.Contains(lower, "exceed") || strings.Contains(lower, "too long") || strings.Contains(lower, "maximum") || strings.Contains(lower, "limit")) {
+		return RepairProposal{}, false
+	}
+	limit := int64(0)
+	if match := contextLimitPattern.FindStringSubmatch(message); len(match) > 1 {
+		limit, _ = strconv.ParseInt(strings.ReplaceAll(match[1], ",", ""), 10, 64)
+	}
+	if limit == 0 {
+		limit, _ = strconv.ParseInt(route.Model.CapabilityProfile["context_window"], 10, 64)
+	}
+	if limit < 512 || limit > 1_000_000 {
+		return RepairProposal{}, false
+	}
+	output := max(numberAsInt64(payload["max_tokens"]), numberAsInt64(payload["max_completion_tokens"]), numberAsInt64(payload["max_output_tokens"]))
+	reserve := max(int64(1024), limit/20)
+	target := limit - output - reserve
+	if target < 256 {
+		return RepairProposal{}, false
+	}
+	p := RepairProposal{Diagnosis: "The conversation exceeds the provider's context window.", Action: "compact_context", Value: json.RawMessage(strconv.FormatInt(target, 10)), ExpectedResult: "The oldest conversation turns are removed and the preserved request fits the context window."}
 	return p, validateRepairProposal(p, payload) == nil
 }
 

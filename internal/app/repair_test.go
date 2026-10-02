@@ -48,6 +48,37 @@ func TestRepairTokenConstraints(t *testing.T) {
 	}
 }
 
+func TestContextConstraintCompactsOldTurnsAndPreservesContract(t *testing.T) {
+	payload := map[string]any{
+		"messages": []any{
+			map[string]any{"role": "system", "content": "keep-system"},
+			map[string]any{"role": "user", "content": strings.Repeat("old ", 2500)},
+			map[string]any{"role": "assistant", "content": strings.Repeat("old answer ", 1500)},
+			map[string]any{"role": "user", "content": "keep-latest"},
+		},
+		"tools":           []any{map[string]any{"name": "keep-tool"}},
+		"response_format": map[string]any{"type": "json_schema", "name": "keep-schema"},
+		"max_tokens":      512,
+	}
+	route := routeRuntime{Model: ModelRoute{CapabilityProfile: map[string]string{"context_window": "4096"}}}
+	proposal, ok := contextConstraintRepair("maximum context length is 4,096 tokens; input is too long", payload, route)
+	if !ok || proposal.Action != "compact_context" {
+		t.Fatalf("context overflow was not recognised: %+v", proposal)
+	}
+	if !applyRepairProposal(payload, proposal) {
+		t.Fatal("context proposal did not change the request")
+	}
+	raw := string(mustJSON(payload))
+	for _, kept := range []string{"keep-system", "keep-latest", "keep-tool", "keep-schema"} {
+		if !strings.Contains(raw, kept) {
+			t.Fatalf("compaction removed %s", kept)
+		}
+	}
+	if strings.Contains(raw, "old answer") || strings.Contains(raw, strings.Repeat("old ", 100)) {
+		t.Fatal("old conversation turns were not removed")
+	}
+}
+
 func TestRepairPermissionsCannotExpandTools(t *testing.T) {
 	p := defaultRepairPolicy()
 	p.Enabled = true
@@ -60,6 +91,10 @@ func TestRepairPermissionsCannotExpandTools(t *testing.T) {
 	p.Mode = "observe"
 	if p.permits("set_parameter") {
 		t.Fatal("observe mutated")
+	}
+	p.Mode = "auto"
+	if !p.permits("compact_context") || p.permits("set_timeout") {
+		t.Fatal("auto repair context permissions are wrong")
 	}
 	p.Mode = "custom"
 	p.Permissions = []string{"remove_parameter"}

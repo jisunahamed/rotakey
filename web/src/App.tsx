@@ -1439,6 +1439,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
   const [deleting, setDeleting] = useState(false);
   const [query, setQuery] = useState("");
   const [pinningID, setPinningID] = useState("");
+  const [togglingCredentialID, setTogglingCredentialID] = useState("");
   // The panel holds ids, not the records themselves. A snapshot taken when the
   // sheet opened went stale the moment the ten-second reload landed, so an edit
   // could be saved against limits or a label that had already changed upstream.
@@ -1514,6 +1515,26 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
       notify(errorMessage(caught), "danger");
     } finally {
       setPinningID("");
+    }
+  };
+  const setCredentialEnabled = async (credential: Credential) => {
+    const enabled = !credential.enabled;
+    setTogglingCredentialID(credential.id);
+    setProviders((current) => current.map((provider) => ({
+      ...provider,
+      credentials: provider.credentials.map((item) => item.id === credential.id
+        ? { ...item, enabled, status: enabled ? "healthy" : "disabled", cooldown_until: undefined, validation_error: "" }
+        : item)
+    })));
+    try {
+      await api(`/api/admin/credentials/${credential.id}/enabled`, { method: "PUT", json: { enabled } });
+      notify(`${credential.label} ${enabled ? "enabled" : "disabled"}.`);
+      void load();
+    } catch (caught) {
+      notify(errorMessage(caught), "danger");
+      void load();
+    } finally {
+      setTogglingCredentialID("");
     }
   };
 
@@ -1744,24 +1765,34 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                 ) : (
                   <div className="dense-table">
                     {selected.credentials.map((credential) => (
-                      <button
-                        key={credential.id}
-                        className={`dense-row ${credential.validation_error ? "has-warning" : ""}`}
-                        aria-label={`Edit API key ${credential.label}, ${credential.validation_error || statusLabel(credentialPoolState(credential))}`}
-                        onClick={() => setPanel({ type: "credential", providerID: selected.id, credentialID: credential.id })}
-                      >
-                        <StatusDot state={credentialPoolState(credential)} />
-                        <span>
-                          <strong title={credential.label}>{credential.label}</strong>
-                          <small title={credential.validation_error ? credential.validation_error : `${credential.is_primary ? "Primary · " : ""}•••• ${credential.secret_suffix}${credentialBalanceNote(credential)}`}>
-                            {credential.validation_error
-                              ? credential.validation_error
-                              : `${credential.is_primary ? "Primary · " : ""}•••• ${credential.secret_suffix}${credentialBalanceNote(credential)}`}
-                          </small>
-                        </span>
-                        <LimitSummary policy={credential.limits} />
-                        <ChevronRight size={14} aria-hidden="true" />
-                      </button>
+                      <div className="credential-dense-row" key={credential.id}>
+                        <button
+                          className={`dense-row ${credential.validation_error ? "has-warning" : ""}`}
+                          aria-label={`Edit API key ${credential.label}, ${credential.validation_error || statusLabel(credentialPoolState(credential))}`}
+                          onClick={() => setPanel({ type: "credential", providerID: selected.id, credentialID: credential.id })}
+                        >
+                          <StatusDot state={credentialPoolState(credential)} />
+                          <span>
+                            <strong title={credential.label}>{credential.label}</strong>
+                            <small title={credential.validation_error ? credential.validation_error : `${credential.is_primary ? "Primary · " : ""}•••• ${credential.secret_suffix}${credentialBalanceNote(credential)}`}>
+                              {credential.validation_error
+                                ? credential.validation_error
+                                : `${credential.is_primary ? "Primary · " : ""}•••• ${credential.secret_suffix}${credentialBalanceNote(credential)}`}
+                            </small>
+                          </span>
+                          <LimitSummary policy={credential.limits} />
+                          <ChevronRight size={14} aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          className={`credential-power ${credential.enabled ? "is-on" : ""}`}
+                          disabled={togglingCredentialID === credential.id}
+                          aria-pressed={credential.enabled}
+                          aria-label={`${credential.enabled ? "Disable" : "Enable"} API key ${credential.label}`}
+                          title={`${credential.enabled ? "Disable" : "Enable"} this API key`}
+                          onClick={() => void setCredentialEnabled(credential)}
+                        ><Power size={14} aria-hidden="true" /> {credential.enabled ? "On" : "Off"}</button>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -2074,7 +2105,8 @@ function ProviderWizard({ providers, onClose, onComplete }: { providers: Provide
     name: "", base_url: "", auth_header: "Authorization", auth_scheme: "Bearer",
     api_format: "openai", anthropic_version: "2023-06-01",
     timeout_seconds: 120, enabled: true, allow_private_network: false, extra_headers: {},
-    default_key_balance: "", apply_balance_to_existing_keys: false
+    default_key_balance: "", apply_balance_to_existing_keys: false,
+    existing_key_limits: emptyPolicy(), apply_limits_to_existing_keys: false
   });
   const [credentialDrafts, setCredentialDrafts] = useState<CredentialDraft[]>(() => [newCredentialDraft()]);
   const [limits, setLimits] = useState<RatePolicy>(emptyPolicy);
@@ -2311,6 +2343,8 @@ type ProviderDraft = {
    * null, so this is converted at submit time. */
   default_key_balance: string;
   apply_balance_to_existing_keys: boolean;
+  existing_key_limits: RatePolicy;
+  apply_limits_to_existing_keys: boolean;
 };
 
 /** providerPayload converts a draft into the JSON the admin API expects. The
@@ -2322,7 +2356,9 @@ function providerPayload(draft: ProviderDraft) {
   return {
     ...rest,
     default_key_balance_usd: trimmed === "" ? null : Number(trimmed),
-    apply_balance_to_existing_keys: apply_balance_to_existing_keys && trimmed !== ""
+    apply_balance_to_existing_keys: apply_balance_to_existing_keys && trimmed !== "",
+    existing_key_limits: draft.existing_key_limits,
+    apply_limits_to_existing_keys: draft.apply_limits_to_existing_keys
   };
 }
 
@@ -2337,7 +2373,9 @@ function providerDraftFrom(provider: Provider): ProviderDraft {
     timeout_seconds: provider.timeout_seconds, enabled: provider.enabled,
     allow_private_network: provider.allow_private_network, extra_headers: provider.extra_headers,
     default_key_balance: provider.default_key_balance_usd == null ? "" : String(provider.default_key_balance_usd),
-    apply_balance_to_existing_keys: false
+    apply_balance_to_existing_keys: false,
+    existing_key_limits: provider.credentials[0]?.limits ?? emptyPolicy(),
+    apply_limits_to_existing_keys: false
   };
 }
 
@@ -2551,6 +2589,17 @@ function ProviderFields({ value, onChange, existingKeys }: { value: ProviderDraf
           />
         )}
       </fieldset>
+      {existingKeys !== undefined && existingKeys > 0 && <fieldset>
+        <legend>Same rate limits for every API key</legend>
+        <p className="fieldset-note">Set one shared policy, then apply it to all keys already saved under this provider. Individual key limits can still be edited afterward.</p>
+        <RateFields value={value.existing_key_limits} onChange={(existing_key_limits) => onChange({ ...value, existing_key_limits })} />
+        <Toggle
+          checked={value.apply_limits_to_existing_keys}
+          onChange={(apply_limits_to_existing_keys) => onChange({ ...value, apply_limits_to_existing_keys })}
+          label={`Apply these limits to all ${existingKeys} key${existingKeys === 1 ? "" : "s"}`}
+          description="Saving the provider will replace each existing key's shared provider-wide rate limits with these values. Blank fields remove that limit."
+        />
+      </fieldset>}
       <Toggle checked={value.enabled} onChange={(enabled) => onChange({ ...value, enabled })} label="Provider is on" description="A provider that is off is never considered for routing." />
       <Toggle checked={value.allow_private_network} onChange={(allow_private_network) => onChange({ ...value, allow_private_network })} label="Allow private-network target" description="Also permits HTTP. Enable only for a provider you operate on this VPS or LAN." />
     </div>

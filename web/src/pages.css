@@ -601,6 +601,54 @@
   border: 1px solid var(--edge);
 }
 
+.credential-dense-row {
+  position: relative;
+}
+
+.credential-dense-row:not(:last-child) {
+  border-bottom: 1px solid var(--edge);
+}
+
+.credential-dense-row .dense-row {
+  padding-right: calc(var(--space-12) + var(--space-11));
+  border-bottom: 0;
+}
+
+.credential-power {
+  position: absolute;
+  top: 50%;
+  right: var(--space-5);
+  display: inline-flex;
+  min-width: 64px;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--radius-fitting);
+  transform: translateY(-50%);
+  cursor: pointer;
+}
+
+.credential-power:hover,
+.credential-power:focus-visible {
+  color: var(--text-strong);
+  border-color: var(--iris);
+}
+
+.credential-power.is-on {
+  color: var(--live);
+  border-color: color-mix(in srgb, var(--live) 55%, var(--edge));
+}
+
+.credential-power:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
 .dense-row {
   display: grid;
   width: 100%;
