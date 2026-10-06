@@ -53,7 +53,11 @@ jobs:
           npm ci
           npm run typecheck
           npm run build
-          npm audit --audit-level=high
+          # Production deploys must fail on runtime vulnerabilities. The full
+          # dev-tool audit remains in the scheduled security workflow, where
+          # newly disclosed lint/build-tool advisories can be reviewed without
+          # blocking an otherwise safe production image.
+          npm audit --omit=dev --audit-level=high
       - name: Compose validation
         env:
           POSTGRES_PASSWORD: ci-only-password
