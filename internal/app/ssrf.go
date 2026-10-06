@@ -55,7 +55,10 @@ func safeTransport(allowPrivate bool) *http.Transport {
 	base.MaxIdleConnsPerHost = 20
 	base.IdleConnTimeout = 90 * time.Second
 	base.TLSHandshakeTimeout = 10 * time.Second
-	base.ResponseHeaderTimeout = 60 * time.Second
+	// The request context/provider timeout is the deadline authority. A fixed
+	// transport-level header timeout used to abort slow reasoning models at
+	// almost exactly 60 seconds even when the provider completed successfully.
+	base.ResponseHeaderTimeout = 0
 	base.ExpectContinueTimeout = time.Second
 
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
