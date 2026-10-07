@@ -153,10 +153,10 @@ func TestTranslateClaudeCodeHistoryRolesToChat(t *testing.T) {
 		t.Fatalf("Claude Code history translation failed: %v", err)
 	}
 	messages, _ := chat["messages"].([]any)
-	if len(messages) != 4 {
+	if len(messages) != 5 {
 		t.Fatalf("translated history = %#v", chat)
 	}
-	for index, want := range []string{"system", "assistant", "tool", "user"} {
+	for index, want := range []string{"system", "assistant", "tool", "user", "user"} {
 		message, _ := messages[index].(map[string]any)
 		if message["role"] != want {
 			t.Fatalf("message %d = %#v, want role %q", index, message, want)
@@ -166,9 +166,14 @@ func TestTranslateClaudeCodeHistoryRolesToChat(t *testing.T) {
 	if tool["tool_call_id"] != "call_1" {
 		t.Fatalf("tool message = %#v", tool)
 	}
-	content, _ := tool["content"].([]any)
-	if len(content) != 2 {
+	if tool["content"] != "Done" {
 		t.Fatalf("tool content = %#v", tool)
+	}
+	vision := messages[3].(map[string]any)
+	parts := vision["content"].([]any)
+	image := parts[0].(map[string]any)
+	if image["type"] != "image_url" || image["image_url"].(map[string]any)["url"] != "https://example.com/result.png" {
+		t.Fatalf("vision message = %#v", vision)
 	}
 }
 
@@ -207,6 +212,35 @@ func TestTranslateAnthropicTextBlocksUseStrictChatContent(t *testing.T) {
 	message := chat["messages"].([]any)[0].(map[string]any)
 	if message["content"] != "first\nsecond" {
 		t.Fatalf("text history content = %#v", message["content"])
+	}
+}
+
+func TestTranslateToolResultImageToCleanAPIVisionShape(t *testing.T) {
+	chat, _, err := translateAnthropicRequestToChat(map[string]any{"messages": []any{
+		map[string]any{"role": "assistant", "content": []any{map[string]any{
+			"type": "tool_use", "id": "tool_1", "name": "screenshot", "input": map[string]any{},
+		}}},
+		map[string]any{"role": "user", "content": []any{map[string]any{
+			"type": "tool_result", "tool_use_id": "tool_1", "content": []any{
+				map[string]any{"type": "text", "text": "captured"},
+				map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": "image/png", "data": "AAA"}},
+			},
+		}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := chat["messages"].([]any)
+	tool := messages[1].(map[string]any)
+	if tool["role"] != "tool" || tool["content"] != "captured" {
+		t.Fatalf("strict tool message = %#v", tool)
+	}
+	vision := messages[2].(map[string]any)
+	parts := vision["content"].([]any)
+	image := parts[0].(map[string]any)
+	url := image["image_url"].(map[string]any)["url"]
+	if vision["role"] != "user" || image["type"] != "image_url" || url != "data:image/png;base64,AAA" {
+		t.Fatalf("CleanAPIs vision message = %#v", vision)
 	}
 }
 

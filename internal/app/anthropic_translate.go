@@ -64,13 +64,16 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, []s
 			messages = append(messages, map[string]any{"role": "system", "content": content})
 			continue
 		case "tool":
-			content, lost := anthropicContentToChat(message["content"])
+			content, images, lost := anthropicToolResultToChat(message["content"])
 			dropped = appendUniqueStrings(dropped, lost...)
 			toolCallID, _ := message["tool_call_id"].(string)
 			if toolCallID == "" {
 				toolCallID, _ = message["tool_use_id"].(string)
 			}
 			messages = append(messages, map[string]any{"role": "tool", "tool_call_id": toolCallID, "content": content})
+			if len(images) > 0 {
+				messages = append(messages, map[string]any{"role": "user", "content": images})
+			}
 			continue
 		case "user", "assistant":
 		default:
@@ -91,6 +94,7 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, []s
 		parts := make([]any, 0)
 		toolCalls := make([]any, 0)
 		toolResults := make([]any, 0)
+		toolResultImages := make([]any, 0)
 		for _, rawBlock := range blocks {
 			block, ok := rawBlock.(map[string]any)
 			if !ok {
@@ -118,11 +122,12 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, []s
 					"function": map[string]any{"name": block["name"], "arguments": string(encoded)},
 				})
 			case "tool_result":
-				content, lost := anthropicContentToChat(block["content"])
+				content, images, lost := anthropicToolResultToChat(block["content"])
 				dropped = appendUniqueStrings(dropped, lost...)
 				toolResults = append(toolResults, map[string]any{
 					"role": "tool", "tool_call_id": block["tool_use_id"], "content": content,
 				})
+				toolResultImages = append(toolResultImages, images...)
 			case "thinking", "redacted_thinking":
 				// OpenAI chat has no equivalent history block. It is safe to omit
 				// this prior reasoning while preserving the assistant's visible output.
@@ -135,6 +140,15 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, []s
 				}
 				dropped = appendUniqueStrings(dropped, fmt.Sprint(block["type"]))
 			}
+		}
+		// In Anthropic history, tool results arrive inside a user turn. OpenAI
+		// requires the matching tool messages immediately after the assistant's
+		// tool calls. Keep any accompanying user text/images after those results.
+		if role == "user" && len(toolResults) > 0 {
+			messages = append(messages, toolResults...)
+			toolResults = nil
+			parts = append(parts, toolResultImages...)
+			toolResultImages = nil
 		}
 		if len(parts) > 0 || len(toolCalls) > 0 {
 			// Content is optional for an assistant turn that only calls tools.
@@ -162,6 +176,9 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, []s
 			messages = append(messages, entry)
 		}
 		messages = append(messages, toolResults...)
+		if len(toolResultImages) > 0 {
+			messages = append(messages, map[string]any{"role": "user", "content": toolResultImages})
+		}
 	}
 	chat["messages"] = messages
 	if tools, ok := source["tools"].([]any); ok {
@@ -214,6 +231,48 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, []s
 		delete(chat, "tool_choice")
 	}
 	return chat, dropped, nil
+}
+
+// anthropicToolResultToChat keeps tool content valid on strict Chat
+// Completions providers. Tool messages carry plain text; vision parts belong
+// to a user message and use CleanAPIs' documented image_url shape.
+func anthropicToolResultToChat(raw any) (string, []any, []string) {
+	if text, ok := raw.(string); ok {
+		return text, nil, nil
+	}
+	blocks, ok := raw.([]any)
+	if !ok {
+		return anthropicText(raw), nil, []string{"tool result content"}
+	}
+	texts := make([]string, 0)
+	images := make([]any, 0)
+	dropped := make([]string, 0)
+	for _, rawBlock := range blocks {
+		block, ok := rawBlock.(map[string]any)
+		if !ok {
+			dropped = appendUniqueStrings(dropped, "tool result block")
+			continue
+		}
+		switch block["type"] {
+		case "text":
+			if text, ok := block["text"].(string); ok && text != "" {
+				texts = append(texts, text)
+			}
+		case "image":
+			image, ok := anthropicImageToChat(block)
+			if ok {
+				images = append(images, image)
+			} else {
+				dropped = appendUniqueStrings(dropped, "image source")
+			}
+		default:
+			if text := anthropicText(block); text != "" {
+				texts = append(texts, text)
+			}
+			dropped = appendUniqueStrings(dropped, fmt.Sprint(block["type"]))
+		}
+	}
+	return strings.Join(texts, "\n"), images, dropped
 }
 
 func chatTextParts(parts []any) (string, bool) {
