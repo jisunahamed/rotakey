@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +14,38 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestAcceptedUpstreamFallbackStaysSuccessful(t *testing.T) {
+	for _, test := range []struct {
+		name, mode string
+		stream     bool
+	}{
+		{"anthropic json", messageModeAnthropic, false},
+		{"chat json", messageModeChat, false},
+		{"responses json", messageModeResponses, false},
+		{"anthropic stream", messageModeAnthropic, true},
+		{"chat stream", messageModeChat, true},
+		{"responses stream", messageModeResponses, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			body := writeAcceptedEmptyResponse(recorder, dispatchRequest{PublicMode: test.mode, Alias: "public-model", Stream: test.stream})
+			if recorder.Code != http.StatusOK || recorder.Header().Get("X-Rotakey-Upstream-Accepted") != "true" {
+				t.Fatalf("status/header = %d/%q", recorder.Code, recorder.Header().Get("X-Rotakey-Upstream-Accepted"))
+			}
+			if test.stream {
+				if recorder.Header().Get("Content-Type") != "text/event-stream" || len(body) == 0 {
+					t.Fatalf("invalid stream fallback: %q", body)
+				}
+				return
+			}
+			var payload map[string]any
+			if json.Unmarshal(body, &payload) != nil || len(payload) == 0 {
+				t.Fatalf("invalid JSON fallback: %q", body)
+			}
+		})
+	}
+}
 
 // responsesAnswer is a minimal successful reply from the Responses endpoint. Its
 // only job is to be translatable, so an attempt can be driven all the way to the

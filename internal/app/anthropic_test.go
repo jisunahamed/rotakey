@@ -194,6 +194,22 @@ func TestTranslateAnthropicToolOnlyAssistantUsesNullContent(t *testing.T) {
 	}
 }
 
+func TestTranslateAnthropicTextBlocksUseStrictChatContent(t *testing.T) {
+	chat, _, err := translateAnthropicRequestToChat(map[string]any{
+		"messages": []any{map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "text", "text": "first"},
+			map[string]any{"type": "text", "text": "second"},
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := chat["messages"].([]any)[0].(map[string]any)
+	if message["content"] != "first\nsecond" {
+		t.Fatalf("text history content = %#v", message["content"])
+	}
+}
+
 func TestTranslateClaudeToolReferencesAsNoOp(t *testing.T) {
 	chat, _, err := translateAnthropicRequestToChat(map[string]any{
 		"messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{

@@ -145,10 +145,12 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, []s
 			if len(parts) > 0 {
 				content = parts
 			}
-			if len(parts) == 1 {
-				if part, ok := parts[0].(map[string]any); ok && part["type"] == "text" {
-					content = part["text"]
-				}
+			// Strict OpenAI-compatible providers accept a string for text history
+			// but reject an array even when every member is a valid text part.
+			// Preserve arrays only when a non-text part (for example an image) is
+			// present; otherwise join the text without changing its meaning.
+			if text, ok := chatTextParts(parts); len(parts) > 0 && ok {
+				content = text
 			}
 			entry := map[string]any{"role": role}
 			if content != nil {
@@ -212,6 +214,22 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, []s
 		delete(chat, "tool_choice")
 	}
 	return chat, dropped, nil
+}
+
+func chatTextParts(parts []any) (string, bool) {
+	texts := make([]string, 0, len(parts))
+	for _, raw := range parts {
+		part, ok := raw.(map[string]any)
+		if !ok || part["type"] != "text" {
+			return "", false
+		}
+		text, ok := part["text"].(string)
+		if !ok {
+			return "", false
+		}
+		texts = append(texts, text)
+	}
+	return strings.Join(texts, "\n"), true
 }
 
 // translateChatRequestToAnthropic converts an OpenAI Chat request into a Messages
