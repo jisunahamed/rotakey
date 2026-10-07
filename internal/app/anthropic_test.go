@@ -186,8 +186,8 @@ func TestTranslateAnthropicToolOnlyAssistantUsesNullContent(t *testing.T) {
 	}
 	messages := chat["messages"].([]any)
 	assistant := messages[1].(map[string]any)
-	if assistant["content"] != nil {
-		t.Fatalf("tool-only assistant content = %#v, want nil", assistant["content"])
+	if _, exists := assistant["content"]; exists {
+		t.Fatalf("tool-only assistant unexpectedly carries content: %#v", assistant["content"])
 	}
 	if calls, _ := assistant["tool_calls"].([]any); len(calls) != 1 {
 		t.Fatalf("tool-only assistant calls = %#v", assistant["tool_calls"])

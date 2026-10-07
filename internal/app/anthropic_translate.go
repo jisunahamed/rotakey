@@ -137,10 +137,10 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, []s
 			}
 		}
 		if len(parts) > 0 || len(toolCalls) > 0 {
-			// OpenAI-compatible validators accept null for an assistant turn that
-			// only calls tools. An empty content array does not match the content
-			// union on stricter providers, even though the tool_calls themselves
-			// are valid. Anthropic commonly emits exactly this tool-only shape.
+			// Content is optional for an assistant turn that only calls tools.
+			// Sending either an empty array or null fails the content union on some
+			// strict OpenAI-compatible providers, so omit the field altogether.
+			// Anthropic commonly emits exactly this tool-only shape.
 			var content any
 			if len(parts) > 0 {
 				content = parts
@@ -150,7 +150,10 @@ func translateAnthropicRequestToChat(source map[string]any) (map[string]any, []s
 					content = part["text"]
 				}
 			}
-			entry := map[string]any{"role": role, "content": content}
+			entry := map[string]any{"role": role}
+			if content != nil {
+				entry["content"] = content
+			}
 			if len(toolCalls) > 0 {
 				entry["tool_calls"] = toolCalls
 			}
