@@ -102,6 +102,14 @@ func translateResponsesRequest(source map[string]any) (map[string]any, []string,
 			if role == "" {
 				role = "user"
 			}
+			// Several OpenAI-compatible Chat endpoints implement the older
+			// system/user/assistant role set. A Responses caller may carry a
+			// developer instruction, whose equivalent priority on that wire is
+			// system. Leaving it unchanged makes strict providers reject
+			// messages.0.role before the model sees the request.
+			if role == "developer" {
+				role = "system"
+			}
 			content, lost := translateResponseContent(item["content"])
 			dropped = appendUniqueStrings(dropped, lost...)
 			messages = append(messages, map[string]any{"role": role, "content": content})

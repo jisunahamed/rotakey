@@ -67,6 +67,22 @@ func TestTranslateResponsesRequestAcceptsOutputTextHistory(t *testing.T) {
 		t.Fatalf("unexpected translated user turn: %#v", user)
 	}
 }
+
+func TestTranslateResponsesRequestNormalizesDeveloperForChatOnlyProvider(t *testing.T) {
+	source := map[string]any{"input": []any{map[string]any{
+		"role":    "developer",
+		"content": []any{map[string]any{"type": "input_text", "text": "Use concise answers."}},
+	}}}
+	chat, _, err := translateResponsesRequest(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := chat["messages"].([]any)[0].(map[string]any)
+	if message["role"] != "system" || message["content"] != "Use concise answers." {
+		t.Fatalf("developer instruction translated as %#v", message)
+	}
+}
+
 func TestTranslateChatStreamCompletesTextAndToolLifecycle(t *testing.T) {
 	source := strings.Join([]string{
 		`data: {"choices":[{"delta":{"content":"hello "}}]}`,
