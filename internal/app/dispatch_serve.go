@@ -3,7 +3,6 @@ package app
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -491,83 +490,10 @@ func (s *Server) servePooled(
 	if result.Status == 0 {
 		result.Status = http.StatusBadGateway
 	}
-	// A few OpenAI-compatible providers use HTTP 200 as their authoritative
-	// acceptance signal but put a validation warning in the JSON body. Returning
-	// a gateway-generated 502 for that response contradicts the provider status
-	// and turns an accepted zero-output request into a client-visible failure.
-	// Keep genuine non-2xx and connection failures unchanged; only a final
-	// attempt whose actual upstream status was 2xx gets an empty, protocol-valid
-	// success with zero output tokens.
-	if len(attempts) > 0 && attempts[len(attempts)-1].StatusCode >= 200 && attempts[len(attempts)-1].StatusCode < 300 {
-		result.Status = http.StatusOK
-		result.ErrorCode, result.ErrorMessage = "", ""
-		result.OutputTokens = 0
-		result.Response = writeAcceptedEmptyResponse(w, req)
-		s.storePoolLog(r.Context(), req, result, attempts, decisions)
-		return
-	}
 	s.writePoolError(w, r, req.PublicMode, result.Status,
 		valueOr(result.ErrorCode, "upstream_unavailable"),
 		valueOr(result.ErrorMessage, "No provider in the pool could serve this request."))
 	s.storePoolLog(r.Context(), req, result, attempts, decisions)
-}
-
-func writeAcceptedEmptyResponse(w http.ResponseWriter, req dispatchRequest) []byte {
-	var payload map[string]any
-	switch req.PublicMode {
-	case messageModeAnthropic:
-		payload = map[string]any{
-			"id": "msg_" + strings.TrimPrefix(requestLikeID(), "req_"), "type": "message",
-			"role": "assistant", "model": req.Alias, "content": []any{},
-			"stop_reason": "end_turn", "stop_sequence": nil,
-			"usage": map[string]any{"input_tokens": 0, "output_tokens": 0},
-		}
-	case messageModeResponses:
-		payload = map[string]any{
-			"id": "resp_" + strings.TrimPrefix(requestLikeID(), "req_"), "object": "response",
-			"status": "completed", "model": req.Alias, "output": []any{},
-			"usage": map[string]any{"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
-		}
-	default:
-		payload = map[string]any{
-			"id": "chatcmpl_" + strings.TrimPrefix(requestLikeID(), "req_"), "object": "chat.completion",
-			"model": req.Alias, "choices": []any{map[string]any{
-				"index": 0, "message": map[string]any{"role": "assistant", "content": ""}, "finish_reason": "stop",
-			}},
-			"usage": map[string]any{"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-		}
-	}
-	body, _ := json.Marshal(payload)
-	if req.Stream {
-		var stream bytes.Buffer
-		switch req.PublicMode {
-		case messageModeAnthropic:
-			writeSSE(&stream, nil, "message_start", map[string]any{"type": "message_start", "message": payload})
-			writeSSE(&stream, nil, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn"}, "usage": map[string]any{"output_tokens": 0}})
-			writeSSE(&stream, nil, "message_stop", map[string]any{"type": "message_stop"})
-		case messageModeResponses:
-			writeSSE(&stream, nil, "response.completed", map[string]any{"type": "response.completed", "response": payload})
-			writeRaw(&stream, nil, []byte("data: [DONE]\n\n"))
-		default:
-			chunk, _ := json.Marshal(map[string]any{
-				"id": "chatcmpl_" + strings.TrimPrefix(requestLikeID(), "req_"), "object": "chat.completion.chunk",
-				"model": req.Alias, "choices": []any{map[string]any{
-					"index": 0, "delta": map[string]any{"role": "assistant", "content": ""}, "finish_reason": "stop",
-				}},
-			})
-			writeRaw(&stream, nil, append(append([]byte("data: "), chunk...), []byte("\n\n")...))
-			writeRaw(&stream, nil, []byte("data: [DONE]\n\n"))
-		}
-		body = stream.Bytes()
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-	} else {
-		w.Header().Set("Content-Type", "application/json")
-	}
-	w.Header().Set("X-Rotakey-Upstream-Accepted", "true")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
-	return body
 }
 
 // poolResult accumulates what the request log needs across attempts.
@@ -935,6 +861,31 @@ func (s *Server) runAttempt(
 			Done: true, Record: record, Status: http.StatusBadGateway,
 			ErrorCode: record.Error, ErrorMessage: record.ErrorMessage, ResponseBody: body,
 			UpstreamRequestID: upstreamRequestID,
+		}
+	}
+	// HTTP 200 means the provider accepted the call, but it does not prove the
+	// body contains a model answer. Some compatible providers put an error
+	// envelope inside 200; others occasionally return an empty completion. Never
+	// fabricate a zero-token answer for either case. Keep the real body private,
+	// settle any reported usage, and leave the request open for another attempt.
+	// A valid text, refusal, or tool call is forwarded even when usage says zero.
+	if !validRepairResponse(translatedBody, req.PublicMode) {
+		if inputTokens+outputTokens > 0 {
+			_ = s.limiter.AdjustTokens(r.Context(), reserved, inputTokens+outputTokens)
+		}
+		record.Error = upstreamErrorCode(body)
+		record.ErrorMessage = upstreamErrorMessage(body, credential.Secret)
+		if record.ErrorMessage == "" {
+			record.Error = "empty_upstream_response"
+			record.ErrorMessage = "The provider returned HTTP 200 without text, refusal, or a tool call."
+		}
+		record.Retryable = true
+		return attemptOutcome{
+			Record: record, Status: http.StatusBadGateway,
+			ErrorCode: record.Error, ErrorMessage: record.ErrorMessage,
+			ResponseBody: body, InputTokens: inputTokens, OutputTokens: outputTokens,
+			UpstreamRequestID: upstreamRequestID,
+			Compatibility:     allowCompatibility, ResetSkips: allowCompatibility,
 		}
 	}
 	if inputTokens+outputTokens > 0 {

@@ -536,6 +536,15 @@ func validRepairResponse(raw []byte, mode string) bool {
 	if content != "" || message["refusal"] != nil {
 		return true
 	}
+	if parts, ok := message["content"].([]any); ok {
+		for _, value := range parts {
+			part, _ := value.(map[string]any)
+			text, _ := part["text"].(string)
+			if text != "" || part["image_url"] != nil || part["image"] != nil {
+				return true
+			}
+		}
+	}
 	for _, value := range calls {
 		call, _ := value.(map[string]any)
 		function, _ := call["function"].(map[string]any)

@@ -349,6 +349,20 @@ func TestAnthropicJSONResponseCanBecomeOpenAIStream(t *testing.T) {
 	}
 }
 
+func TestChatContentArrayBecomesAnthropicOutput(t *testing.T) {
+	body := []byte(`{"id":"chat_1","choices":[{"message":{"role":"assistant","content":[{"type":"output_text","text":"provider answer"}]},"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0}}`)
+	translated, input, output, err := translateChatResponseToAnthropic(body, "public/model")
+	if err != nil || input != 0 || output != 0 {
+		t.Fatalf("translation = %s, %d/%d, %v", translated, input, output, err)
+	}
+	if !strings.Contains(string(translated), `"text":"provider answer"`) {
+		t.Fatalf("provider content array was lost: %s", translated)
+	}
+	if !validRepairResponse(translated, messageModeAnthropic) {
+		t.Fatalf("translated provider output was mistaken for empty: %s", translated)
+	}
+}
+
 func TestAnthropicJSONStreamRepairRejectsEmptySuccess(t *testing.T) {
 	for _, body := range [][]byte{nil, []byte(`{}`), []byte(`{"type":"error"}`)} {
 		if _, err := anthropicJSONToSSE(body); err == nil {

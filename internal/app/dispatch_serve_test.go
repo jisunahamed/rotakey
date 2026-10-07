@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,38 +13,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-func TestAcceptedUpstreamFallbackStaysSuccessful(t *testing.T) {
-	for _, test := range []struct {
-		name, mode string
-		stream     bool
-	}{
-		{"anthropic json", messageModeAnthropic, false},
-		{"chat json", messageModeChat, false},
-		{"responses json", messageModeResponses, false},
-		{"anthropic stream", messageModeAnthropic, true},
-		{"chat stream", messageModeChat, true},
-		{"responses stream", messageModeResponses, true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			recorder := httptest.NewRecorder()
-			body := writeAcceptedEmptyResponse(recorder, dispatchRequest{PublicMode: test.mode, Alias: "public-model", Stream: test.stream})
-			if recorder.Code != http.StatusOK || recorder.Header().Get("X-Rotakey-Upstream-Accepted") != "true" {
-				t.Fatalf("status/header = %d/%q", recorder.Code, recorder.Header().Get("X-Rotakey-Upstream-Accepted"))
-			}
-			if test.stream {
-				if recorder.Header().Get("Content-Type") != "text/event-stream" || len(body) == 0 {
-					t.Fatalf("invalid stream fallback: %q", body)
-				}
-				return
-			}
-			var payload map[string]any
-			if json.Unmarshal(body, &payload) != nil || len(payload) == 0 {
-				t.Fatalf("invalid JSON fallback: %q", body)
-			}
-		})
-	}
-}
 
 // responsesAnswer is a minimal successful reply from the Responses endpoint. Its
 // only job is to be translatable, so an attempt can be driven all the way to the
@@ -171,6 +138,50 @@ func TestRunAttemptSwitchesToResponsesOnUpstreamDemand(t *testing.T) {
 		upstream.Client(), context.Background(), reservation{}, true)
 	if settled.NativeResponsesPreferred {
 		t.Fatal("a provider with no Responses endpoint was sent back to it")
+	}
+}
+
+func TestRunAttemptRetriesAnErrorHiddenInsideHTTP200(t *testing.T) {
+	upstream := upstreamAnswering(t, `{"error":{"message":"messages[65].content did not match any supported type","type":"invalid_request_error"}}`)
+	server, candidate, plan := chatAttempt(t, upstream.URL)
+	server.db = unreachablePostgres(t)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader("{}"))
+	req := dispatchRequest{RequestID: "req_hidden_error", PublicMode: messageModeAnthropic, Alias: "claude-opus-5-5", Endpoint: "/v1/messages"}
+
+	outcome := server.runAttempt(recorder, request, req, candidate, plan,
+		upstream.Client(), context.Background(), reservation{}, true)
+
+	if outcome.Done || !outcome.Record.Retryable || !outcome.Compatibility || !outcome.ResetSkips {
+		t.Fatalf("hidden HTTP 200 error was not left open for retry: %#v", outcome)
+	}
+	if outcome.Status != http.StatusBadGateway || outcome.Record.StatusCode != http.StatusOK {
+		t.Fatalf("gateway/upstream statuses = %d/%d", outcome.Status, outcome.Record.StatusCode)
+	}
+	if !strings.Contains(outcome.ErrorMessage, "messages[65].content") {
+		t.Fatalf("provider error was lost: %q", outcome.ErrorMessage)
+	}
+	if recorder.Body.Len() != 0 {
+		t.Fatalf("hidden error reached the caller before retry: %q", recorder.Body.String())
+	}
+}
+
+func TestRunAttemptForwardsRealOutputEvenWithZeroUsage(t *testing.T) {
+	upstream := upstreamAnswering(t, `{"id":"chat_1","object":"chat.completion","choices":[{"message":{"role":"assistant","content":"real answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0}}`)
+	server, candidate, plan := chatAttempt(t, upstream.URL)
+	server.db = unreachablePostgres(t)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader("{}"))
+	req := dispatchRequest{RequestID: "req_zero_usage", PublicMode: messageModeAnthropic, Alias: "claude-opus-5-5", Endpoint: "/v1/messages"}
+
+	outcome := server.runAttempt(recorder, request, req, candidate, plan,
+		upstream.Client(), context.Background(), reservation{}, true)
+
+	if !outcome.Done || outcome.Status != http.StatusOK || outcome.OutputTokens != 0 {
+		t.Fatalf("valid zero-usage reply was not delivered: %#v", outcome)
+	}
+	if !strings.Contains(recorder.Body.String(), "real answer") {
+		t.Fatalf("provider output was not forwarded: %q", recorder.Body.String())
 	}
 }
 

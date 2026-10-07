@@ -677,9 +677,11 @@ func translateChatResponseToAnthropic(body []byte, alias string) ([]byte, int64,
 	if choices, ok := chat["choices"].([]any); ok && len(choices) > 0 {
 		choice, _ := choices[0].(map[string]any)
 		message, _ := choice["message"].(map[string]any)
-		if content, ok := message["content"].(string); ok && content != "" {
-			blocks = append(blocks, map[string]any{"type": "text", "text": content})
-		}
+		// Compatible providers may return either the traditional content string
+		// or an OpenAI content-part array. Reading only the string form used to
+		// discard real model output and made a successful reply appear empty.
+		contentBlocks, _ := openAIContentToAnthropic(message["content"])
+		blocks = append(blocks, contentBlocks...)
 		if calls, ok := message["tool_calls"].([]any); ok {
 			for _, rawCall := range calls {
 				call, _ := rawCall.(map[string]any)

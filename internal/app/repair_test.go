@@ -186,6 +186,7 @@ func TestRepairValidResponseIncludesToolOnly(t *testing.T) {
 		valid      bool
 	}{
 		{messageModeChat, `{"choices":[{"message":{"content":"ok"}}]}`, true},
+		{messageModeChat, `{"choices":[{"message":{"content":[{"type":"output_text","text":"ok"}]}}]}`, true},
 		{messageModeChat, `{"choices":[{"message":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]}}]}`, true},
 		{messageModeChat, `{"choices":[{"message":{"content":""}}]}`, false},
 		{messageModeChat, `{"error":{"message":"failed"}}`, false},
