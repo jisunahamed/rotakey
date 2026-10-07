@@ -109,6 +109,10 @@ func relabelConversation(payload map[string]any, shape string) map[string]string
 			}
 		}
 	case "responses":
+		// Codex and newer OpenAI clients can send developer turns. Some
+		// OpenAI-compatible Responses gateways still validate against the older
+		// system/user/assistant role set and reject the first developer turn.
+		normalizeResponsesDeveloperRoles(payload, applied)
 		// The Responses API types text by direction, so the role decides what a
 		// foreign label becomes: the model's own earlier replies are
 		// output_text, everything else spoke to the model and is input_text.
@@ -122,6 +126,30 @@ func relabelConversation(payload map[string]any, shape string) map[string]string
 		relabelItems(payload, "messages", func(string) string { return "text" }, false, applied)
 	}
 	return applied
+}
+
+func normalizeResponsesDeveloperRoles(payload map[string]any, applied map[string]string) {
+	items, ok := payload["input"].([]any)
+	if !ok {
+		return
+	}
+	copied := make([]any, len(items))
+	changed := false
+	for index, item := range items {
+		object, ok := item.(map[string]any)
+		if !ok || object["role"] != "developer" {
+			copied[index] = item
+			continue
+		}
+		replacement := cloneMap(object)
+		replacement["role"] = "system"
+		copied[index] = replacement
+		changed = true
+	}
+	if changed {
+		payload["input"] = copied
+		applied["developer"] = "system"
+	}
 }
 
 // relabelItems walks one conversation array. target maps an item's role to the

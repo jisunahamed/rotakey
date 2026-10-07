@@ -628,15 +628,16 @@ func (s *Server) runAttempt(
 	record.StatusCode = response.StatusCode
 	upstreamRequestID := valueOr(response.Header.Get("Request-Id"), response.Header.Get("X-Request-Id"))
 
-	if response.StatusCode == http.StatusBadRequest {
+	if response.StatusCode == http.StatusBadRequest || response.StatusCode == http.StatusUnprocessableEntity {
 		errorBody, wasTruncated, readErr := boundedBody(response.Body, minInt64(s.cfg.MaxResponseBytes, 2<<20))
 		_ = response.Body.Close()
 		_ = s.limiter.AdjustTokens(r.Context(), reserved, 0)
 		record.Error = upstreamErrorCode(errorBody)
 		record.ErrorMessage = upstreamErrorMessage(errorBody, credential.Secret)
 		// The signals are read even when the compatibility budget is spent. A 400
-		// the gateway can name is a fault in the request's shape rather than in the
-		// key, and the strike further down would otherwise punish a healthy
+		// or 422 validation response the gateway can name is a fault in the
+		// request's shape rather than in the key, and the strike further down
+		// would otherwise punish a healthy
 		// credential for a rejection no rotation can avoid.
 		var (
 			switchEndpoint bool
@@ -749,7 +750,7 @@ func (s *Server) runAttempt(
 		// so striking this one only shrinks the rotation over the gateway's own
 		// mistake. A route that publishes /responses natively is not covered —
 		// there the configuration is the operator's and the 400 is real evidence.
-		if !req.DeferFailures && !switchEndpoint && !hasReplacement && len(parameters) == 0 && !hasItemStrip && !hasDetach && !plan.SwitchedToResponses {
+		if response.StatusCode != http.StatusUnprocessableEntity && !req.DeferFailures && !switchEndpoint && !hasReplacement && len(parameters) == 0 && !hasItemStrip && !hasDetach && !plan.SwitchedToResponses {
 			s.markUpstreamFailure(r.Context(), credential.ID, response.StatusCode, response.Header, errorBody)
 		}
 		return s.writeAttemptFailure(w, r, req, plan, response, errorBody, wasTruncated, record, credential, upstreamRequestID)

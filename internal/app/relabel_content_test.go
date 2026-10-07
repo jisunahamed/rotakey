@@ -101,6 +101,24 @@ func TestRelabelConversationSpeaksEachWiresVocabulary(t *testing.T) {
 		}
 	})
 
+	t.Run("responses uses the portable system role for developer instructions", func(t *testing.T) {
+		original := map[string]any{"role": "developer", "content": []any{
+			map[string]any{"type": "input_text", "text": "follow the project rules"},
+		}}
+		payload := map[string]any{"input": []any{original}}
+		applied := relabelConversation(payload, "responses")
+		turn := payload["input"].([]any)[0].(map[string]any)
+		if turn["role"] != "system" {
+			t.Fatalf("developer role went upstream as %q", turn["role"])
+		}
+		if original["role"] != "developer" {
+			t.Fatalf("the caller's request was mutated: %v", original)
+		}
+		if applied["developer"] != "system" {
+			t.Fatalf("the role repair is absent from plan evidence: %v", applied)
+		}
+	})
+
 	t.Run("anthropic spells every text the same and reads inside tool_result", func(t *testing.T) {
 		payload := anthropicToolResultPayload()
 		applied := relabelConversation(payload, "anthropic")
