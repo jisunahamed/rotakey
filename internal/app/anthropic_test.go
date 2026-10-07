@@ -172,6 +172,28 @@ func TestTranslateClaudeCodeHistoryRolesToChat(t *testing.T) {
 	}
 }
 
+func TestTranslateAnthropicToolOnlyAssistantUsesNullContent(t *testing.T) {
+	chat, _, err := translateAnthropicRequestToChat(map[string]any{
+		"messages": []any{
+			map[string]any{"role": "user", "content": "Read the file."},
+			map[string]any{"role": "assistant", "content": []any{
+				map[string]any{"type": "tool_use", "id": "tool_1", "name": "read", "input": map[string]any{"path": "a.txt"}},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := chat["messages"].([]any)
+	assistant := messages[1].(map[string]any)
+	if assistant["content"] != nil {
+		t.Fatalf("tool-only assistant content = %#v, want nil", assistant["content"])
+	}
+	if calls, _ := assistant["tool_calls"].([]any); len(calls) != 1 {
+		t.Fatalf("tool-only assistant calls = %#v", assistant["tool_calls"])
+	}
+}
+
 func TestTranslateClaudeToolReferencesAsNoOp(t *testing.T) {
 	chat, _, err := translateAnthropicRequestToChat(map[string]any{
 		"messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{
