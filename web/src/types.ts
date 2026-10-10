@@ -170,6 +170,7 @@ export type Provider = {
 export type DiscoveredModel = {
   id: string;
   owned_by?: string;
+  context_window?: number;
 };
 
 export type Overview = {

@@ -2191,7 +2191,7 @@ function ProviderWizard({ providers, onClose, onComplete }: { providers: Provide
       createdID = created.id;
       await api(`/api/admin/providers/${created.id}/credentials`, { method: "POST", json: { credentials } });
       const catalogIDs = new Set(discoveredModels.map((model) => model.id));
-      const routes = routeInputsFromSelection(selectedModels, catalogIDs);
+      const routes = routeInputsFromSelection(selectedModels, catalogIDs, discoveredModels);
       if (routes.length > 0) {
         await api(`/api/admin/providers/${created.id}/models/bulk`, { method: "POST", json: { models: routes } });
       }
@@ -2998,7 +2998,7 @@ function CredentialForm({ provider, knownRoutes, credential, onClose, onComplete
         discovered = result.models ?? discovered;
       }
       const discoveredIDs = new Set(discovered.map((model) => model.id));
-      const routes = routeInputsFromSelection(selectedModels, discoveredIDs);
+      const routes = routeInputsFromSelection(selectedModels, discoveredIDs, discovered);
       if (routes.length > 0) {
         await api(`/api/admin/providers/${provider.id}/models/bulk`, {
           method: "POST",
@@ -3317,7 +3317,7 @@ function ModelImportForm({ provider, knownRoutes, onClose, onComplete, notify }:
   };
 
   const save = async () => {
-    const routes = routeInputsFromSelection(selected, new Set((inspection?.models ?? []).map((model) => model.id)));
+    const routes = routeInputsFromSelection(selected, new Set((inspection?.models ?? []).map((model) => model.id)), inspection?.models ?? []);
     if (routes.length === 0 && removedIDs.size === 0) {
       notify("Select a new model or uncheck an existing route.", "danger");
       return;
@@ -4421,7 +4421,8 @@ function credentialInputs(value: CredentialDraft[], limits: RatePolicy, unverifi
     }));
 }
 
-function routeInputsFromSelection(selected: Record<string, string>, catalogIDs = new Set<string>()): RouteDraft[] {
+function routeInputsFromSelection(selected: Record<string, string>, catalogIDs = new Set<string>(), catalog: DiscoveredModel[] = []): RouteDraft[] {
+  const catalogByID = new Map(catalog.map((model) => [model.id, model]));
   return Object.entries(selected).map(([upstreamModel, publicAlias]) => {
     const embeddings = /(^|[-_/.])embed(?:ding|dings)?($|[-_/.0-9])|embedding/i.test(upstreamModel);
     return ({
@@ -4433,6 +4434,7 @@ function routeInputsFromSelection(selected: Record<string, string>, catalogIDs =
     supports_messages: !embeddings,
     supports_embeddings: embeddings,
     default_max_output_tokens: 1024,
+    context_window: catalogByID.get(upstreamModel)?.context_window,
     input_cost_per_million_usd: 0,
     output_cost_per_million_usd: 0,
     request_cost_usd: undefined,

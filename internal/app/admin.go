@@ -639,6 +639,7 @@ type modelInput struct {
 	SupportsMessages        bool     `json:"supports_messages"`
 	SupportsEmbeddings      bool     `json:"supports_embeddings"`
 	DefaultMaxOutputTokens  int      `json:"default_max_output_tokens"`
+	ContextWindow           int      `json:"context_window,omitempty"`
 	InputCostPerMillionUSD  float64  `json:"input_cost_per_million_usd"`
 	OutputCostPerMillionUSD float64  `json:"output_cost_per_million_usd"`
 	RequestCostUSD          *float64 `json:"request_cost_usd,omitempty"`
@@ -666,6 +667,9 @@ func validateModelInput(input *modelInput) error {
 	}
 	if input.DefaultMaxOutputTokens < 1 || input.DefaultMaxOutputTokens > 1_000_000 {
 		return fmt.Errorf("default output tokens are invalid")
+	}
+	if input.ContextWindow < 0 || input.ContextWindow > 2_000_000_000 {
+		return fmt.Errorf("context window is invalid")
 	}
 	if input.InputCostPerMillionUSD < 0 || input.OutputCostPerMillionUSD < 0 || input.InputCostPerMillionUSD > 1_000_000 || input.OutputCostPerMillionUSD > 1_000_000 ||
 		(input.RequestCostUSD != nil && (*input.RequestCostUSD < 0 || *input.RequestCostUSD > 1_000_000)) {

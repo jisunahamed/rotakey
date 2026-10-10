@@ -70,8 +70,9 @@ type ProviderCapacity struct {
 }
 
 type DiscoveredModel struct {
-	ID      string `json:"id"`
-	OwnedBy string `json:"owned_by,omitempty"`
+	ID            string `json:"id"`
+	OwnedBy       string `json:"owned_by,omitempty"`
+	ContextWindow int    `json:"context_window,omitempty"`
 }
 
 type ModelRoute struct {

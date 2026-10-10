@@ -20,6 +20,7 @@ func TestDecodeProviderModelCatalogVariants(t *testing.T) {
 		{name: "openai envelope", body: `{"data":[{"id":"gpt-a","owned_by":"vendor"}]}`, want: []string{"gpt-a"}},
 		{name: "models envelope", body: `{"models":[{"name":"model-b"},"model-c"]}`, want: []string{"model-b", "model-c"}},
 		{name: "direct array", body: ` [{"model":"model-d"},{"id":"model-e"}] `, want: []string{"model-d", "model-e"}},
+		{name: "provider metadata", body: `{"data":[{"id":"model-f","context_window":128000},{"id":"model-g","max_context_window":1000000}]}`, want: []string{"model-f", "model-g"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -33,6 +34,9 @@ func TestDecodeProviderModelCatalogVariants(t *testing.T) {
 			}
 			if !slices.Equal(got, test.want) {
 				t.Fatalf("models = %#v, want %#v", got, test.want)
+			}
+			if test.name == "provider metadata" && (catalog.Data[0].ContextWindow != 128000 || catalog.Data[1].ContextWindow != 1000000) {
+				t.Fatalf("context windows = %d, %d", catalog.Data[0].ContextWindow, catalog.Data[1].ContextWindow)
 			}
 		})
 	}

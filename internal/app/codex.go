@@ -31,7 +31,7 @@ func (s *Server) handleCodexManifest(w http.ResponseWriter, r *http.Request) {
 	`
 	query := `
 		SELECT m.public_alias, p.name, m.supports_responses, m.supports_chat,
-		       m.capability_status, m.capability_profile
+		       m.capability_status, m.capability_profile, m.default_max_output_tokens
 		FROM model_routes m JOIN providers p ON p.id=m.provider_id
 		WHERE ` + codexFilter + `
 		ORDER BY m.public_alias`
@@ -44,7 +44,8 @@ func (s *Server) handleCodexManifest(w http.ResponseWriter, r *http.Request) {
 			       'pool of ' || COUNT(*)::text,
 			       BOOL_OR(m.supports_responses), BOOL_OR(m.supports_chat),
 			       MIN(m.capability_status),
-			       (ARRAY_AGG(m.capability_profile ORDER BY m.created_at, m.id))[1]
+			       (ARRAY_AGG(m.capability_profile ORDER BY m.created_at, m.id))[1],
+			       MAX(m.default_max_output_tokens)
 			FROM model_routes m JOIN providers p ON p.id=m.provider_id
 			WHERE ` + codexFilter + `
 			GROUP BY m.public_alias
@@ -62,12 +63,13 @@ func (s *Server) handleCodexManifest(w http.ResponseWriter, r *http.Request) {
 		var responses, chat bool
 		var capabilityStatus string
 		var rawProfile []byte
-		if rows.Scan(&alias, &provider, &responses, &chat, &capabilityStatus, &rawProfile) != nil {
+		var maxOutput int
+		if rows.Scan(&alias, &provider, &responses, &chat, &capabilityStatus, &rawProfile, &maxOutput) != nil {
 			continue
 		}
 		profile := map[string]string{}
 		_ = json.Unmarshal(rawProfile, &profile)
-		contextWindow := 128000
+		contextWindow := 0
 		if parsed, err := strconv.Atoi(profile["context_window"]); err == nil && parsed > 0 {
 			contextWindow = parsed
 		}
@@ -78,14 +80,20 @@ func (s *Server) handleCodexManifest(w http.ResponseWriter, r *http.Request) {
 				reasoningLevels[index] = strings.TrimSpace(reasoningLevels[index])
 			}
 		}
-		models = append(models, map[string]any{
+		model := map[string]any{
 			"id": alias, "alias": alias, "display_name": alias, "provider": provider,
-			"context_window": contextWindow, "supports_responses": responses,
 			"supports_tools":            profile["tools"] != "unsupported" && (responses || chat),
 			"supports_images":           profile["images"] == "supported" || profile["images"] == "native",
 			"verified_reasoning_levels": reasoningLevels,
 			"catalog_ready":             capabilityStatus == "catalog_verified" || capabilityStatus == "probe_verified",
-		})
+		}
+		if contextWindow > 0 {
+			model["context_window"] = contextWindow
+		}
+		if maxOutput > 0 {
+			model["max_output_tokens"] = maxOutput
+		}
+		models = append(models, model)
 	}
 	body, _ := json.Marshal(map[string]any{"object": "codex_manifest", "models": models})
 	hash := sha256.Sum256(body)

@@ -9,11 +9,21 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
 
 var errModelProbeCredentialUnavailable = errors.New("add a healthy API key before validating this model")
+
+func firstPositive(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
 
 type credentialInspection struct {
 	Valid            bool              `json:"valid"`
@@ -33,9 +43,10 @@ type credentialInspection struct {
 }
 
 type providerModelCatalogItem struct {
-	ID          string `json:"id"`
-	OwnedBy     string `json:"owned_by"`
-	DisplayName string `json:"display_name"`
+	ID            string `json:"id"`
+	OwnedBy       string `json:"owned_by"`
+	DisplayName   string `json:"display_name"`
+	ContextWindow int    `json:"context_window,omitempty"`
 }
 
 type providerModelCatalog struct {
@@ -77,16 +88,21 @@ func decodeProviderModelCatalog(body []byte) (providerModelCatalog, error) {
 			continue
 		}
 		var item struct {
-			ID          string `json:"id"`
-			Name        string `json:"name"`
-			Model       string `json:"model"`
-			OwnedBy     string `json:"owned_by"`
-			DisplayName string `json:"display_name"`
+			ID               string `json:"id"`
+			Name             string `json:"name"`
+			Model            string `json:"model"`
+			OwnedBy          string `json:"owned_by"`
+			DisplayName      string `json:"display_name"`
+			ContextWindow    int    `json:"context_window"`
+			MaxContextWindow int    `json:"max_context_window"`
+			ContextLength    int    `json:"context_length"`
+			MaxInputTokens   int    `json:"max_input_tokens"`
 		}
 		if json.Unmarshal(raw, &item) == nil {
+			contextWindow := firstPositive(item.MaxContextWindow, item.ContextWindow, item.ContextLength, item.MaxInputTokens)
 			catalog.Data = append(catalog.Data, providerModelCatalogItem{
 				ID:      valueOr(strings.TrimSpace(item.ID), valueOr(strings.TrimSpace(item.Model), strings.TrimSpace(item.Name))),
-				OwnedBy: item.OwnedBy, DisplayName: item.DisplayName,
+				OwnedBy: item.OwnedBy, DisplayName: item.DisplayName, ContextWindow: contextWindow,
 			})
 		}
 	}
@@ -201,7 +217,7 @@ func inspectProviderSecretWithProtocol(ctx context.Context, provider Provider, s
 		}
 		seen[id] = true
 		result.Models = append(result.Models, DiscoveredModel{
-			ID: id, OwnedBy: valueOr(strings.TrimSpace(model.OwnedBy), strings.TrimSpace(model.DisplayName)),
+			ID: id, OwnedBy: valueOr(strings.TrimSpace(model.OwnedBy), strings.TrimSpace(model.DisplayName)), ContextWindow: model.ContextWindow,
 		})
 	}
 	sort.Slice(result.Models, func(i, j int) bool { return result.Models[i].ID < result.Models[j].ID })
@@ -723,6 +739,18 @@ func (s *Server) handleCreateModelsBulk(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) recordCredentialInspection(ctx context.Context, credentialID string, inspection credentialInspection) {
+	for _, model := range inspection.Models {
+		if model.ContextWindow <= 0 {
+			continue
+		}
+		_, _ = s.db.Exec(ctx, `
+			UPDATE model_routes m SET
+				capability_profile=jsonb_set(coalesce(m.capability_profile, '{}'::jsonb), '{context_window}', to_jsonb($3::text), true),
+				updated_at=NOW()
+			FROM credentials c
+			WHERE c.id=$1 AND m.provider_id=c.provider_id AND m.upstream_model=$2
+		`, credentialID, model.ID, strconv.Itoa(model.ContextWindow))
+	}
 	if inspection.Valid {
 		_, _ = s.db.Exec(ctx, `
 			UPDATE credentials SET
@@ -780,6 +808,9 @@ func modelCapabilityProfile(provider Provider, input *modelInput, source string)
 		"upstream_protocol": provider.APIFormat,
 		"streaming":         "gateway_normalized",
 		"json_output":       "unknown",
+	}
+	if input.ContextWindow > 0 {
+		profile["context_window"] = strconv.Itoa(input.ContextWindow)
 	}
 	if input.SupportsEmbeddings {
 		profile["embeddings"], profile["chat"], profile["responses"], profile["messages"] = "native", "off", "off", "off"
