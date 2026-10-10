@@ -11,7 +11,7 @@ Thanks for helping improve Rotakey.
 
 ## Development
 
-Backend requirements are Go 1.25, PostgreSQL, and Redis. The admin UI uses Node.js 24.
+Backend requirements are Go 1.27.2 or newer, PostgreSQL, and Redis. The admin UI uses Node.js 24.
 
 ```bash
 go test ./...
