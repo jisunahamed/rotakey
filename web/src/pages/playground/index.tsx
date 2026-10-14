@@ -465,19 +465,20 @@ export function PlaygroundPage({
   // over: a turn that is still streaming is empty for its first few hundred
   // milliseconds, and closing the composer then would be a different lie.
   const lastTurn = chat?.turns[chat.turns.length - 1];
+  const blockReason = route ? routeBlockReason(route) : "";
   const blocked = !chat
     ? ""
     : !route
       ? `${chat.model} is no longer a model route. Choose another model to keep going.`
-      : streamingID === "" && lastTurn?.role === "assistant" && lastTurn.text === ""
-        ? "The last reply came back with no text, and Rotakey will not send an empty message. Open the actions menu on that reply and choose Ask again, or delete the exchange, to keep going."
-        : chat.turns.length >= maxTurns
-          ? `This chat has ${maxTurns} messages, which is as many as Rotakey will send in one request. Start a new chat to keep going.`
-          : contentLength(chat.turns) >= maxContent
-            ? `This chat has reached ${formatNumber(maxContent)} characters, which is as much as Rotakey will send in one request. Start a new chat to keep going.`
-            : "";
-
-  const blockReason = route ? routeBlockReason(route) : "";
+      : blockReason !== ""
+        ? blockReason
+        : streamingID === "" && lastTurn?.role === "assistant" && lastTurn.text === ""
+          ? "The last reply came back with no text, and Rotakey will not send an empty message. Open the actions menu on that reply and choose Ask again, or delete the exchange, to keep going."
+          : chat.turns.length >= maxTurns
+            ? `This chat has ${maxTurns} messages, which is as many as Rotakey will send in one request. Start a new chat to keep going.`
+            : contentLength(chat.turns) >= maxContent
+              ? `This chat has reached ${formatNumber(maxContent)} characters, which is as much as Rotakey will send in one request. Start a new chat to keep going.`
+              : "";
   // Every part names its own value. The old line read "Chosen by Rotakey · 16.4K
   // tokens · temperature 1 · streaming", where the first part was a floating
   // phrase, the second never said the number was a ceiling on the *reply*, and
@@ -665,7 +666,7 @@ export function PlaygroundPage({
             </div>
 
             <div className="pg-foot">
-              {blockReason !== "" && blocked === "" && (
+              {blockReason !== "" && (
                 <Notice
                   tone="warning"
                   action={
