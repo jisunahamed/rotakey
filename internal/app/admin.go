@@ -70,6 +70,9 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/admin/logs/{id}", admin(s.handleLog))
 	mux.Handle("GET /api/admin/logs/{id}/bodies", admin(s.handleLogBodies))
 	mux.Handle("POST /api/admin/access/rotate", admin(s.handleRotateGatewayKey))
+	mux.Handle("GET /api/admin/access/keys", admin(s.handleListGatewayAccessKeys))
+	mux.Handle("POST /api/admin/access/keys", admin(s.handleCreateGatewayAccessKey))
+	mux.Handle("DELETE /api/admin/access/keys/{id}", admin(s.handleDeleteGatewayAccessKey))
 	mux.Handle("GET /api/admin/settings", admin(s.handleGetSettings))
 	mux.Handle("PUT /api/admin/settings", admin(s.handleUpdateSettings))
 }

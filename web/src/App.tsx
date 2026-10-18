@@ -4,7 +4,6 @@ import {
   Activity,
   AlertTriangle,
   ArrowRight,
-  BookOpen,
   Cable,
   Check,
   ChevronDown,
@@ -118,6 +117,7 @@ import {
   type Credential,
   type CreditTotals,
   type DiscoveredModel,
+  type GatewayAccessKey,
   type ImportResult,
   type ModelRoute,
   type Overview,
@@ -3912,13 +3912,11 @@ function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNe
   const ask = useConfirm();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [error, setError] = useState("");
-  const [codexReady, setCodexReady] = useState<number | null>(null);
-  // A gateway that is down and a fresh install with no routes both used to leave
-  // `codexReady` null, so the heading read "Set up Codex" either way and the
-  // operator had no way to tell which. The failure is now its own state, and it is
-  // retried by the same Try again button as the settings load.
-  const [codexError, setCodexError] = useState(false);
   const [rotating, setRotating] = useState(false);
+  const [accessKeys, setAccessKeys] = useState<GatewayAccessKey[]>([]);
+  const [accessKeysError, setAccessKeysError] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [newKeyLabel, setNewKeyLabel] = useState("");
   const [attempt, setAttempt] = useState(0);
   // Both loads are one-shot and both write state. Navigating away mid-flight, or
   // pressing Try again twice, otherwise resolves into an unmounted component or
@@ -3932,11 +3930,15 @@ function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNe
   }, [gatewayKey, attempt]);
   useEffect(() => {
     let ignore = false;
-    void api<Overview>("/api/admin/overview?range=1h")
-      .then((value) => { if (ignore) return; setCodexReady(safeNumber(value.summary?.routes_ready)); setCodexError(false); })
-      .catch(() => { if (!ignore) { setCodexReady(null); setCodexError(true); } });
+    void api<{ keys: GatewayAccessKey[] }>("/api/admin/access/keys")
+      .then((result) => {
+        if (ignore) return;
+        setAccessKeys(result.keys || []);
+        setAccessKeysError("");
+      })
+      .catch((caught) => { if (!ignore) setAccessKeysError(errorMessage(caught)); });
     return () => { ignore = true; };
-  }, [attempt]);
+  }, [gatewayKey, attempt]);
   const rotateKey = () => {
     if (rotating) return;
     void (async () => {
@@ -3958,22 +3960,82 @@ function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNe
       }
     })();
   };
+  const createAccessKey = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (creating) return;
+    void (async () => {
+      setCreating(true);
+      try {
+        const result = await api<{ gateway_key: string; key: GatewayAccessKey }>("/api/admin/access/keys", {
+          method: "POST",
+          body: JSON.stringify({ label: newKeyLabel })
+        });
+        setAccessKeys((current) => [result.key, ...current]);
+        setNewKeyLabel("");
+        onNewKey(result.gateway_key);
+        notify("API key created with 2,000 RPM and 100 concurrent requests. Save it before closing the panel.");
+      } catch (caught) {
+        notify(errorMessage(caught), "danger");
+      } finally {
+        setCreating(false);
+      }
+    })();
+  };
+  const deleteAccessKey = (key: GatewayAccessKey) => {
+    void (async () => {
+      const confirmed = await ask({
+        title: `Revoke ${key.label}?`,
+        body: "Applications using this API key will lose access immediately.",
+        confirmLabel: "Revoke API key"
+      });
+      if (!confirmed) return;
+      try {
+        await api(`/api/admin/access/keys/${key.id}`, { method: "DELETE" });
+        setAccessKeys((current) => current.filter((item) => item.id !== key.id));
+        notify(`${key.label} revoked.`);
+      } catch (caught) {
+        notify(errorMessage(caught), "danger");
+      }
+    })();
+  };
   const rootURL = (settings?.base_url || location.origin).replace(/\/$/, "");
   const openAIURL = `${rootURL}/v1`;
   return (
     <>
-      <PageHeader eyebrow="Unified authentication" title="Connect" description="One active key works with OpenAI SDKs, Anthropic SDKs and Claude Code. Upstream provider secrets never leave Rotakey." />
+      <PageHeader eyebrow="Unified authentication" title="Connect" description="Every active key works with OpenAI SDKs, Anthropic SDKs and Claude Code. Upstream provider secrets never leave Rotakey." />
       {error && (
         <InlineNotice tone="danger">
           {error} The examples below use this page's own address until the settings load.{" "}
           <button className="link-button" onClick={() => setAttempt((n) => n + 1)}>Try again</button>
         </InlineNotice>
       )}
+      <section className="section-block gateway-key-manager">
+        <div className="section-heading">
+          <div><p className="eyebrow">Client API keys</p><h2>Create an API key</h2><p className="section-note">Every admin-created key allows 2,000 requests per minute and up to 100 requests at the same time. No token, daily, or model limit is added.</p></div>
+        </div>
+        <form className="gateway-key-create" onSubmit={createAccessKey}>
+          <label className="field"><span>Name</span><input maxLength={80} placeholder="Production app" value={newKeyLabel} onChange={(event) => setNewKeyLabel(event.target.value)} /></label>
+          <Button type="submit" disabled={creating}><Plus size={14} aria-hidden="true" /> {creating ? "Creating…" : "Create API key"}</Button>
+        </form>
+        {accessKeysError && <InlineNotice tone="danger">{accessKeysError} <button className="link-button" onClick={() => setAttempt((n) => n + 1)}>Try again</button></InlineNotice>}
+        <div className="settings-list gateway-key-list">
+          {accessKeys.length === 0 && !accessKeysError ? <p className="inline-empty">No admin-created API keys yet.</p> : accessKeys.map((key) => (
+            <div className="settings-row" key={key.id}>
+              <div className="gateway-key-details">
+                <strong>{key.label}</strong>
+                <code>{key.prefix}••••••••••••</code>
+                <small>2,000 RPM · 100 at a time · {key.last_used_at ? `last used ${formatRelativeTime(key.last_used_at)}` : "not used yet"}</small>
+              </div>
+              <Button variant="danger" onClick={() => deleteAccessKey(key)}><Trash2 size={14} aria-hidden="true" /> Revoke</Button>
+            </div>
+          ))}
+        </div>
+      </section>
       <section className="access-key-panel">
-        <div className="key-prefix"><ShieldCheck size={20} aria-hidden="true" /><span><small>Current key prefix</small><code>{settings?.gateway_key_prefix ? `${settings.gateway_key_prefix}••••••••••••` : error ? "unavailable" : "Loading…"}</code></span></div>
+        <div className="key-prefix"><ShieldCheck size={20} aria-hidden="true" /><span><small>Original key prefix</small><code>{settings?.gateway_key_prefix ? `${settings.gateway_key_prefix}••••••••••••` : error ? "unavailable" : "Loading…"}</code></span></div>
         <div>
-          <strong>Rotating the key</strong>
-          <p>Rotation revokes the current key in the same database transaction and shows the replacement once. Update every application before you close that panel. Use the button at the bottom of this page.</p>
+          <strong>Rotating the original key</strong>
+          <p>Rotation revokes only the original setup key and shows its replacement once. Admin-created keys above are unaffected.</p>
         </div>
       </section>
       <section className="section-block code-example">
@@ -3988,20 +4050,7 @@ function AccessPage({ gatewayKey, onNewKey, notify }: { gatewayKey: string; onNe
   -d '{"model":"provider/embedding-alias","input":"Text to embed"}'`}</pre>
       </section>
       <section className="section-block code-example">
-        <div className="section-heading">
-          <div><p className="eyebrow">Codex CLI &amp; Desktop</p><h2>{codexError ? "Set up Codex" : codexReady === null ? "Set up Codex" : `${codexReady} model route${codexReady === 1 ? "" : "s"} ready`}</h2>{codexError && <p className="section-note">The route count is unavailable — the gateway did not answer. The setup command below still applies.</p>}</div>
-          <div className="button-row">
-            <a className="button button--quiet" href="https://github.com/jisunahamed/rotakey/blob/main/docs/CODEX.md" target="_blank" rel="noreferrer"><BookOpen size={14} aria-hidden="true" /> Full guide</a>
-            <Button variant="quiet" onClick={() => void copyText(`rotakey-codex install --url ${rootURL}`).then(() => notify("Codex setup command copied.")).catch(() => notify(clipboardBlocked, "danger"))}><Clipboard size={14} aria-hidden="true" /> Copy setup</Button>
-          </div>
-        </div>
-        <pre>{`rotakey-codex install --url ${rootURL}
-rotakey-codex doctor
-codex --profile rotakey`}</pre>
-        <p>The installer prompts for the gateway key, protects it in the OS credential store, and writes only a managed Rotakey profile. Run <code>rotakey-codex sync</code> after changing model routes.</p>
-      </section>
-      <section className="section-block code-example">
-        <div className="section-heading"><div><p className="eyebrow">Anthropic SDKs</p><h2>Messages SDK and Claude Code</h2></div><div className="button-row"><a className="button button--quiet" href="https://github.com/jisunahamed/rotakey/blob/main/docs/CLAUDE-CODE.md" target="_blank" rel="noreferrer"><BookOpen size={14} aria-hidden="true" /> Full guide</a><Button variant="quiet" onClick={() => void copyText(rootURL).then(() => notify("Anthropic base URL copied.")).catch(() => notify(clipboardBlocked, "danger"))}><Clipboard size={14} aria-hidden="true" /> Copy base URL</Button></div></div>
+        <div className="section-heading"><div><p className="eyebrow">Anthropic SDKs</p><h2>Messages SDK</h2></div><Button variant="quiet" onClick={() => void copyText(rootURL).then(() => notify("Anthropic base URL copied.")).catch(() => notify(clipboardBlocked, "danger"))}><Clipboard size={14} aria-hidden="true" /> Copy base URL</Button></div>
         <pre>{`export ANTHROPIC_BASE_URL="${rootURL}"
 export ANTHROPIC_API_KEY="$ROTAKEY_KEY"
 
@@ -4012,8 +4061,8 @@ curl "${rootURL}/v1/messages" \\
   -d '{"model":"provider/model-alias","max_tokens":1024,"messages":[{"role":"user","content":"Hello"}]}'`}</pre>
       </section>
       <div className="page-actions console-actionbar">
-        <span>Rotating revokes the current gateway key immediately and cannot be undone.</span>
-        <Button variant="danger" disabled={rotating} onClick={rotateKey}><RefreshCw size={15} aria-hidden="true" /> {rotating ? "Rotating…" : "Rotate gateway key"}</Button>
+        <span>Rotating revokes the original setup key immediately. Admin-created keys stay active.</span>
+        <Button variant="danger" disabled={rotating} onClick={rotateKey}><RefreshCw size={15} aria-hidden="true" /> {rotating ? "Rotating…" : "Rotate original key"}</Button>
       </div>
     </>
   );

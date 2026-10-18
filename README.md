@@ -3,7 +3,7 @@
 [![CI](https://github.com/jisunahamed/rotakey/actions/workflows/ci.yml/badge.svg)](https://github.com/jisunahamed/rotakey/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-147D92.svg)](LICENSE)
 
-Rotakey is a single-owner, self-hosted AI gateway. Providers are configured provider-wise as OpenAI-compatible or Anthropic-compatible, while applications use one gateway key and a public model alias through either SDK contract.
+Rotakey is a single-owner, self-hosted AI gateway. Providers are configured provider-wise as OpenAI-compatible or Anthropic-compatible, while applications use admin-created gateway keys and a public model alias through either SDK contract.
 
 ```text
 Application ── Bearer gateway key ──> Rotakey /v1
@@ -21,6 +21,8 @@ The gateway serves:
 - `GET /health/ready`
 
 The admin console is served at `/admin/`.
+
+Keys created from **Connect → Create API key** have a fixed client allowance of 2,000 requests per minute and 100 simultaneous requests. They have no client-side token, daily, or model quota; provider-side limits still remain authoritative. Each secret is displayed only once and can be revoked independently. The original setup key remains available for backward compatibility.
 
 New to gateway operations? Read the [Rotakey Operator Guide](docs/OPERATOR-GUIDE.md) for setup, dashboard metrics, every rate-limit dimension, routing behavior, errors, security, backup, and troubleshooting. For model discovery, role mapping, native/translated routes, Windows setup, and troubleshooting, see [Connect Claude Code to Rotakey](docs/CLAUDE-CODE.md).
 

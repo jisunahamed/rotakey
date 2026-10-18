@@ -1462,6 +1462,38 @@ fieldset legend {
   line-height: var(--leading-snug);
 }
 
+.gateway-key-manager {
+  max-width: 900px;
+}
+
+.gateway-key-create {
+  display: flex;
+  align-items: end;
+  gap: var(--space-4);
+  padding: var(--space-6);
+  background: var(--surface-raised);
+  border: 1px solid var(--edge);
+}
+
+.gateway-key-create .field {
+  flex: 1;
+}
+
+.gateway-key-list {
+  margin-top: var(--space-4);
+}
+
+.gateway-key-details {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.gateway-key-details code,
+.gateway-key-details small {
+  color: var(--text-muted);
+  font-size: var(--text-mini);
+}
+
 .code-example {
   max-width: 900px;
 }
