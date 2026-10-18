@@ -171,6 +171,8 @@ export type DiscoveredModel = {
   id: string;
   owned_by?: string;
   context_window?: number;
+  capabilities?: string[];
+  type?: string;
 };
 
 export type Overview = {

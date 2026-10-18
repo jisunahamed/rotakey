@@ -34,7 +34,7 @@ import {
 export type RouteDraft = Omit<
   ModelRoute,
   "id" | "provider_id" | "created_at" | "updated_at" | "capability_status" | "capability_profile" | "capabilities_checked_at" | "capability_error"
-> & { manual?: boolean; context_window?: number };
+> & { manual?: boolean; context_window?: number; capabilities?: string[]; type?: string };
 
 export function routeDraftFrom(route: ModelRoute): RouteDraft {
   return {

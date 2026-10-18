@@ -43,10 +43,12 @@ type credentialInspection struct {
 }
 
 type providerModelCatalogItem struct {
-	ID            string `json:"id"`
-	OwnedBy       string `json:"owned_by"`
-	DisplayName   string `json:"display_name"`
-	ContextWindow int    `json:"context_window,omitempty"`
+	ID            string   `json:"id"`
+	OwnedBy       string   `json:"owned_by"`
+	DisplayName   string   `json:"display_name"`
+	ContextWindow int      `json:"context_window,omitempty"`
+	Capabilities  []string `json:"capabilities,omitempty"`
+	ModelType     string   `json:"type,omitempty"`
 }
 
 type providerModelCatalog struct {
@@ -88,21 +90,24 @@ func decodeProviderModelCatalog(body []byte) (providerModelCatalog, error) {
 			continue
 		}
 		var item struct {
-			ID               string `json:"id"`
-			Name             string `json:"name"`
-			Model            string `json:"model"`
-			OwnedBy          string `json:"owned_by"`
-			DisplayName      string `json:"display_name"`
-			ContextWindow    int    `json:"context_window"`
-			MaxContextWindow int    `json:"max_context_window"`
-			ContextLength    int    `json:"context_length"`
-			MaxInputTokens   int    `json:"max_input_tokens"`
+			ID               string   `json:"id"`
+			Name             string   `json:"name"`
+			Model            string   `json:"model"`
+			OwnedBy          string   `json:"owned_by"`
+			DisplayName      string   `json:"display_name"`
+			ContextWindow    int      `json:"context_window"`
+			MaxContextWindow int      `json:"max_context_window"`
+			ContextLength    int      `json:"context_length"`
+			MaxInputTokens   int      `json:"max_input_tokens"`
+			Capabilities     []string `json:"capabilities"`
+			ModelType        string   `json:"type"`
 		}
 		if json.Unmarshal(raw, &item) == nil {
 			contextWindow := firstPositive(item.MaxContextWindow, item.ContextWindow, item.ContextLength, item.MaxInputTokens)
 			catalog.Data = append(catalog.Data, providerModelCatalogItem{
 				ID:      valueOr(strings.TrimSpace(item.ID), valueOr(strings.TrimSpace(item.Model), strings.TrimSpace(item.Name))),
 				OwnedBy: item.OwnedBy, DisplayName: item.DisplayName, ContextWindow: contextWindow,
+				Capabilities: item.Capabilities, ModelType: item.ModelType,
 			})
 		}
 	}
@@ -218,6 +223,7 @@ func inspectProviderSecretWithProtocol(ctx context.Context, provider Provider, s
 		seen[id] = true
 		result.Models = append(result.Models, DiscoveredModel{
 			ID: id, OwnedBy: valueOr(strings.TrimSpace(model.OwnedBy), strings.TrimSpace(model.DisplayName)), ContextWindow: model.ContextWindow,
+			Capabilities: model.Capabilities, ModelType: model.ModelType,
 		})
 	}
 	sort.Slice(result.Models, func(i, j int) bool { return result.Models[i].ID < result.Models[j].ID })
@@ -740,16 +746,18 @@ func (s *Server) handleCreateModelsBulk(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) recordCredentialInspection(ctx context.Context, credentialID string, inspection credentialInspection) {
 	for _, model := range inspection.Models {
-		if model.ContextWindow <= 0 {
+		profile := catalogCapabilityFacts(model)
+		if len(profile) == 0 {
 			continue
 		}
+		encoded, _ := json.Marshal(profile)
 		_, _ = s.db.Exec(ctx, `
 			UPDATE model_routes m SET
-				capability_profile=jsonb_set(coalesce(m.capability_profile, '{}'::jsonb), '{context_window}', to_jsonb($3::text), true),
+				capability_profile=coalesce(m.capability_profile, '{}'::jsonb) || $3::jsonb,
 				updated_at=NOW()
 			FROM credentials c
 			WHERE c.id=$1 AND m.provider_id=c.provider_id AND m.upstream_model=$2
-		`, credentialID, model.ID, strconv.Itoa(model.ContextWindow))
+		`, credentialID, model.ID, encoded)
 	}
 	if inspection.Valid {
 		_, _ = s.db.Exec(ctx, `
@@ -861,6 +869,9 @@ func modelCapabilityProfile(provider Provider, input *modelInput, source string)
 	}
 	if source == "catalog" {
 		profile["availability"] = "catalog_visible"
+	}
+	for key, value := range catalogCapabilityFacts(DiscoveredModel{Capabilities: input.Capabilities, ModelType: input.ModelType}) {
+		profile[key] = value
 	}
 	return profile
 }

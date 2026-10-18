@@ -112,6 +112,10 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		var alias string
 		var created time.Time
 		if rows.Scan(&alias, &created) == nil {
+			metadata := map[string]any{}
+			if route, routeErr := s.loadRoute(r.Context(), alias); routeErr == nil {
+				metadata = publicModelMetadata(route.Model)
+			}
 			// The dispatcher translates every eligible OpenAI and Anthropic route
 			// into the caller's protocol. Hiding chat-only routes from Anthropic
 			// discovery made Claude Code conclude that this gateway had no models.
@@ -125,6 +129,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			}
 			data = append(data, map[string]any{
 				"id": alias, "object": "model", "created": created.Unix(), "owned_by": "rotakey",
+				"context_window": metadata["context_window"], "capabilities": metadata["capabilities"],
 			})
 		}
 	}
@@ -160,7 +165,26 @@ func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": route.Model.PublicAlias, "object": "model", "created": route.Model.CreatedAt.Unix(), "owned_by": "rotakey",
+		"context_window": publicModelMetadata(route.Model)["context_window"], "capabilities": publicModelMetadata(route.Model)["capabilities"],
 	})
+}
+
+func publicModelMetadata(model ModelRoute) map[string]any {
+	metadata := map[string]any{"capabilities": []string{}}
+	if value := model.CapabilityProfile["context_window"]; value != "" {
+		if window, err := strconv.Atoi(value); err == nil && window > 0 {
+			metadata["context_window"] = window
+		}
+	}
+	for key, capability := range map[string]string{
+		"images": "vision", "thinking": "reasoning", "tools": "tools", "streaming": "streaming", "json_output": "json_mode", "web_search": "web_search",
+	} {
+		value := model.CapabilityProfile[key]
+		if value == "catalog_supported" || value == "native" || value == "native_unverified" || (key == "streaming" && value == "gateway_normalized") {
+			metadata["capabilities"] = append(metadata["capabilities"].([]string), capability)
+		}
+	}
+	return metadata
 }
 
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {

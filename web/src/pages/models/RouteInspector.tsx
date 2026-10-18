@@ -213,6 +213,8 @@ export function RouteInspector({
         <Fact label="Embeddings" value={protocolLabelFor(route.capability_profile?.embeddings || (route.supports_embeddings ? "native" : "off"))} />
         <Fact label="Streaming" value={protocolLabelFor(route.capability_profile?.streaming)} />
         <Fact label="Tools" value={protocolLabelFor(route.capability_profile?.tools)} />
+        <Fact label="Vision" value={protocolLabelFor(route.capability_profile?.images)} />
+        <Fact label="JSON output" value={protocolLabelFor(route.capability_profile?.json_output)} />
         <Fact label="Thinking" value={protocolLabelFor(route.capability_profile?.thinking)} />
         <Fact label="Reply limit" value={`${formatNumber(route.default_max_output_tokens)} tokens`} />
         <Fact label="Token counting" value={route.tokenizer === "heuristic" ? "Estimate" : route.tokenizer} mono={route.tokenizer !== "heuristic"} />

@@ -291,6 +291,7 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 	// proved necessary moments ago by a reply with nothing visible in it, so it
 	// overrides even a cap the caller chose.
 	callerCapped := payloadCarriesOutputCap(payload)
+	applyCatalogReplyBudget(payload, route, plan.wireEndpoint())
 	if format == "anthropic" {
 		if numberAsInt64(payload["max_tokens"]) <= 0 {
 			payload["max_tokens"] = route.Model.DefaultMaxOutputTokens

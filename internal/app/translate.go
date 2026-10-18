@@ -246,6 +246,9 @@ func translateChatResponse(body []byte, publicAlias string) ([]byte, int64, int6
 	if choices, ok := chat["choices"].([]any); ok && len(choices) > 0 {
 		if choice, ok := choices[0].(map[string]any); ok {
 			if message, ok := choice["message"].(map[string]any); ok {
+				if reasoning, ok := message["reasoning_content"].(string); ok && reasoning != "" {
+					output = append(output, map[string]any{"id": "rs_" + responseID, "type": "reasoning", "summary": []any{map[string]any{"type": "summary_text", "text": reasoning}}})
+				}
 				messageID, _ := newID("msg")
 				content := make([]any, 0)
 				if text, ok := message["content"].(string); ok && text != "" {
@@ -307,6 +310,9 @@ func translateChatStream(source io.Reader, destination io.Writer, publicAlias st
 	textStarted := false
 	textValue := ""
 	textOutputIndex := -1
+	reasoningIndex := -1
+	reasoningValue := ""
+	var finalUsage map[string]any
 	nextOutputIndex := 0
 	finished := false
 	terminalChoice := false
@@ -322,6 +328,25 @@ func translateChatStream(source io.Reader, destination io.Writer, publicAlias st
 		writeRaw(destination, capture, []byte("data: [DONE]\n\n"))
 	}
 	finalize := func() {
+		if reasoningIndex >= 0 {
+			writeSSEWithSeq(destination, capture, "response.reasoning_summary_text.done", sequence, map[string]any{
+				"type": "response.reasoning_summary_text.done", "item_id": "rs_" + responseID,
+				"output_index": reasoningIndex, "summary_index": 0, "text": reasoningValue,
+			})
+			sequence++
+			part := map[string]any{"type": "summary_text", "text": reasoningValue}
+			writeSSEWithSeq(destination, capture, "response.reasoning_summary_part.done", sequence, map[string]any{
+				"type": "response.reasoning_summary_part.done", "item_id": "rs_" + responseID,
+				"output_index": reasoningIndex, "summary_index": 0, "part": part,
+			})
+			sequence++
+			item := map[string]any{"id": "rs_" + responseID, "type": "reasoning", "summary": []any{part}}
+			writeSSEWithSeq(destination, capture, "response.output_item.done", sequence, map[string]any{
+				"type": "response.output_item.done", "output_index": reasoningIndex, "item": item,
+			})
+			sequence++
+			output = append(output, item)
+		}
 		if textStarted {
 			writeSSEWithSeq(destination, capture, "response.output_text.done", sequence, map[string]any{
 				"type": "response.output_text.done", "item_id": "msg_" + responseID,
@@ -360,12 +385,25 @@ func translateChatStream(source io.Reader, destination io.Writer, publicAlias st
 			sequence++
 			output = append(output, item)
 		}
+		indexesByID := map[string]int{"rs_" + responseID: reasoningIndex, "msg_" + responseID: textOutputIndex}
+		for _, tool := range tools {
+			indexesByID[tool.ID] = tool.OutputIndex
+		}
+		slices.SortStableFunc(output, func(a, b any) int {
+			left, _ := a.(map[string]any)
+			right, _ := b.(map[string]any)
+			return indexesByID[fmt.Sprint(left["id"])] - indexesByID[fmt.Sprint(right["id"])]
+		})
+		completedResponse := map[string]any{
+			"id": responseID, "object": "response", "created_at": time.Now().Unix(),
+			"status": "completed", "model": publicAlias, "output": output,
+		}
+		if finalUsage != nil {
+			completedResponse["usage"] = finalUsage
+		}
 		writeSSEWithSeq(destination, capture, "response.completed", sequence, map[string]any{
-			"type": "response.completed",
-			"response": map[string]any{
-				"id": responseID, "object": "response", "created_at": time.Now().Unix(),
-				"status": "completed", "model": publicAlias, "output": output,
-			},
+			"type":     "response.completed",
+			"response": completedResponse,
 		})
 		writeRaw(destination, capture, []byte("data: [DONE]\n\n"))
 	}
@@ -387,6 +425,13 @@ func translateChatStream(source io.Reader, destination io.Writer, publicAlias st
 				emitFailure("upstream_stream_error", "The upstream reported an error while streaming.")
 				return fmt.Errorf("upstream stream error: %v", upstreamError)
 			}
+			if usage, ok := chunk["usage"].(map[string]any); ok {
+				input, output := extractUsage(chunk, "chat")
+				finalUsage = map[string]any{"input_tokens": input, "output_tokens": output, "total_tokens": input + output}
+				if details, ok := usage["completion_tokens_details"]; ok {
+					finalUsage["output_tokens_details"] = details
+				}
+			}
 			if choices, ok := chunk["choices"].([]any); ok && len(choices) > 0 {
 				choice, _ := choices[0].(map[string]any)
 				if finishReason, ok := choice["finish_reason"].(string); ok && finishReason != "" {
@@ -395,6 +440,28 @@ func translateChatStream(source io.Reader, destination io.Writer, publicAlias st
 					terminalChoice = true
 				}
 				delta, _ := choice["delta"].(map[string]any)
+				if reasoning, ok := delta["reasoning_content"].(string); ok && reasoning != "" {
+					if reasoningIndex < 0 {
+						reasoningIndex = nextOutputIndex
+						nextOutputIndex++
+						writeSSEWithSeq(destination, capture, "response.output_item.added", sequence, map[string]any{
+							"type": "response.output_item.added", "output_index": reasoningIndex,
+							"item": map[string]any{"id": "rs_" + responseID, "type": "reasoning", "summary": []any{}},
+						})
+						sequence++
+						writeSSEWithSeq(destination, capture, "response.reasoning_summary_part.added", sequence, map[string]any{
+							"type": "response.reasoning_summary_part.added", "item_id": "rs_" + responseID,
+							"output_index": reasoningIndex, "summary_index": 0, "part": map[string]any{"type": "summary_text", "text": ""},
+						})
+						sequence++
+					}
+					reasoningValue += reasoning
+					writeSSEWithSeq(destination, capture, "response.reasoning_summary_text.delta", sequence, map[string]any{
+						"type": "response.reasoning_summary_text.delta", "item_id": "rs_" + responseID,
+						"output_index": reasoningIndex, "summary_index": 0, "delta": reasoning,
+					})
+					sequence++
+				}
 				if content, ok := delta["content"].(string); ok && content != "" {
 					if !textStarted {
 						textStarted = true

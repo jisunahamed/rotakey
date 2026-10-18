@@ -1055,6 +1055,11 @@ func (s *Server) streamAttempt(
 	}
 	defer response.Body.Close()
 
+	var evidence *streamEvidenceReader
+	if plan.Format != "anthropic" {
+		evidence = &streamEvidenceReader{source: source}
+		source = evidence
+	}
 	copyResponseHeaders(w, req.PublicMode, response.Header)
 	s.setCompatibilityHeaders(w, plan)
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -1099,6 +1104,14 @@ func (s *Server) streamAttempt(
 		writeStreamFallback = true
 	}
 
+	if evidence != nil {
+		if evidence.hasUsage {
+			inputTokens, outputTokens = evidence.input, evidence.output
+		}
+		if streamCode == "" {
+			streamCode = evidence.errorCode
+		}
+	}
 	if streamCode != "" {
 		record.Error = streamCode
 		record.ErrorMessage = "The upstream provider sent an error after streaming started."

@@ -4408,6 +4408,8 @@ function routeInputsFromSelection(selected: Record<string, string>, catalogIDs =
     supports_embeddings: embeddings,
     default_max_output_tokens: 1024,
     context_window: catalogByID.get(upstreamModel)?.context_window,
+    capabilities: catalogByID.get(upstreamModel)?.capabilities,
+    type: catalogByID.get(upstreamModel)?.type,
     input_cost_per_million_usd: 0,
     output_cost_per_million_usd: 0,
     request_cost_usd: undefined,

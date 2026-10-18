@@ -59,6 +59,8 @@ const capabilityPhrase: Record<string, string> = {
  *  with only four names the inspector printed "Not checked yet" over a route that
  *  had been checked, which is the exact failure the phrase table exists to stop. */
 const protocolPhrase: Record<string, string> = {
+  catalog_supported: "Supported by provider catalog",
+  unsupported: "Not supported by this model",
   native: "Native",
   translated: "Translated by the gateway",
   off: "Off",

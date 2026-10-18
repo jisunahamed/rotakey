@@ -640,6 +640,8 @@ type modelInput struct {
 	SupportsEmbeddings      bool     `json:"supports_embeddings"`
 	DefaultMaxOutputTokens  int      `json:"default_max_output_tokens"`
 	ContextWindow           int      `json:"context_window,omitempty"`
+	Capabilities            []string `json:"capabilities,omitempty"`
+	ModelType               string   `json:"type,omitempty"`
 	InputCostPerMillionUSD  float64  `json:"input_cost_per_million_usd"`
 	OutputCostPerMillionUSD float64  `json:"output_cost_per_million_usd"`
 	RequestCostUSD          *float64 `json:"request_cost_usd,omitempty"`
@@ -767,6 +769,9 @@ func (s *Server) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnprocessableEntity, "model_validation_failed", err.Error())
 			return
 		}
+		if input.UpstreamModel == currentUpstream {
+			retainCatalogFacts(profile, capabilityProfile)
+		}
 		capabilityProfile, _ = json.Marshal(profile)
 	}
 	tag, err := s.db.Exec(r.Context(), `
@@ -793,16 +798,17 @@ func (s *Server) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleProbeModel(w http.ResponseWriter, r *http.Request) {
 	var providerID string
+	var previousProfile []byte
 	var input modelInput
 	if err := s.db.QueryRow(r.Context(), `
 		SELECT provider_id, public_alias, upstream_model, supports_chat, supports_responses,
 		       supports_messages, supports_embeddings, default_max_output_tokens, tokenizer, capture_bodies,
-		       strip_parameters, enabled
+		       strip_parameters, enabled, capability_profile
 		FROM model_routes WHERE id=$1
 	`, r.PathValue("id")).Scan(
 		&providerID, &input.PublicAlias, &input.UpstreamModel, &input.SupportsChat,
 		&input.SupportsResponses, &input.SupportsMessages, &input.SupportsEmbeddings, &input.DefaultMaxOutputTokens,
-		&input.Tokenizer, &input.CaptureBodies, &input.StripParameters, &input.Enabled,
+		&input.Tokenizer, &input.CaptureBodies, &input.StripParameters, &input.Enabled, &previousProfile,
 	); err != nil {
 		writeError(w, http.StatusNotFound, "model_not_found", "Model was not found.")
 		return
@@ -818,6 +824,7 @@ func (s *Server) handleProbeModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "model_validation_failed", err.Error())
 		return
 	}
+	retainCatalogFacts(profile, previousProfile)
 	profileJSON, _ := json.Marshal(profile)
 	_, err = s.db.Exec(r.Context(), `
 		UPDATE model_routes SET supports_chat=$2, supports_responses=$3, supports_messages=$4, supports_embeddings=$5,
