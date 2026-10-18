@@ -356,18 +356,6 @@ export type Settings = {
   base_url: string;
 };
 
-export type GatewayAccessKey = {
-  id: string;
-  label: string;
-  prefix: string;
-  enabled: boolean;
-  rpm: number;
-  concurrency_limit: number;
-  last_used_at?: string;
-  created_at: string;
-  updated_at: string;
-};
-
 /** Returned by PUT /api/admin/settings, which reports the alias renames the
  * routing-mode switch performed. */
 export type SettingsUpdateResult = {

@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/jackc/pgx/v5"
 )
 
 const sessionCookieName = "relay_session"
@@ -244,29 +242,11 @@ func (s *Server) requireGatewayKey(next http.Handler) http.Handler {
 		if key == "" {
 			key = anthropicKey
 		}
-		if key == "" {
+		_, expected, err := s.settings(r.Context())
+		if err != nil || len(expected) == 0 || key == "" || !secureEqual(hashAPIKey(key), expected) {
 			writeProtocolError(w, r, http.StatusUnauthorized, "authentication_error", "A valid Rotakey gateway key is required.")
 			return
 		}
-		access, err := s.gatewayAccessKey(r.Context(), key)
-		if err != nil {
-			if !errors.Is(err, pgx.ErrNoRows) {
-				writeProtocolError(w, r, http.StatusServiceUnavailable, "authentication_unavailable", "Gateway authentication is temporarily unavailable.")
-				return
-			}
-			writeProtocolError(w, r, http.StatusUnauthorized, "authentication_error", "A valid Rotakey gateway key is required.")
-			return
-		}
-		release, blocked, err := s.reserveGatewayAccess(r.Context(), access)
-		if err != nil {
-			writeProtocolError(w, r, http.StatusServiceUnavailable, "limiter_unavailable", "API key limits could not be checked.")
-			return
-		}
-		if blocked != "" {
-			gatewayAccessLimitError(w, r, blocked)
-			return
-		}
-		defer release()
 		if isAnthropicRequest(r) {
 			version := strings.TrimSpace(r.Header.Get("Anthropic-Version"))
 			if version == "" {
