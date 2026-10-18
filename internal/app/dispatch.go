@@ -277,6 +277,13 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 	for from, to := range relabeled {
 		plan.Replaced[from] = to
 	}
+	// A model's earlier tool call can be replayed with empty, truncated or fenced
+	// arguments. Strict providers reject the whole request with "arguments must be
+	// valid JSON". Normalize the wire body after every protocol translation so
+	// Chat, Responses and mixed-provider pools all receive valid call history.
+	for _, path := range normalizeInvalidToolArguments(payload) {
+		plan.Replaced[path] = emptyToolArguments
+	}
 
 	// The reply floors, read before the caps are filled so "the caller set no
 	// cap" still means what it says — see reply_budget.go. The learned floor
