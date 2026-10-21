@@ -1653,6 +1653,8 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                   <p className="eyebrow">{selected.api_format === "anthropic" ? "Anthropic-compatible upstream" : "OpenAI-compatible upstream"}</p>
                   <h2>{selected.name}</h2>
                   <code>{selected.base_url}</code>
+                  {selected.alternative_provider_id && <p>Alternative: {providers.find((item) => item.id === selected.alternative_provider_id)?.name || "Unavailable"} · only on failure or rate limit</p>}
+                  {providers.some((item) => item.alternative_provider_id === selected.id) && <p>Backup only · reserved for {providers.filter((item) => item.alternative_provider_id === selected.id).map((item) => item.name).join(", ")}</p>}
                 </div>
                 <div className="button-row">
                   <button className="console-icon resource-inspector-close" onClick={() => setProviderInspectorOpen(false)} aria-label="Close provider inspector"><X size={15} aria-hidden="true" /></button>
@@ -1804,7 +1806,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
       {/* `missingRecord` gates all four so the panel is never rendered against a
           record that has gone: one render in add-mode with the edit fields still
           filled is enough to turn the next Save into a duplicate. */}
-      {panelProvider && !missingRecord && panel?.type === "provider" && <ProviderForm provider={panelProvider} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
+      {panelProvider && !missingRecord && panel?.type === "provider" && <ProviderForm provider={panelProvider} providers={providers} onClose={() => setPanel(null)} onComplete={complete} notify={notify} />}
       {/* The same sheet Models opens, with the provider fixed: adding a route while
           looking at the provider that serves it is a reasonable moment to do it,
           but there is no second implementation of it any more. */}
@@ -2605,7 +2607,7 @@ function ProviderFields({ value, onChange, existingKeys }: { value: ProviderDraf
   );
 }
 
-function ProviderForm({ provider, onClose, onComplete, notify }: { provider: Provider; onClose: () => void; onComplete: (message: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
+function ProviderForm({ provider, providers, onClose, onComplete, notify }: { provider: Provider; providers: Provider[]; onClose: () => void; onComplete: (message: string) => void; notify: (message: string, tone?: "success" | "danger") => void }) {
   // The panel reads its provider out of the list that reloads every ten seconds,
   // so recomputing the baseline on every render made an unrelated upstream change
   // — a health check, a request counter — read as unsaved local edits: the discard
@@ -2618,8 +2620,13 @@ function ProviderForm({ provider, onClose, onComplete, notify }: { provider: Pro
   }
   const saved = baseline.current.draft;
   const [draft, setDraft] = useState<ProviderDraft>(saved);
+  const initialAlternative = useRef(provider.alternative_provider_id || "");
+  const [alternative, setAlternative] = useState(initialAlternative.current);
   const [busy, setBusy] = useState(false);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(saved) || alternative !== initialAlternative.current;
+  const isAlternative = providers.some((item) => item.alternative_provider_id === provider.id);
+  const selectedAlternative = providers.find((item) => item.id === alternative);
+  const matchingAliases = selectedAlternative ? provider.models.filter((model) => model.enabled && selectedAlternative.models.some((other) => other.enabled && other.public_alias === model.public_alias)).length : 0;
   return (
     <Sheet
       title={`Edit ${provider.name}`}
@@ -2640,12 +2647,25 @@ function ProviderForm({ provider, onClose, onComplete, notify }: { provider: Pro
           }
           setBusy(true);
           void api(`/api/admin/providers/${provider.id}`, { method: "PUT", json: providerPayload(draft) })
+            .then(() => api(`/api/admin/providers/${provider.id}/fallback`, { method: "PUT", json: { alternative_provider_id: alternative } }))
             .then(() => onComplete(`${draft.name} updated.`))
             .catch((caught) => notify(errorMessage(caught), "danger"))
             .finally(() => setBusy(false));
         }}
       >
         <ProviderFields value={draft} onChange={setDraft} existingKeys={provider.credentials.length} />
+        <fieldset>
+          <legend>Alternative provider</legend>
+          <p>Used only when this provider fails, is unavailable, or reaches its rate limit. Models are matched by the exact public alias. Normal traffic stays on primary providers.</p>
+          {isAlternative ? <p>This provider is reserved as an alternative. It receives no normal traffic and cannot have its own alternative.</p> : <>
+            <label htmlFor="alternative-provider">Use as backup</label>
+            <select id="alternative-provider" value={alternative} onChange={(event) => setAlternative(event.target.value)} disabled={busy}>
+              <option value="">No alternative provider</option>
+              {providers.filter((item) => item.id !== provider.id && !item.alternative_provider_id).map((item) => <option key={item.id} value={item.id}>{item.name}{item.enabled ? "" : " (disabled)"}</option>)}
+            </select>
+            {selectedAlternative && <p>{matchingAliases} matching enabled model aliases. {selectedAlternative.enabled ? "Unused backup aliases receive no normal requests. Primary traffic resumes automatically when its cooldown expires." : "This alternative is disabled. Enable it before it can serve requests."}</p>}
+          </>}
+        </fieldset>
         <div className="sheet-actions"><span /><Button type="submit" disabled={busy}>{busy ? "Saving…" : "Save provider"}</Button></div>
       </form>
     </Sheet>

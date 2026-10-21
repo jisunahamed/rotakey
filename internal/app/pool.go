@@ -97,12 +97,17 @@ func candidateSelectionOrder(candidates []routeCandidate, cursor int64) []int {
 	}
 	primaryOrder := make([]int, 0, len(order))
 	for _, index := range order {
-		if candidates[index].repairPreferred {
+		if candidates[index].repairPreferred && !candidates[index].Route.FallbackOnly {
 			primaryOrder = append(primaryOrder, index)
 		}
 	}
 	for _, index := range order {
 		if !candidates[index].repairPreferred && !candidates[index].Route.FallbackOnly {
+			primaryOrder = append(primaryOrder, index)
+		}
+	}
+	for _, index := range order {
+		if candidates[index].repairPreferred && candidates[index].Route.FallbackOnly {
 			primaryOrder = append(primaryOrder, index)
 		}
 	}

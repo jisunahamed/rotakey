@@ -174,6 +174,13 @@ const routeColumns = `
 const routeFilter = `
 		m.enabled = TRUE AND p.enabled = TRUE
 		  AND m.capability_status IN ('catalog_verified', 'probe_verified')
+		  AND (
+		    NOT EXISTS (SELECT 1 FROM provider_fallbacks f WHERE f.alternative_id=p.id)
+		    OR EXISTS (
+		      SELECT 1 FROM provider_fallbacks f JOIN model_routes pm ON pm.provider_id=f.primary_id
+		      WHERE f.alternative_id=p.id AND pm.public_alias=m.public_alias AND pm.enabled=TRUE
+		    )
+		  )
 `
 
 func scanRoute(row pgx.Row) (routeRuntime, error) {
@@ -237,9 +244,14 @@ func scanRoute(row pgx.Row) (routeRuntime, error) {
 // pool may hold several providers, so callers that need failover should use
 // loadRoutes instead.
 func (s *Server) loadRoute(ctx context.Context, alias string) (routeRuntime, error) {
-	routes, err := s.loadRoutes(ctx, alias)
+	routes, err := s.resolveRoutes(ctx, alias, routingModeModel)
 	if err != nil {
 		return routeRuntime{}, err
+	}
+	for _, route := range routes {
+		if !route.FallbackOnly {
+			return route, nil
+		}
 	}
 	return routes[0], nil
 }

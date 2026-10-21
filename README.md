@@ -201,6 +201,7 @@ Files use the **Default Anthropic resource provider** selected in System setting
 ## Routing and limits
 
 - In provider-wise mode a public alias selects one provider route. In model-wise mode every enabled provider route publishing the same alias forms a fallback pool.
+- In **Providers → Edit → Alternative provider**, choose a backup for a primary provider. The backup receives no normal inference traffic. When the primary fails, has no usable key, is disabled, or reaches its limits, the same public alias is tried on the backup. Upstream model identifiers may differ; public aliases must match exactly. Backup-only aliases without a matching primary alias are not exposed. Existing cooldown/reset checks automatically return traffic to the primary when it becomes usable. A backup cannot itself have a backup; circular configurations are rejected.
 - Without a primary API key, eligible keys are visited with a Redis-backed round-robin cursor.
 - If a healthy primary key is configured, Rotakey uses its available capacity first and falls back to the other keys when needed.
 - A key's shared limits span every model route under the provider. Shared limits and any extra model-specific limits must all reserve atomically.

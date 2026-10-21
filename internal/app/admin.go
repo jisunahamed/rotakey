@@ -46,6 +46,7 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/admin/providers/{id}", admin(s.handleDeleteProvider))
 	mux.Handle("PUT /api/admin/providers/{id}/state", admin(s.handleSetProviderEnabled))
 	mux.Handle("PUT /api/admin/providers/{id}/pin", admin(s.handleSetProviderPinned))
+	mux.Handle("PUT /api/admin/providers/{id}/fallback", admin(s.handleSetProviderFallback))
 	mux.Handle("POST /api/admin/providers/inspect", admin(s.handleInspectUnsavedProvider))
 	mux.Handle("POST /api/admin/providers/{id}/test", admin(s.handleTestProvider))
 	mux.Handle("POST /api/admin/providers/{id}/models", admin(s.handleCreateModel))
@@ -111,6 +112,13 @@ func (s *Server) listProviders(ctx context.Context) ([]Provider, error) {
 		return nil, err
 	}
 
+	links, err := s.providerFallbacks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range providers {
+		providers[i].AlternativeProviderID = links[providers[i].ID]
+	}
 	modelRows, err := s.db.Query(ctx, `
 		SELECT id, provider_id, public_alias, upstream_model, supports_chat,
 		       supports_responses, supports_messages, supports_embeddings, default_max_output_tokens, tokenizer,

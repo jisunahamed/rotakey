@@ -17,7 +17,7 @@ import (
 // resolveRoutes returns the candidate routes for an alias. Provider-wise mode
 // keeps the historical one-route behaviour; model-wise mode pools every
 // provider publishing the same public alias.
-func (s *Server) resolveRoutes(ctx context.Context, alias string, mode string) ([]routeRuntime, error) {
+func (s *Server) resolveUnconfiguredRoutes(ctx context.Context, alias string, mode string) ([]routeRuntime, error) {
 	routes, err := s.loadRoutes(ctx, alias)
 	if err != nil {
 		return nil, err
@@ -370,7 +370,11 @@ func (s *Server) servePooled(
 		}
 
 		outcome := s.runAttempt(w, r, req, candidate, plan, client, retryContext, reserved, compatibilityRetriesRemaining > 0 && recovery.tests < 3)
-		if recovery.handle(retryContext, &candidate, plan, &outcome, clients) {
+		configuredFailover := false
+		if !outcome.Done && !outcome.Compatibility && outcome.Status != http.StatusOK {
+			configuredFailover = skipFailedPrimary(candidates, candidate, skipped)
+		}
+		if !configuredFailover && recovery.handle(retryContext, &candidate, plan, &outcome, clients) {
 			delete(skipped, candidate.key())
 			repairCandidateKey = candidate.key()
 			if credentialID := recovery.selectedCredentials[candidate.Route.Model.ID]; credentialID != "" {

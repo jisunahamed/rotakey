@@ -132,6 +132,7 @@ export type Credential = {
 };
 
 export type Provider = {
+  alternative_provider_id?: string;
   id: string;
   name: string;
   slug: string;

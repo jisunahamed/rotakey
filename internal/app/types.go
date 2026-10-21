@@ -26,19 +26,20 @@ func (p RatePolicy) Valid() bool {
 }
 
 type Provider struct {
-	ID                  string            `json:"id"`
-	Name                string            `json:"name"`
-	Slug                string            `json:"slug"`
-	BaseURL             string            `json:"base_url"`
-	AuthHeader          string            `json:"auth_header"`
-	AuthScheme          string            `json:"auth_scheme"`
-	ExtraHeaders        map[string]string `json:"extra_headers"`
-	TimeoutSeconds      int               `json:"timeout_seconds"`
-	Enabled             bool              `json:"enabled"`
-	Pinned              bool              `json:"pinned"`
-	AllowPrivateNetwork bool              `json:"allow_private_network"`
-	APIFormat           string            `json:"api_format"`
-	AnthropicVersion    string            `json:"anthropic_version"`
+	AlternativeProviderID string            `json:"alternative_provider_id"`
+	ID                    string            `json:"id"`
+	Name                  string            `json:"name"`
+	Slug                  string            `json:"slug"`
+	BaseURL               string            `json:"base_url"`
+	AuthHeader            string            `json:"auth_header"`
+	AuthScheme            string            `json:"auth_scheme"`
+	ExtraHeaders          map[string]string `json:"extra_headers"`
+	TimeoutSeconds        int               `json:"timeout_seconds"`
+	Enabled               bool              `json:"enabled"`
+	Pinned                bool              `json:"pinned"`
+	AllowPrivateNetwork   bool              `json:"allow_private_network"`
+	APIFormat             string            `json:"api_format"`
+	AnthropicVersion      string            `json:"anthropic_version"`
 	// DefaultKeyBalanceUSD is the credit every new key on this provider starts
 	// with. An operator with dozens of keys behind one account sets the figure once
 	// here instead of typing it into each key. Nil means the provider seeds
