@@ -51,9 +51,16 @@ func (r *streamEvidenceReader) observe(line []byte) {
 		}
 		chunk = response
 	}
+	if message, ok := chunk["message"].(map[string]any); ok {
+		chunk = message
+	}
 	if usage, ok := chunk["usage"].(map[string]any); ok {
 		r.hasUsage = true
-		r.input = max(numberAsInt64(usage["prompt_tokens"]), numberAsInt64(usage["input_tokens"]))
-		r.output = max(numberAsInt64(usage["completion_tokens"]), numberAsInt64(usage["output_tokens"]))
+		if usage["prompt_tokens"] != nil || usage["input_tokens"] != nil {
+			r.input = max(numberAsInt64(usage["prompt_tokens"]), numberAsInt64(usage["input_tokens"])) + numberAsInt64(usage["cache_creation_input_tokens"]) + numberAsInt64(usage["cache_read_input_tokens"])
+		}
+		if usage["completion_tokens"] != nil || usage["output_tokens"] != nil {
+			r.output = max(numberAsInt64(usage["completion_tokens"]), numberAsInt64(usage["output_tokens"]))
+		}
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -813,96 +812,23 @@ func (s *Server) runAttempt(
 	if req.Stream {
 		return s.streamAttempt(w, r, req, candidate, plan, response, reserved, record, upstreamRequestID)
 	}
-	body, wasTruncated, readErr := boundedBody(response.Body, s.cfg.MaxResponseBytes)
-	_ = response.Body.Close()
-	if readErr != nil || wasTruncated {
-		record.Error, record.ErrorMessage = "upstream_response_too_large", "Upstream response exceeded the configured limit."
-		s.writePoolError(w, r, req.PublicMode, http.StatusBadGateway, record.Error, record.ErrorMessage)
-		return attemptOutcome{
-			Done: true, Record: record, Status: http.StatusBadGateway,
-			ErrorCode: record.Error, ErrorMessage: record.ErrorMessage, Truncated: wasTruncated,
-			UpstreamRequestID: upstreamRequestID,
-		}
+	defer response.Body.Close()
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, s.cfg.MaxResponseBytes))
+	if readErr != nil || int64(len(body)) >= s.cfg.MaxResponseBytes {
+		return s.relaySuccessfulBody(w, r, req, plan, response, io.MultiReader(bytes.NewReader(body), response.Body), reserved, record, upstreamRequestID)
 	}
-	// A reply that spent its whole budget without one visible word is repaired
-	// like a rejection, not delivered like an answer: the budget escalates and
-	// the same request is retried, inside the ordinary compatibility budget.
-	// The tokens the starved attempt burned were real, so the limiter is
-	// settled with what the reply actually reports before the retry reserves
-	// its own. See reply_budget.go.
-	if allowCompatibility && starvedReply(plan.Format, plan.wireEndpoint(), body) {
-		current := currentOutputCap(plan.Payload, plan.Format, plan.wireEndpoint())
-		if escalated := escalateReplyBudget(current); escalated > current {
-			usedInput, usedOutput := replyUsage(plan.Format, plan.wireEndpoint(), body)
-			_ = s.limiter.AdjustTokens(r.Context(), reserved, usedInput+usedOutput)
-			record.Error = "reply_budget_exhausted"
-			record.ErrorMessage = fmt.Sprintf(
-				"The model spent all %d reply tokens without producing text; retried with %d.", current, escalated)
-			record.Retryable = true
-			s.logger.Info("reply budget exhausted before any visible output; retrying with a larger one",
-				"request_id", req.RequestID, "model", candidate.Route.Model.PublicAlias,
-				"provider", candidate.Route.Provider.Name, "from", current, "to", escalated)
-			return attemptOutcome{
-				Record: record, Status: response.StatusCode,
-				UpstreamRequestID: upstreamRequestID, Compatibility: true, ResetSkips: true,
-				LearnedReplyFloor: escalated,
-				InputTokens:       usedInput, OutputTokens: usedOutput,
-			}
-		}
-	}
-	translatedBody, inputTokens, outputTokens, translateErr := translateUpstreamResponse(req, plan, body)
-	if translateErr != nil {
-		// This 502 is manufactured here, out of an upstream 200 — the one
-		// failure in this function the provider had no part in — so the reason
-		// goes on the record and in the log, where the last one of these sat
-		// unexplained until the translator was read by hand.
-		record.Error, record.ErrorMessage = "translation_failed", "Upstream response could not be translated: "+translateErr.Error()
-		s.logger.Warn("upstream response could not be translated",
-			"request_id", req.RequestID, "model", candidate.Route.Model.PublicAlias,
-			"provider", candidate.Route.Provider.Name, "public_mode", req.PublicMode,
-			"wire", plan.wireEndpoint(), "error", translateErr)
-		s.writePoolError(w, r, req.PublicMode, http.StatusBadGateway, record.Error, record.ErrorMessage)
-		return attemptOutcome{
-			Done: true, Record: record, Status: http.StatusBadGateway,
-			ErrorCode: record.Error, ErrorMessage: record.ErrorMessage, ResponseBody: body,
-			UpstreamRequestID: upstreamRequestID,
-		}
-	}
-	// HTTP 200 means the provider accepted the call, but it does not prove the
-	// body contains a model answer. Some compatible providers put an error
-	// envelope inside 200; others occasionally return an empty completion. Never
-	// fabricate a zero-token answer for either case. Keep the real body private,
-	// settle any reported usage, and leave the request open for another attempt.
-	// A valid text, refusal, or tool call is forwarded even when usage says zero.
-	if !validRepairResponse(translatedBody, req.PublicMode) {
-		if inputTokens+outputTokens > 0 {
-			_ = s.limiter.AdjustTokens(r.Context(), reserved, inputTokens+outputTokens)
-		}
-		record.Error = upstreamErrorCode(body)
-		record.ErrorMessage = upstreamErrorMessage(body, credential.Secret)
-		if record.ErrorMessage == "" {
-			record.Error = "empty_upstream_response"
-			record.ErrorMessage = "The provider returned HTTP 200 without text, refusal, or a tool call."
-		}
-		record.Retryable = true
-		return attemptOutcome{
-			Record: record, Status: http.StatusBadGateway,
-			ErrorCode: record.Error, ErrorMessage: record.ErrorMessage,
-			ResponseBody: body, InputTokens: inputTokens, OutputTokens: outputTokens,
-			UpstreamRequestID: upstreamRequestID,
-			Compatibility:     allowCompatibility, ResetSkips: allowCompatibility,
-		}
-	}
+	// Provider success is authoritative. Usage or visible-output validation must
+	// never manufacture a failure or a duplicate paid request from a 2xx reply.
+	translatedBody, inputTokens, outputTokens := successfulUpstreamBody(req, plan, body)
 	if inputTokens+outputTokens > 0 {
 		_ = s.limiter.AdjustTokens(r.Context(), reserved, inputTokens+outputTokens)
-	}
-	if plan.Recovered && !validRepairResponse(translatedBody, req.PublicMode) {
-		record.Error, record.ErrorMessage, record.Retryable = "invalid_repair_response", "Repair produced no valid answer or tool call.", true
-		return attemptOutcome{Record: record, Status: http.StatusBadGateway, ErrorCode: record.Error, ErrorMessage: record.ErrorMessage, ResponseBody: translatedBody, InputTokens: inputTokens, OutputTokens: outputTokens}
 	}
 	copyResponseHeaders(w, req.PublicMode, response.Header)
 	s.setCompatibilityHeaders(w, plan)
 	w.Header().Set("Content-Type", "application/json")
+	if bytes.Equal(body, translatedBody) && response.Header.Get("Content-Type") != "" {
+		w.Header().Set("Content-Type", response.Header.Get("Content-Type"))
+	}
 	w.WriteHeader(response.StatusCode)
 	_, _ = w.Write(translatedBody)
 	return attemptOutcome{
@@ -1016,54 +942,35 @@ func (s *Server) streamAttempt(
 	upstreamRequestID string,
 ) attemptOutcome {
 	source := io.Reader(response.Body)
-	if plan.Format == "anthropic" {
-		prepared, retryable, prepareErr := s.prepareAnthropicStreamSource(response)
-		if prepareErr != nil {
-			_ = response.Body.Close()
-			record.Error, record.ErrorMessage, record.Retryable = "upstream_stream_invalid", prepareErr.Error(), retryable
-			s.markCredentialFailure(r.Context(), candidate.Credential.ID, http.StatusBadGateway, 0)
-			if retryable {
-				return attemptOutcome{
-					Record: record, Status: http.StatusBadGateway,
-					ErrorCode: record.Error, ErrorMessage: record.ErrorMessage, UpstreamRequestID: upstreamRequestID,
-				}
-			}
-			s.writePoolError(w, r, req.PublicMode, http.StatusBadGateway, record.Error, record.ErrorMessage)
-			return attemptOutcome{
-				Done: true, Record: record, Status: http.StatusBadGateway,
-				ErrorCode: record.Error, ErrorMessage: record.ErrorMessage, UpstreamRequestID: upstreamRequestID,
-			}
-		}
-		source = prepared
-	}
-	if plan.Format != "anthropic" {
-		// The same peek the Anthropic branch has always had, for the other two
-		// wires: a stream whose first event is an error never carried an answer,
-		// so nothing has been committed and the pool can still fail over. See
-		// prepareOpenAIStreamSource for the production request that needed it.
-		prepared, errorFrame, prepareErr := prepareOpenAIStreamSource(response)
-		if prepareErr != nil {
-			_ = response.Body.Close()
-			record.Error = valueOr(upstreamErrorCode(errorFrame), "upstream_stream_error")
-			record.ErrorMessage = valueOr(upstreamErrorMessage(errorFrame, candidate.Credential.Secret), prepareErr.Error())
-			record.Retryable = true
-			s.markCredentialFailure(r.Context(), candidate.Credential.ID, http.StatusBadGateway, 0)
-			return attemptOutcome{
-				Record: record, Status: http.StatusBadGateway,
-				ErrorCode: record.Error, ErrorMessage: record.ErrorMessage, UpstreamRequestID: upstreamRequestID,
-			}
-		}
-		if prepared != nil {
-			source = prepared
-		}
-	}
 	defer response.Body.Close()
-
-	var evidence *streamEvidenceReader
-	if plan.Format != "anthropic" {
-		evidence = &streamEvidenceReader{source: source}
-		source = evidence
+	// A streaming request may receive a JSON reply. Preserve that reply and
+	// status instead of insisting on SSE and manufacturing a 502.
+	if strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "application/json") {
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, s.cfg.MaxResponseBytes))
+		if readErr == nil && int64(len(body)) < s.cfg.MaxResponseBytes {
+			body, input, output := successfulUpstreamBody(req, plan, body)
+			copyResponseHeaders(w, req.PublicMode, response.Header)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(response.StatusCode)
+			_, _ = w.Write(body)
+			_ = s.limiter.AdjustTokens(r.Context(), reserved, input+output)
+			return attemptOutcome{Done: true, Record: record, Status: response.StatusCode, ResponseBody: body, InputTokens: input, OutputTokens: output, UpstreamRequestID: upstreamRequestID}
+		}
+		return s.relaySuccessfulBody(w, r, req, plan, response, io.MultiReader(bytes.NewReader(body), response.Body), reserved, record, upstreamRequestID)
 	}
+	source, actual := successfulStreamSource(source)
+	if actual == messageModeAnthropic {
+		plan.Format = "anthropic"
+	} else if actual != "" {
+		plan.Format = "openai"
+		plan.Path = "/chat/completions"
+		if actual == messageModeResponses {
+			plan.Path = "/responses"
+		}
+	}
+
+	evidence := &streamEvidenceReader{source: source}
+	source = evidence
 	copyResponseHeaders(w, req.PublicMode, response.Header)
 	s.setCompatibilityHeaders(w, plan)
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -1083,8 +990,12 @@ func (s *Server) streamAttempt(
 		writeStreamFallback bool
 	)
 	switch {
-	case plan.Format == "anthropic" && req.PublicMode == messageModeAnthropic:
-		streamCode, streamErr = rewriteAnthropicStream(source, w, req.Alias, capture)
+	case actual == "" || actual == req.PublicMode:
+		var captureWriter io.Writer
+		if capture != nil {
+			captureWriter = capture
+		}
+		streamErr = relaySuccessfulStream(w, source, captureWriter)
 	case plan.Format == "anthropic" && req.PublicMode == messageModeResponses:
 		streamCode, streamErr = translateAnthropicStreamToResponses(source, w, req.Alias, capture)
 	case plan.Format == "anthropic":

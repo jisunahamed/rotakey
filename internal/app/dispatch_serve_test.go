@@ -141,8 +141,9 @@ func TestRunAttemptSwitchesToResponsesOnUpstreamDemand(t *testing.T) {
 	}
 }
 
-func TestRunAttemptRetriesAnErrorHiddenInsideHTTP200(t *testing.T) {
-	upstream := upstreamAnswering(t, `{"error":{"message":"messages[65].content did not match any supported type","type":"invalid_request_error"}}`)
+func TestRunAttemptPreservesProviderHTTP200ErrorEnvelope(t *testing.T) {
+	body := `{"error":{"message":"messages[65].content did not match any supported type","type":"invalid_request_error"}}`
+	upstream := upstreamAnswering(t, body)
 	server, candidate, plan := chatAttempt(t, upstream.URL)
 	server.db = unreachablePostgres(t)
 	recorder := httptest.NewRecorder()
@@ -152,17 +153,14 @@ func TestRunAttemptRetriesAnErrorHiddenInsideHTTP200(t *testing.T) {
 	outcome := server.runAttempt(recorder, request, req, candidate, plan,
 		upstream.Client(), context.Background(), reservation{}, true)
 
-	if outcome.Done || !outcome.Record.Retryable || !outcome.Compatibility || !outcome.ResetSkips {
-		t.Fatalf("hidden HTTP 200 error was not left open for retry: %#v", outcome)
+	if !outcome.Done || outcome.Record.Retryable || outcome.Compatibility || outcome.ResetSkips {
+		t.Fatalf("provider HTTP 200 was retried or rejected: %#v", outcome)
 	}
-	if outcome.Status != http.StatusBadGateway || outcome.Record.StatusCode != http.StatusOK {
+	if outcome.Status != http.StatusOK || outcome.Record.StatusCode != http.StatusOK {
 		t.Fatalf("gateway/upstream statuses = %d/%d", outcome.Status, outcome.Record.StatusCode)
 	}
-	if !strings.Contains(outcome.ErrorMessage, "messages[65].content") {
-		t.Fatalf("provider error was lost: %q", outcome.ErrorMessage)
-	}
-	if recorder.Body.Len() != 0 {
-		t.Fatalf("hidden error reached the caller before retry: %q", recorder.Body.String())
+	if recorder.Body.String() != body {
+		t.Fatalf("provider body was changed: %q", recorder.Body.String())
 	}
 }
 

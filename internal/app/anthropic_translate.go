@@ -684,6 +684,7 @@ func translateAnthropicResponseToChat(body []byte, alias string) ([]byte, int64,
 		return nil, 0, 0, fmt.Errorf("response carries no content field, so it is not an Anthropic message")
 	}
 	content := strings.Builder{}
+	reasoning := strings.Builder{}
 	toolCalls := make([]any, 0)
 	if text, ok := message["content"].(string); ok {
 		content.WriteString(text)
@@ -692,6 +693,10 @@ func translateAnthropicResponseToChat(body []byte, alias string) ([]byte, int64,
 		for _, raw := range blocks {
 			block, _ := raw.(map[string]any)
 			switch block["type"] {
+			case "thinking":
+				if text, ok := block["thinking"].(string); ok {
+					reasoning.WriteString(text)
+				}
 			case "text":
 				content.WriteString(fmt.Sprint(block["text"]))
 			case "tool_use":
@@ -704,6 +709,9 @@ func translateAnthropicResponseToChat(body []byte, alias string) ([]byte, int64,
 		}
 	}
 	outputMessage := map[string]any{"role": "assistant", "content": content.String()}
+	if reasoning.Len() > 0 {
+		outputMessage["reasoning_content"] = reasoning.String()
+	}
 	if len(toolCalls) > 0 {
 		outputMessage["tool_calls"] = toolCalls
 	}
@@ -736,6 +744,12 @@ func translateChatResponseToAnthropic(body []byte, alias string) ([]byte, int64,
 	if choices, ok := chat["choices"].([]any); ok && len(choices) > 0 {
 		choice, _ := choices[0].(map[string]any)
 		message, _ := choice["message"].(map[string]any)
+		if text, ok := message["reasoning_content"].(string); ok && text != "" {
+			blocks = append(blocks, map[string]any{"type": "thinking", "thinking": text})
+		}
+		if text, ok := message["refusal"].(string); ok && text != "" {
+			blocks = append(blocks, map[string]any{"type": "text", "text": text})
+		}
 		// Compatible providers may return either the traditional content string
 		// or an OpenAI content-part array. Reading only the string form used to
 		// discard real model output and made a successful reply appear empty.
@@ -1154,6 +1168,7 @@ func translateOpenAIStreamToAnthropic(source io.Reader, destination io.Writer, a
 	})
 	reader := bufio.NewReaderSize(source, 128<<10)
 	textIndex := -1
+	reasoningIndex := -1
 	openBlocks := map[int]bool{}
 	toolBlockIndex := map[int]int{}
 	nextIndex := 0
@@ -1184,6 +1199,15 @@ func translateOpenAIStreamToAnthropic(source io.Reader, destination io.Writer, a
 				}
 				choice, _ := choices[0].(map[string]any)
 				delta, _ := choice["delta"].(map[string]any)
+				if text, ok := delta["reasoning_content"].(string); ok && text != "" {
+					if reasoningIndex < 0 {
+						reasoningIndex = nextIndex
+						nextIndex++
+						openBlocks[reasoningIndex] = true
+						writeSSE(destination, capture, "content_block_start", map[string]any{"type": "content_block_start", "index": reasoningIndex, "content_block": map[string]any{"type": "thinking", "thinking": ""}})
+					}
+					writeSSE(destination, capture, "content_block_delta", map[string]any{"type": "content_block_delta", "index": reasoningIndex, "delta": map[string]any{"type": "thinking_delta", "thinking": text}})
+				}
 				if text, ok := delta["content"].(string); ok && text != "" {
 					if textIndex < 0 {
 						textIndex = nextIndex
