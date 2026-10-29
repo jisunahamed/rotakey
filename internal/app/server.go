@@ -77,7 +77,13 @@ func (s *Server) Close() {
 }
 
 func (s *Server) Handler() http.Handler {
-	return s.handler
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		inference := r.Method == http.MethodPost && (r.URL.Path == "/v1/messages" || r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/responses" || r.URL.Path == "/v1/responses/compact" || r.URL.Path == "/v1/embeddings" || r.URL.Path == "/api/admin/playground/run")
+		if inference {
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+		}
+		s.handler.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), admissionServerKey{}, s)))
+	})
 }
 
 func (s *Server) routes() http.Handler {

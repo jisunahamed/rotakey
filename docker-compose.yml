@@ -22,6 +22,7 @@ services:
     build:
       context: .
     restart: unless-stopped
+    stop_grace_period: 75s
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777

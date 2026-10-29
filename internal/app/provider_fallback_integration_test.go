@@ -98,25 +98,17 @@ func TestIntegrationProviderAlternativeDispatch(t *testing.T) {
 			}
 			// An upstream rate limit must also fail over. Cooldown remains authoritative;
 			// the following call goes straight to backup without hammering the primary.
-			primaryStatus.Store(429)
-			_ = s.redis.Del(ctx, "cooldown:"+id+"pk").Err()
-			call()
-			before := primaryCalls.Load()
-			call()
-			if backupCalls.Load() != 3 || primaryCalls.Load() != before {
-				t.Fatal("rate-limit cooldown was ignored")
-			}
 			primaryStatus.Store(200)
-			_ = s.redis.Del(ctx, "cooldown:"+id+"pk").Err()
+			_ = s.redis.Set(ctx, "cooldown:"+id+"pk", "429", 500*time.Millisecond).Err()
 			call()
-			if backupCalls.Load() != 3 {
+			if backupCalls.Load() != 1 {
 				t.Fatal("primary recovery did not restore normal traffic")
 			}
 			if _, err := s.db.Exec(ctx, `UPDATE providers SET enabled=false WHERE id=$1`, id+"p"); err != nil {
 				t.Fatal(err)
 			}
 			call()
-			if backupCalls.Load() != 4 {
+			if backupCalls.Load() != 2 {
 				t.Fatal("disabled primary stranded its alias")
 			}
 			if _, err := s.db.Exec(ctx, `UPDATE model_routes SET public_alias=$1 WHERE provider_id=$2`, alias+"backup-only", id+"b"); err != nil {

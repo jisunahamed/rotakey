@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 readonly APP_DIR="/opt/rotakey"
-readonly COMPOSE_FILE="compose.vps.yml"
+readonly COMPOSE_FILES=(-f docker-compose.yml -f compose.vps.yml)
 readonly HEALTH_URL="http://127.0.0.1:8787/health/ready"
 readonly LOCK_FILE="/var/lock/rotakey-ci-deploy.lock"
 readonly BACKUP_RETENTION=7
@@ -52,12 +52,12 @@ umask 077
 readonly backup="backups/rotakey-$(date -u +%Y%m%dT%H%M%SZ).dump"
 readonly backup_tmp="${backup}.tmp"
 trap 'rm -f -- "$backup_tmp"' EXIT
-docker compose -f "$COMPOSE_FILE" exec -T postgres \
+docker compose "${COMPOSE_FILES[@]}" exec -T postgres \
   sh -c 'pg_dump -Fc -U "$POSTGRES_USER" -d "$POSTGRES_DB"' </dev/null >"$backup_tmp"
 test -s "$backup_tmp"
 mv -- "$backup_tmp" "$backup"
 
-readonly app_container="$(docker compose -f "$COMPOSE_FILE" ps -q app)"
+readonly app_container="$(docker compose "${COMPOSE_FILES[@]}" ps -q app)"
 if [[ -z "$app_container" ]]; then
   echo "Rotakey app container is not running; refusing an unverified deployment." >&2
   exit 69
@@ -66,11 +66,11 @@ readonly previous_image="$(docker inspect --format '{{.Image}}' "$app_container"
 docker image tag "$previous_image" rotakey-app:predeploy
 
 git merge --ff-only "$expected_sha"
-docker compose -f "$COMPOSE_FILE" build \
+docker compose "${COMPOSE_FILES[@]}" build \
   --build-arg ROTAKEY_COMMIT="$expected_sha" \
   --build-arg ROTAKEY_BUILD_TIME="$(date -u +%FT%TZ)" \
   app </dev/null
-docker compose -f "$COMPOSE_FILE" up -d --no-deps app </dev/null
+docker compose "${COMPOSE_FILES[@]}" up -d --no-deps app </dev/null
 
 ready=false
 for _ in {1..30}; do
@@ -84,7 +84,7 @@ done
 if [[ "$ready" != true ]]; then
   echo "New app failed readiness; restoring the previous image." >&2
   docker image tag rotakey-app:predeploy rotakey-app:latest
-  docker compose -f "$COMPOSE_FILE" up -d --no-deps --force-recreate app </dev/null
+  docker compose "${COMPOSE_FILES[@]}" up -d --no-deps --force-recreate app </dev/null
   exit 1
 fi
 

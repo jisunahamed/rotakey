@@ -55,7 +55,7 @@ const sectionWeight = new Map(sections.map(({ name, weight }) => [name, weight])
 const settingsHits: ReadonlyArray<Omit<Hit, "path" | "icon" | "section">> = [
   { id: "set-routing", label: "Routing mode", detail: "Provider-wise or model-wise aliases", keywords: "alias naming pool pooled rename prefix slug" },
   { id: "set-anthropic", label: "Default Anthropic resource provider", detail: "Which provider serves file uploads and batches", keywords: "files batches upload claude" },
-  { id: "set-wait", label: "Capacity wait ceiling", detail: "How long a request waits for a rate-limited key", keywords: "wait queue rate limit delay max_wait_ms milliseconds" },
+  { id: "set-wait", label: "Resource wait ceiling", detail: "Wait limit for files, batches and token counting; inference queues follow the client", keywords: "wait queue rate limit delay max_wait_ms milliseconds" },
   { id: "set-timeout", label: "Default request timeout", detail: "How long the gateway waits for a provider", keywords: "timeout seconds slow hang new provider" },
   { id: "set-metadata", label: "Metadata retention", detail: "How long request history is kept", keywords: "retention delete history logs days purge" },
   { id: "set-bodies", label: "Captured body retention", detail: "How long captured request and reply text is kept", keywords: "retention bodies capture prompts replies days" },

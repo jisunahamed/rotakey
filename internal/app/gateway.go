@@ -1322,7 +1322,8 @@ func (s *Server) beginActiveRequest(requestID, endpoint string, started time.Tim
 		ModelAlias:   "unresolved",
 		ProviderName: "gateway",
 		Endpoint:     endpoint,
-		Running:      true,
+		Running:      false,
+		State:        "queued",
 		CreatedAt:    started.UTC(),
 	})
 }
@@ -1354,6 +1355,9 @@ func (s *Server) activeRequestLogs(query string) []RequestLog {
 			return true
 		}
 		log.LatencyMS = now.Sub(log.CreatedAt).Milliseconds()
+		if log.QueuedAt != nil {
+			log.QueueWaitMS += now.Sub(*log.QueuedAt).Milliseconds()
+		}
 		logs = append(logs, log)
 		return true
 	})
@@ -1401,6 +1405,15 @@ func (s *Server) rejectGatewayRequest(
 }
 
 func (s *Server) storeRequestLog(ctx context.Context, input logInput) {
+	var queueWait int64
+	if active, ok := s.activeRequests.Load(input.RequestID); ok {
+		if log, ok := active.(RequestLog); ok {
+			queueWait = log.QueueWaitMS
+			if log.QueuedAt != nil {
+				queueWait += time.Since(*log.QueuedAt).Milliseconds()
+			}
+		}
+	}
 	id, err := newID("log")
 	if err != nil {
 		return
@@ -1450,15 +1463,15 @@ func (s *Server) storeRequestLog(ctx context.Context, input logInput) {
 		     credential_id, credential_label, endpoint, attempts, routing_decisions, status_code,
 		     latency_ms, input_tokens, output_tokens, error_code, error_message,
 		     request_body_cipher, response_body_cipher, body_truncated,
-		     public_protocol, upstream_protocol, upstream_request_id)
+		     public_protocol, upstream_protocol, upstream_request_id, queue_wait_ms)
 		VALUES ($1,$2,NULLIF($3,''),$4,NULLIF($5,''),$6,NULLIF($7,''),$8,$9,$10,$11,$12,$13,$14,$15,
-		        NULLIF($16,''),$17,$18,$19,$20,$21,$22,$23)
+		        NULLIF($16,''),$17,$18,$19,$20,$21,$22,$23,$24)
 	`, id, input.RequestID, input.Route.Model.ID, modelAlias,
 		input.Route.Provider.ID, providerName, input.Credential.ID,
 		input.Credential.Label, input.Endpoint, attempts, routingDecisions, input.StatusCode,
 		time.Since(input.Started).Milliseconds(), input.InputTokens, input.OutputTokens,
 		input.ErrorCode, input.ErrorMessage, requestCipher, responseCipher, truncated,
-		protocolOrDefault(input.PublicProtocol), protocolOrDefault(input.UpstreamProtocol), input.UpstreamRequestID)
+		protocolOrDefault(input.PublicProtocol), protocolOrDefault(input.UpstreamProtocol), input.UpstreamRequestID, queueWait)
 	if err != nil {
 		s.logger.Warn("request log write failed", "request_id", input.RequestID, "error", err)
 	}

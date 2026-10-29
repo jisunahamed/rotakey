@@ -350,6 +350,11 @@ func upstreamModelForProvider(provider Provider, model string) string {
 }
 
 func verifyProviderProtocol(ctx context.Context, client *http.Client, provider Provider, secret []byte, model string) (bool, string, int, string) {
+	ctx, release, admitErr := enterAuxiliaryAdmission(ctx, provider)
+	if admitErr != nil {
+		return false, "", 0, "Provider queue was cancelled or unavailable."
+	}
+	defer release()
 	protocol := provider.APIFormat
 	if protocol == "" {
 		protocol = "openai"
@@ -877,6 +882,7 @@ func modelCapabilityProfile(provider Provider, input *modelInput, source string)
 }
 
 func (s *Server) probeProviderModel(ctx context.Context, providerID string, input *modelInput) (string, map[string]string, *time.Time, error) {
+	ctx = context.WithValue(ctx, admissionServerKey{}, s)
 	provider, err := scanProvider(s.db.QueryRow(ctx, `SELECT `+providerColumns+` FROM providers WHERE id=$1`, providerID))
 	if err != nil {
 		return "failed", nil, nil, fmt.Errorf("provider was not found")
@@ -928,6 +934,11 @@ func (s *Server) probeProviderModel(ctx context.Context, providerID string, inpu
 }
 
 func probeProviderModelWithSecret(ctx context.Context, provider Provider, input *modelInput, secret []byte) (string, map[string]string, *time.Time, int, error) {
+	ctx, release, admitErr := enterAuxiliaryAdmission(ctx, provider)
+	if admitErr != nil {
+		return "failed", nil, nil, 0, admitErr
+	}
+	defer release()
 	probeContext, cancel := context.WithTimeout(ctx, modelProbeTimeout(provider))
 	defer cancel()
 	path := "/chat/completions"

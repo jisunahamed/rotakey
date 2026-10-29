@@ -24,6 +24,7 @@ type limitConstraint struct {
 }
 
 type reservation struct {
+	lease       *providerLease
 	constraints []limitConstraint
 	tokenCost   int64
 	reservedAt  int64
@@ -42,7 +43,7 @@ type blockedLimit struct {
 	Retry      time.Duration
 }
 
-var reserveScript = redis.NewScript(`
+const reserveLua = `
 local now = tonumber(ARGV[1])
 local states = {}
 local max_wait = 0
@@ -82,7 +83,9 @@ for i, state in ipairs(states) do
   redis.call("PEXPIRE", state[1], math.ceil(state[4] * 2))
 end
 return {1, 0}
-`)
+`
+
+var reserveScript = redis.NewScript(reserveLua)
 
 var adjustScript = redis.NewScript(`
 local reserved_at = tonumber(ARGV[1])

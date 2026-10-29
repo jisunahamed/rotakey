@@ -52,9 +52,10 @@ func main() {
 	}()
 
 	<-rootCtx.Done()
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", "error", err)
+		_ = httpServer.Close()
 	}
 }

@@ -326,3 +326,5 @@ Rotakey v1 is intentionally single-owner. Multi-user accounts, billing, embeddin
 Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md), never through a public issue.
 
 Rotakey is available under the [MIT License](LICENSE).
+
+Provider concurrency and connected inference queues are configured per provider; see [Provider queue settings](docs/provider-queue.md).

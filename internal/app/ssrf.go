@@ -91,7 +91,7 @@ func upstreamClient(provider Provider) (*http.Client, error) {
 		timeout = 120 * time.Second
 	}
 	return &http.Client{
-		Transport: safeTransport(provider.AllowPrivateNetwork),
+		Transport: &admissionTransport{base: safeTransport(provider.AllowPrivateNetwork), provider: provider},
 		Timeout:   timeout,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse

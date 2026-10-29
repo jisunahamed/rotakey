@@ -236,22 +236,27 @@ func (s *Server) handleListProviders(w http.ResponseWriter, r *http.Request) {
 	}
 	for index := range providers {
 		providers[index].Capacity = s.providerCapacity(r.Context(), providers[index].Credentials)
+		keys := providerAdmissionKeys(providers[index].ID)
+		now := strconv.FormatInt(time.Now().UnixMilli(), 10)
+		providers[index].RunningRequests = int(s.redis.ZCount(r.Context(), keys[2], now, "+inf").Val())
+		providers[index].QueuedRequests = int(s.redis.ZCount(r.Context(), keys[1], now, "+inf").Val())
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"providers": providers})
 }
 
 type providerInput struct {
-	Name                string            `json:"name"`
-	Slug                string            `json:"slug"`
-	BaseURL             string            `json:"base_url"`
-	AuthHeader          string            `json:"auth_header"`
-	AuthScheme          string            `json:"auth_scheme"`
-	ExtraHeaders        map[string]string `json:"extra_headers"`
-	TimeoutSeconds      int               `json:"timeout_seconds"`
-	Enabled             bool              `json:"enabled"`
-	AllowPrivateNetwork bool              `json:"allow_private_network"`
-	APIFormat           string            `json:"api_format"`
-	AnthropicVersion    string            `json:"anthropic_version"`
+	MaxConcurrentRequests *int              `json:"max_concurrent_requests"`
+	Name                  string            `json:"name"`
+	Slug                  string            `json:"slug"`
+	BaseURL               string            `json:"base_url"`
+	AuthHeader            string            `json:"auth_header"`
+	AuthScheme            string            `json:"auth_scheme"`
+	ExtraHeaders          map[string]string `json:"extra_headers"`
+	TimeoutSeconds        int               `json:"timeout_seconds"`
+	Enabled               bool              `json:"enabled"`
+	AllowPrivateNetwork   bool              `json:"allow_private_network"`
+	APIFormat             string            `json:"api_format"`
+	AnthropicVersion      string            `json:"anthropic_version"`
 	// DefaultKeyBalanceUSD seeds the balance of every key created on this
 	// provider. It is a pointer because null means "seed nothing", which is a
 	// different instruction from seeding zero.
@@ -267,6 +272,9 @@ type providerInput struct {
 }
 
 func validateProviderInput(input *providerInput) error {
+	if input.MaxConcurrentRequests != nil && *input.MaxConcurrentRequests < 0 {
+		return fmt.Errorf("Maximum running requests must be zero (unlimited) or greater")
+	}
 	input.Name = strings.TrimSpace(input.Name)
 	input.Slug = strings.ToLower(strings.TrimSpace(input.Slug))
 	if input.Slug == "" {
@@ -486,11 +494,11 @@ func (s *Server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 		INSERT INTO providers
 		    (id, name, slug, base_url, auth_header, auth_scheme, extra_headers,
 		     timeout_seconds, enabled, allow_private_network, api_format, anthropic_version,
-		     default_key_balance_usd)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		     default_key_balance_usd, max_concurrent_requests)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,COALESCE($14,0))
 	`, id, input.Name, input.Slug, input.BaseURL, input.AuthHeader, input.AuthScheme,
 		headers, input.TimeoutSeconds, input.Enabled, input.AllowPrivateNetwork,
-		input.APIFormat, input.AnthropicVersion, input.DefaultKeyBalanceUSD)
+		input.APIFormat, input.AnthropicVersion, input.DefaultKeyBalanceUSD, input.MaxConcurrentRequests)
 	if err != nil {
 		writeError(w, http.StatusConflict, "provider_conflict", "Provider slug already exists or the provider is invalid.")
 		return
@@ -517,6 +525,7 @@ func (s *Server) handleUpdateProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	candidate := providerFromInput(input)
+	candidate.ID = current.ID
 	connectionChanged := candidate.BaseURL != current.BaseURL || candidate.APIFormat != current.APIFormat ||
 		candidate.AuthHeader != current.AuthHeader || candidate.AuthScheme != current.AuthScheme ||
 		candidate.AnthropicVersion != current.AnthropicVersion || candidate.AllowPrivateNetwork != current.AllowPrivateNetwork
@@ -550,11 +559,11 @@ func (s *Server) handleUpdateProvider(w http.ResponseWriter, r *http.Request) {
 		UPDATE providers SET name=$2, slug=$3, base_url=$4, auth_header=$5,
 		    auth_scheme=$6, extra_headers=$7, timeout_seconds=$8, enabled=$9,
 		    allow_private_network=$10, api_format=$11, anthropic_version=$12,
-		    default_key_balance_usd=$13, updated_at=NOW()
+		    default_key_balance_usd=$13, max_concurrent_requests=COALESCE($14,max_concurrent_requests), updated_at=NOW()
 		WHERE id=$1
 	`, r.PathValue("id"), input.Name, input.Slug, input.BaseURL, input.AuthHeader,
 		input.AuthScheme, headers, input.TimeoutSeconds, input.Enabled, input.AllowPrivateNetwork,
-		input.APIFormat, input.AnthropicVersion, input.DefaultKeyBalanceUSD)
+		input.APIFormat, input.AnthropicVersion, input.DefaultKeyBalanceUSD, input.MaxConcurrentRequests)
 	if err != nil || tag.RowsAffected() == 0 {
 		writeError(w, http.StatusConflict, "provider_update_failed", "Provider could not be updated.")
 		return
@@ -1508,7 +1517,7 @@ func (s *Server) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 const requestLogColumns = `id, request_id, model_alias, provider_name, credential_label, endpoint,
 	       attempts, routing_decisions, status_code, latency_ms, input_tokens, output_tokens,
 	       COALESCE(error_code,''), COALESCE(error_message,''), request_body_cipher IS NOT NULL,
-	       body_truncated, public_protocol, upstream_protocol, upstream_request_id, created_at`
+	       body_truncated, public_protocol, upstream_protocol, upstream_request_id, created_at, queue_wait_ms`
 
 func scanRequestLog(row interface{ Scan(...any) error }) (RequestLog, error) {
 	var log RequestLog
@@ -1519,7 +1528,15 @@ func scanRequestLog(row interface{ Scan(...any) error }) (RequestLog, error) {
 		&log.BodyCaptured, &log.BodyTruncated,
 		&log.PublicProtocol, &log.UpstreamProtocol, &log.UpstreamRequestID,
 		&log.CreatedAt,
+		&log.QueueWaitMS,
 	)
+	log.State = "completed"
+	if log.ErrorCode == "cancelled" {
+		log.State = "cancelled"
+	}
+	if log.ErrorCode == "timeout" {
+		log.State = "timeout"
+	}
 	return log, err
 }
 
@@ -1532,9 +1549,16 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	statusFilter := strings.TrimSpace(r.URL.Query().Get("status"))
 	status, _ := strconv.Atoi(statusFilter)
 	errorsOnly := statusFilter == "errors"
-	runningOnly := statusFilter == "running"
+	runningOnly := statusFilter == "running" || statusFilter == "queued"
 	activeLogs := s.activeRequestLogs(query)
 	if runningOnly {
+		filtered := activeLogs[:0]
+		for _, log := range activeLogs {
+			if (statusFilter == "queued" && log.State == "queued") || (statusFilter == "running" && log.State != "queued") {
+				filtered = append(filtered, log)
+			}
+		}
+		activeLogs = filtered
 		if len(activeLogs) > limit {
 			activeLogs = activeLogs[:limit]
 		}

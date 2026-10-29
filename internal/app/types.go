@@ -26,6 +26,9 @@ func (p RatePolicy) Valid() bool {
 }
 
 type Provider struct {
+	MaxConcurrentRequests int               `json:"max_concurrent_requests"`
+	RunningRequests       int               `json:"running_requests"`
+	QueuedRequests        int               `json:"queued_requests"`
 	AlternativeProviderID string            `json:"alternative_provider_id"`
 	ID                    string            `json:"id"`
 	Name                  string            `json:"name"`
@@ -192,6 +195,11 @@ type RoutingDecision struct {
 }
 
 type RequestLog struct {
+	QueuedAt          *time.Time      `json:"queued_at,omitempty"`
+	State             string          `json:"state,omitempty"`
+	WaitReason        string          `json:"wait_reason,omitempty"`
+	QueuePosition     int64           `json:"queue_position,omitempty"`
+	QueueWaitMS       int64           `json:"queue_wait_ms"`
 	ID                string          `json:"id"`
 	RequestID         string          `json:"request_id"`
 	ModelAlias        string          `json:"model_alias"`

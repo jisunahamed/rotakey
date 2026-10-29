@@ -5,10 +5,8 @@ import (
 	"context"
 	"errors"
 	"io"
-	"math"
 	"net/http"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -222,6 +220,9 @@ func (s *Server) servePooled(
 	routes []routeRuntime,
 	forcedCredential string,
 ) {
+	// The authenticated inference body has been parsed. Keep the body-transfer
+	// deadline from turning the connection's disconnect watcher into a queue cap.
+	_ = http.NewResponseController(w).SetReadDeadline(time.Time{})
 	primary := routes[0]
 	req.DeferFailures = true
 	candidates, err := s.loadPoolCandidates(r.Context(), routes)
@@ -272,7 +273,7 @@ func (s *Server) servePooled(
 	}
 	candidates = retainPlannedCandidates(candidates, plans)
 
-	retryContext, cancelRetries := context.WithTimeout(r.Context(), poolRetryTimeout(routes, req.Stream))
+	retryContext, cancelRetries := context.WithCancel(r.Context())
 	defer cancelRetries()
 
 	clients := newClientCache()
@@ -280,6 +281,7 @@ func (s *Server) servePooled(
 	defer recovery.finish()
 	skipped := map[string]bool{}
 	repairCandidateKey := ""
+	waitingProviderID := ""
 	compatibilityRetriesRemaining := 2
 	maxAttempts := min(12, len(candidates)+compatibilityRetriesRemaining+3)
 	attempts := make([]AttemptRecord, 0, maxAttempts)
@@ -309,13 +311,24 @@ func (s *Server) servePooled(
 		for _, c := range candidates {
 			preparedPlans[c.Route.Model.ID] = recovery.prepare(c.Route, plans[c.Route.Model.ID])
 		}
-		selected, reserved, retryAfter, routing, selectErr := s.selectPoolCandidate(
-			retryContext, req.Alias, candidates, planTokenCosts(preparedPlans), skipped, req.MaxWait,
-		)
+		selected, reserved, routing, selectErr := s.selectQueuedCandidate(retryContext, req, candidates, planTokenCosts(preparedPlans), skipped, forcedCredential, waitingProviderID)
+		waitingProviderID = ""
 		decisions = append(decisions, routing...)
 		if selectErr != nil {
+			if errors.Is(selectErr, context.Canceled) || errors.Is(selectErr, context.DeadlineExceeded) {
+				if len(attempts) == 0 {
+					result.InputTokens = 0
+					result.OutputTokens = 0
+				}
+				result.Status = 499
+				result.ErrorCode = "cancelled"
+				result.ErrorMessage = "Client cancelled while waiting for capacity."
+				s.storePoolLog(r.Context(), req, result, attempts, decisions)
+				return
+			}
 			result.Status, result.ErrorCode, result.ErrorMessage = http.StatusServiceUnavailable, "limiter_unavailable", "Rate limiter is unavailable."
 			s.writePoolError(w, r, req.PublicMode, result.Status, result.ErrorCode, result.ErrorMessage)
+			s.storePoolLog(r.Context(), req, result, attempts, decisions)
 			return
 		}
 		if selected == nil {
@@ -337,8 +350,14 @@ func (s *Server) servePooled(
 				s.storePoolLog(r.Context(), req, result, attempts, decisions)
 				return
 			}
-			w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(retryAfter.Seconds())))))
-			result.Status, result.ErrorCode, result.ErrorMessage = http.StatusTooManyRequests, "rate_limit_exceeded", "Every provider and credential for this model is at capacity."
+			result.Status, result.ErrorCode, result.ErrorMessage = http.StatusServiceUnavailable, "no_usable_provider", "No configured provider can serve this request."
+			for _, d := range routing {
+				if d.Reason == "request_exceeds_limit" {
+					result.Status = 400
+					result.ErrorCode = "request_exceeds_limit"
+					result.ErrorMessage = "Request exceeds every eligible key's per-request token capacity."
+				}
+			}
 			s.writePoolError(w, r, req.PublicMode, result.Status, result.ErrorCode, result.ErrorMessage)
 			s.storePoolLog(r.Context(), req, result, attempts, decisions)
 			return
@@ -359,6 +378,7 @@ func (s *Server) servePooled(
 
 		client, clientErr := clients.get(candidate.Route.Provider, req.Stream)
 		if clientErr != nil {
+			reserved.lease.release()
 			_ = s.limiter.AdjustTokens(r.Context(), reserved, 0)
 			attempts = append(attempts, AttemptRecord{
 				CredentialID: candidate.Credential.ID, CredentialLabel: candidate.Credential.Label,
@@ -368,7 +388,49 @@ func (s *Server) servePooled(
 			continue
 		}
 
-		outcome := s.runAttempt(w, r, req, candidate, plan, client, retryContext, reserved, compatibilityRetriesRemaining > 0 && recovery.tests < 3)
+		attemptCtx, cancelAttempt := context.WithTimeout(retryContext, providerRetryTimeout(candidate.Route.Provider, req.Stream))
+		attemptCtx = context.WithValue(attemptCtx, admissionHeldKey{}, true)
+		stopLeaseWatch := make(chan struct{})
+		go func() {
+			select {
+			case <-reserved.lease.lost:
+				cancelAttempt()
+			case <-stopLeaseWatch:
+			}
+		}()
+		var timedOut bool
+		outcome := func() attemptOutcome {
+			defer func() {
+				timedOut = errors.Is(attemptCtx.Err(), context.DeadlineExceeded)
+				close(stopLeaseWatch)
+				cancelAttempt()
+				reserved.lease.release()
+			}()
+			return s.runAttempt(w, r, req, candidate, plan, client, attemptCtx, reserved, compatibilityRetriesRemaining > 0 && recovery.tests < 3)
+		}()
+		if timedOut {
+			if !outcome.Done {
+				outcome.Status = 504
+			}
+			outcome.ErrorCode = "timeout"
+			outcome.ErrorMessage = "The upstream call timed out after dispatch."
+			outcome.Record.Error = "timeout"
+			outcome.Record.ErrorMessage = outcome.ErrorMessage
+		}
+		if r.Context().Err() != nil {
+			if !outcome.Done {
+				outcome.Status = 499
+			}
+			outcome.ErrorCode = "cancelled"
+			outcome.ErrorMessage = "Client cancelled the upstream call."
+			outcome.Done = true
+		}
+		if !outcome.Done && (outcome.Status == 429 || outcome.Record.Error == "rate_limit_exceeded") {
+			waitingProviderID = candidate.Route.Provider.ID
+			delete(skipped, candidate.key())
+			attempt--
+			continue
+		}
 		configuredFailover := false
 		if !outcome.Done && !outcome.Compatibility && outcome.Status != http.StatusOK {
 			configuredFailover = skipFailedPrimary(candidates, candidate, skipped)

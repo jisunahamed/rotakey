@@ -90,10 +90,18 @@ func (s *Server) diagnoseRepair(ctx context.Context, p RepairPolicy, evidence []
 	if err != nil {
 		return RepairProposal{}, reserve, errors.New("Repair credentials unavailable")
 	}
-	selected, reserved, _, _, err := s.selectCredentialWithDiagnostics(ctx, route.Model.ID, credentials, plan.TokenCost, map[string]bool{}, 0)
-	if err != nil || selected == nil {
+	candidates := []routeCandidate{}
+	for _, credential := range credentials {
+		candidates = append(candidates, routeCandidate{Route: route, Credential: credential})
+	}
+	selectedCandidate, reserved, _, err := s.selectQueuedCandidate(ctx, req, candidates, map[string]int64{route.Model.ID: plan.TokenCost}, map[string]bool{}, "")
+	if err != nil || selectedCandidate == nil {
 		return RepairProposal{}, reserve, errors.New("Repair connection has no capacity")
 	}
+	ctx, release, _ := guardProviderLease(ctx, reserved.lease)
+	defer release()
+	selected := &selectedCandidate.Credential
+	ctx = context.WithValue(ctx, admissionHeldKey{}, true)
 	client, err := upstreamClient(route.Provider)
 	if err != nil {
 		_ = s.limiter.AdjustTokens(ctx, reserved, 0)

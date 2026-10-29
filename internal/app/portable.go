@@ -39,18 +39,19 @@ type ExportSettings struct {
 }
 
 type ExportProvider struct {
-	Name                string            `json:"name"`
-	Slug                string            `json:"slug"`
-	BaseURL             string            `json:"base_url"`
-	AuthHeader          string            `json:"auth_header"`
-	AuthScheme          string            `json:"auth_scheme"`
-	ExtraHeaders        map[string]string `json:"extra_headers,omitempty"`
-	TimeoutSeconds      int               `json:"timeout_seconds"`
-	Enabled             bool              `json:"enabled"`
-	Pinned              bool              `json:"pinned,omitempty"`
-	AllowPrivateNetwork bool              `json:"allow_private_network"`
-	APIFormat           string            `json:"api_format"`
-	AnthropicVersion    string            `json:"anthropic_version"`
+	MaxConcurrentRequests *int              `json:"max_concurrent_requests,omitempty"`
+	Name                  string            `json:"name"`
+	Slug                  string            `json:"slug"`
+	BaseURL               string            `json:"base_url"`
+	AuthHeader            string            `json:"auth_header"`
+	AuthScheme            string            `json:"auth_scheme"`
+	ExtraHeaders          map[string]string `json:"extra_headers,omitempty"`
+	TimeoutSeconds        int               `json:"timeout_seconds"`
+	Enabled               bool              `json:"enabled"`
+	Pinned                bool              `json:"pinned,omitempty"`
+	AllowPrivateNetwork   bool              `json:"allow_private_network"`
+	APIFormat             string            `json:"api_format"`
+	AnthropicVersion      string            `json:"anthropic_version"`
 	// DefaultKeyBalanceUSD and BalanceSpentUSD travel with the provider so a
 	// restored account seeds new keys with the same figure and keeps the pooled
 	// spend that could not be charged to any one key.
@@ -157,7 +158,8 @@ func (s *Server) buildExportBundle(ctx context.Context, withSecrets bool) (Expor
 
 func exportProvider(provider Provider, aliasByModelID, secrets map[string]string, withSecrets bool) ExportProvider {
 	exported := ExportProvider{
-		Name: provider.Name, Slug: provider.Slug, BaseURL: provider.BaseURL,
+		MaxConcurrentRequests: &provider.MaxConcurrentRequests,
+		Name:                  provider.Name, Slug: provider.Slug, BaseURL: provider.BaseURL,
 		AuthHeader: provider.AuthHeader, AuthScheme: provider.AuthScheme,
 		ExtraHeaders: provider.ExtraHeaders, TimeoutSeconds: provider.TimeoutSeconds,
 		Enabled: provider.Enabled, Pinned: provider.Pinned, AllowPrivateNetwork: provider.AllowPrivateNetwork,

@@ -132,6 +132,9 @@ export type Credential = {
 };
 
 export type Provider = {
+  max_concurrent_requests?: number;
+  running_requests?: number;
+  queued_requests?: number;
   alternative_provider_id?: string;
   id: string;
   name: string;
@@ -300,6 +303,10 @@ export type OverviewHeadroom = {
 };
 
 export type RequestLog = {
+  state?: string;
+  wait_reason?: string;
+  queue_position?: number;
+  queue_wait_ms?: number;
   id: string;
   request_id: string;
   model_alias: string;

@@ -102,7 +102,8 @@ func validateImportBundle(bundle *ExportBundle) error {
 	for index := range bundle.Providers {
 		provider := &bundle.Providers[index]
 		input := providerInput{
-			Name: provider.Name, Slug: provider.Slug, BaseURL: provider.BaseURL,
+			MaxConcurrentRequests: provider.MaxConcurrentRequests,
+			Name:                  provider.Name, Slug: provider.Slug, BaseURL: provider.BaseURL,
 			AuthHeader: provider.AuthHeader, AuthScheme: provider.AuthScheme,
 			ExtraHeaders: provider.ExtraHeaders, TimeoutSeconds: provider.TimeoutSeconds,
 			Enabled: provider.Enabled, AllowPrivateNetwork: provider.AllowPrivateNetwork,

@@ -1706,6 +1706,8 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
                 <span><strong>{selected.credentials.length}</strong> API key{selected.credentials.length === 1 ? "" : "s"}</span>
                 <span><strong>{selected.timeout_seconds}s</strong> timeout</span>
                 <ProviderCreditStat provider={selected} />
+                <span><strong>{selected.running_requests ?? 0} / {selected.max_concurrent_requests || "Unlimited"}</strong> running</span>
+                <span><strong>{selected.queued_requests ?? 0}</strong> queued</span>
               </div>
               <ProviderCapacityStrip provider={selected} />
               <Rotor
@@ -2105,7 +2107,7 @@ function ProviderWizard({ providers, onClose, onComplete }: { providers: Provide
   const [provider, setProvider] = useState<ProviderDraft>({
     name: "", base_url: "", auth_header: "Authorization", auth_scheme: "Bearer",
     api_format: "openai", anthropic_version: "2023-06-01",
-    timeout_seconds: 120, enabled: true, allow_private_network: false, extra_headers: {},
+    timeout_seconds: 120, max_concurrent_requests: 0, enabled: true, allow_private_network: false, extra_headers: {},
     default_key_balance: "", apply_balance_to_existing_keys: false,
     existing_key_limits: emptyPolicy(), apply_limits_to_existing_keys: false
   });
@@ -2336,6 +2338,7 @@ function ProviderWizard({ providers, onClose, onComplete }: { providers: Provide
 }
 
 type ProviderDraft = {
+  max_concurrent_requests: number;
   name: string; base_url: string; auth_header: string; auth_scheme: string;
   api_format: "openai" | "anthropic"; anthropic_version: string;
   timeout_seconds: number; enabled: boolean; allow_private_network: boolean; extra_headers: Record<string, string>;
@@ -2371,7 +2374,7 @@ function providerDraftFrom(provider: Provider): ProviderDraft {
     name: provider.name, base_url: provider.base_url,
     auth_header: provider.auth_header, auth_scheme: provider.auth_scheme,
     api_format: provider.api_format ?? "openai", anthropic_version: provider.anthropic_version ?? "2023-06-01",
-    timeout_seconds: provider.timeout_seconds, enabled: provider.enabled,
+    timeout_seconds: provider.timeout_seconds, max_concurrent_requests: provider.max_concurrent_requests ?? 0, enabled: provider.enabled,
     allow_private_network: provider.allow_private_network, extra_headers: provider.extra_headers,
     default_key_balance: provider.default_key_balance_usd == null ? "" : String(provider.default_key_balance_usd),
     apply_balance_to_existing_keys: false,
@@ -2554,6 +2557,7 @@ function ProviderFields({ value, onChange, existingKeys }: { value: ProviderDraf
       </div>
       {value.api_format === "anthropic" && <label className="field"><span>Anthropic API version <small>Sent upstream with every request</small></span><input value={value.anthropic_version} onChange={(e) => onChange({ ...value, anthropic_version: e.target.value })} /></label>}
       <label className="field"><span>Timeout seconds</span><input type="number" min={1} max={900} value={value.timeout_seconds} onChange={(e) => onChange({ ...value, timeout_seconds: Number(e.target.value) })} /></label>
+      <label className="field"><span>Maximum running requests</span><input type="number" min={0} step={1} value={value.max_concurrent_requests} onChange={(e) => onChange({ ...value, max_concurrent_requests: Number(e.target.value) })} /><small>0 = Unlimited. Shared across every model and key on this provider. Extra requests wait for a slot and key quota.</small></label>
       <fieldset>
         <legend>Balance per API key</legend>
         <p className="fieldset-note">
@@ -3572,6 +3576,7 @@ function ModelCatalog({
 const statusPresets: ReadonlyArray<readonly [string, string]> = [
   ["", "All"],
   ["running", "Running"],
+  ["queued", "Queued"],
   ["errors", "Errors"]
 ];
 
@@ -3781,16 +3786,16 @@ function LogsPage() {
                 data-row
                 className={`${selectedID === log.id ? "is-selected" : ""}${log.running ? " is-running" : ""}`}
                 aria-current={selectedID === log.id}
-                aria-label={`${log.model_alias} via ${log.provider_name}, ${log.running ? "still running" : `HTTP ${log.status_code}`}, ${log.latency_ms} ms, at ${formatClockTime(log.created_at)}`}
+                aria-label={`${log.model_alias} via ${log.provider_name}, ${log.state === "queued" ? "queued" : log.running ? "still running" : `HTTP ${log.status_code}`}, ${log.latency_ms} ms, at ${formatClockTime(log.created_at)}`}
                 onClick={() => { setSelectedID(log.id); setLogInspectorOpen(true); }}
               >
                 <span aria-hidden="true">
-                  <StatusDot state={log.running ? "unknown" : log.status_code >= 500 ? "exhausted" : log.status_code >= 400 ? "partial" : "healthy"} />
+                  <StatusDot state={log.running || log.state === "queued" ? "unknown" : log.status_code >= 500 ? "exhausted" : log.status_code >= 400 ? "partial" : "healthy"} />
                   <strong>{formatClockTime(log.created_at)}</strong>
                   <small>{log.request_id}</small>
                 </span>
                 <span aria-hidden="true"><code title={log.model_alias}>{log.model_alias}</code><small title={`${log.provider_name} · ${routingStageLabel(log)}${log.error_code ? ` · ${log.error_code}` : ""}`}>{log.provider_name} · {routingStageLabel(log)}{log.error_code ? ` · ${log.error_code}` : ""}</small></span>
-                <strong aria-hidden="true" className={`status-code status-code--${log.running ? "running" : log.status_code >= 500 ? "fault" : log.status_code >= 400 ? "warning" : "healthy"}`}>{log.running ? "Run" : log.status_code}</strong>
+                <strong aria-hidden="true" className={`status-code status-code--${log.running || log.state === "queued" ? "running" : log.status_code >= 500 ? "fault" : log.status_code >= 400 ? "warning" : "healthy"}`}>{log.state === "queued" ? "Queued" : log.state === "cancelled" ? "Cancelled" : log.state === "timeout" ? "Timeout" : log.running ? "Run" : log.status_code}</strong>
                 <small aria-hidden="true">{log.latency_ms} ms</small>
                 <ChevronRight size={13} aria-hidden="true" />
               </button>
@@ -3800,8 +3805,8 @@ function LogsPage() {
         {selected ? (
           <aside className={`ide-resource-inspector log-resource-inspector${logInspectorOpen ? " is-open" : ""}`} ref={logDrawer as React.Ref<HTMLElement>} tabIndex={-1}>
             <header className="ide-inspector-titlebar">
-              <div><span>{selected.endpoint} · {selected.running ? "Running" : `HTTP ${selected.status_code}`}</span><h2 title={selected.request_id}>{selected.request_id}</h2><code title={selected.model_alias}>{selected.model_alias}</code></div>
-              <div className="button-row"><strong className={`status-code status-code--${selected.running ? "running" : selected.status_code >= 500 ? "fault" : selected.status_code >= 400 ? "warning" : "healthy"}`}>{selected.running ? "Running" : selected.status_code}</strong><button className="console-icon resource-inspector-close" onClick={() => setLogInspectorOpen(false)} aria-label="Close log inspector"><X size={15} aria-hidden="true" /></button></div>
+              <div><span>{selected.endpoint} · {selected.state === "queued" ? "Queued" : selected.running ? "Running" : `HTTP ${selected.status_code}`}</span><h2 title={selected.request_id}>{selected.request_id}</h2><code title={selected.model_alias}>{selected.model_alias}</code></div>
+              <div className="button-row"><strong className={`status-code status-code--${selected.running || selected.state === "queued" ? "running" : selected.status_code >= 500 ? "fault" : selected.status_code >= 400 ? "warning" : "healthy"}`}>{selected.state === "queued" ? "Queued" : selected.state === "cancelled" ? "Cancelled" : selected.state === "timeout" ? "Timeout" : selected.running ? "Running" : selected.status_code}</strong><button className="console-icon resource-inspector-close" onClick={() => setLogInspectorOpen(false)} aria-label="Close log inspector"><X size={15} aria-hidden="true" /></button></div>
             </header>
             {/* Label-then-value pairs read in order, so the pairing is already clear;
                 the list role is what gives the group a count and lets a screen
@@ -3823,13 +3828,14 @@ function LogsPage() {
                 This request has scrolled out of the newest 100, so it is no longer in the list. What is shown here is the last reading of it.
               </InlineNotice>
             )}
-            {selected.running ? <InlineNotice>Request is running. This inspector will switch to the final status automatically.</InlineNotice> : selected.status_code >= 400 && <LogDiagnosis log={selected} />}
+            {selected.state === "queued" ? <InlineNotice>Queued · position {selected.queue_position ?? "—"} · {selected.wait_reason ?? "waiting for capacity"}. Waited {((selected.queue_wait_ms ?? 0) / 1000).toFixed(1)}s. Runs automatically unless the client cancels.</InlineNotice> : selected.running ? <InlineNotice>Request is running. This inspector will switch to the final status automatically.</InlineNotice> : selected.status_code >= 400 && <LogDiagnosis log={selected} />}
+            {(selected.queue_wait_ms ?? 0) > 0 && <p>Queue wait: {((selected.queue_wait_ms ?? 0) / 1000).toFixed(1)}s · Processing: {(Math.max(0, selected.latency_ms - (selected.queue_wait_ms ?? 0)) / 1000).toFixed(1)}s</p>}
             <RepairHistory requestID={selected.request_id} />
             <section className={`inspector-disclosure log-disclosure${attemptsOpen ? " is-open" : ""}`}>
               <button type="button" onClick={() => setAttemptsOpen((current) => !current)} aria-expanded={attemptsOpen}><ChevronDown size={14} aria-hidden="true" /><span><strong>Routing attempts</strong><small>{selected.attempts.length} recorded</small></span></button>
               {attemptsOpen && <div className="attempt-list">{selected.attempts.length ? selected.attempts.map((attempt, index) => <div key={`${attempt.credential_id}-${index}`}><span>{index + 1}</span><strong>{attempt.credential_label}</strong><code>{attemptSummary(attempt)}</code><small>{attempt.duration_ms} ms</small>{attempt.error_message && <p>{attempt.error_message}</p>}</div>) : <p className="console-empty">No upstream attempt was needed.</p>}</div>}
             </section>
-            {!selected.running && selected.body_captured ? (
+            {!selected.running && selected.state !== "queued" && selected.body_captured ? (
               <section className={`inspector-disclosure log-disclosure${bodiesOpen ? " is-open" : ""}`}>
                 <button type="button" onClick={() => setBodiesOpen((current) => !current)} aria-expanded={bodiesOpen}><ChevronDown size={14} aria-hidden="true" /><span><strong>Encrypted bodies</strong><small>{selected.body_truncated ? "captured · truncated" : "captured"}</small></span></button>
                 {bodiesOpen && (bodiesError ? (
@@ -3838,7 +3844,7 @@ function LogsPage() {
                   <div className="body-grid"><section><h3>Request {selected.body_truncated && <small>truncated</small>}</h3><pre>{bodies ? bodies.request ?? "No captured request body." : "Decrypting…"}</pre></section><section><h3>Response {selected.body_truncated && <small>truncated</small>}</h3><pre>{bodies ? bodies.response ?? "No captured response body." : "Decrypting…"}</pre></section></div>
                 ))}
               </section>
-            ) : !selected.running && <InlineNotice>Body capture was off for this model route. Only metadata is available.</InlineNotice>}
+            ) : !selected.running && selected.state !== "queued" && <InlineNotice>Body capture was off for this model route. Only metadata is available.</InlineNotice>}
           </aside>
         ) : (
           <aside className="ide-resource-inspector ide-resource-inspector--empty">
@@ -4065,7 +4071,7 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
   // default for every new provider. Each field is checked here instead, against the
   // same bounds the inputs advertise.
   const settingsBounds: Array<[keyof Settings, string, number, number]> = [
-    ["max_wait_ms", "Capacity wait ceiling", 0, 30_000],
+    ["max_wait_ms", "Resource wait ceiling", 0, 30_000],
     ["default_provider_timeout_seconds", "Default request timeout", 1, 900],
     ["metadata_retention_days", "Metadata retention", 1, 3650],
     ["body_retention_days", "Captured body retention", 1, 365]
@@ -4151,7 +4157,7 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
           const noResourceAPIs = foundryHasNoResourceAPIs(provider);
           return <option key={provider.id} value={provider.id} disabled={noResourceAPIs}>{provider.name}{noResourceAPIs ? " — no Files or Batches" : ""}</option>;
         })}</select></div></label>
-        <label className="settings-row"><span><strong>Capacity wait ceiling</strong><small>Requests wait only when capacity can return within this deadline.</small></span><div><input type="number" min={0} max={30000} step={100} value={settings.max_wait_ms} onChange={(e) => setSettings({ ...settings, max_wait_ms: Number(e.target.value) })} /><code>ms</code></div></label>
+        <label className="settings-row"><span><strong>Resource wait ceiling</strong><small>Only files, batches and token counting use this cutoff. Inference waits until capacity is available or the client cancels.</small></span><div><input type="number" min={0} max={30000} step={100} value={settings.max_wait_ms} onChange={(e) => setSettings({ ...settings, max_wait_ms: Number(e.target.value) })} /><code>ms</code></div></label>
         {/* This row holds a button as well as its field, so it is a div with an
             explicit label: a wrapping label would swallow the button's clicks. */}
         <div className="settings-row settings-row--wide">

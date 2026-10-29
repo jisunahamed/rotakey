@@ -409,7 +409,7 @@ func TestResolveCompatibilityReplacement(t *testing.T) {
 	}
 }
 
-func TestActiveRequestLogsExposeRunningStateAndFilter(t *testing.T) {
+func TestActiveRequestLogsExposeQueuedStateAndFilter(t *testing.T) {
 	server := &Server{}
 	started := time.Now().Add(-1500 * time.Millisecond)
 	server.beginActiveRequest("req_running", "chat", started)
@@ -423,7 +423,7 @@ func TestActiveRequestLogsExposeRunningStateAndFilter(t *testing.T) {
 	if len(logs) != 1 {
 		t.Fatalf("active logs = %d, want 1", len(logs))
 	}
-	if !logs[0].Running || logs[0].StatusCode != 0 {
+	if logs[0].Running || logs[0].State != "queued" || logs[0].StatusCode != 0 {
 		t.Fatalf("active state = running %v status %d", logs[0].Running, logs[0].StatusCode)
 	}
 	if logs[0].CredentialLabel != "primary" || logs[0].LatencyMS < 1000 {
@@ -433,7 +433,6 @@ func TestActiveRequestLogsExposeRunningStateAndFilter(t *testing.T) {
 		t.Fatalf("unexpected filtered logs: %#v", got)
 	}
 }
-
 
 func TestProviderRetryTimeout(t *testing.T) {
 	minute := time.Minute
