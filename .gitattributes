@@ -1,0 +1,2 @@
+# Migration checksums must be identical in Windows and Linux builds.
+internal/app/migrations/*.sql text eol=lf
