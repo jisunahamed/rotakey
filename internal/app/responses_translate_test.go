@@ -495,6 +495,25 @@ func TestTranslateResponsesStreamToChatReportsInterruption(t *testing.T) {
 	}
 }
 
+func TestTranslateResponsesStreamKeepsEmptyCompletedSuccess(t *testing.T) {
+	for _, mode := range []string{messageModeChat, messageModeAnthropic} {
+		t.Run(mode, func(t *testing.T) {
+			source := "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":44,\"output_tokens\":0}}}\n\n"
+			var output bytes.Buffer
+			var code string
+			var err error
+			if mode == messageModeAnthropic {
+				code, err = translateResponsesStreamToAnthropic(strings.NewReader(source), &output, "alias", nil)
+			} else {
+				code, err = translateResponsesStreamToChat(strings.NewReader(source), &output, "alias", nil, true)
+			}
+			if err != nil || code != "" || strings.Contains(output.String(), "upstream_stream_empty") || strings.Contains(output.String(), `"error"`) {
+				t.Fatalf("successful stream became error: %s %v %s", code, err, output.String())
+			}
+		})
+	}
+}
+
 func TestTranslateResponsesStreamToChatSurfacesUpstreamFailure(t *testing.T) {
 	source := `data: {"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","message":"slow down"}}}` + "\n\n"
 	var output bytes.Buffer

@@ -337,11 +337,11 @@ func TestAnthropicStreamNormalizesCompatibleVariantsAndTracksUsage(t *testing.T)
 	}
 }
 
-func TestAnthropicStreamRejectsEmptySuccess(t *testing.T) {
+func TestAnthropicStreamPreservesEmptySuccess(t *testing.T) {
 	source := strings.NewReader("data: {\"type\":\"message_start\",\"message\":{}}\n\ndata: {\"type\":\"message_stop\"}\n\n")
 	destination := &bytes.Buffer{}
 	code, err := translateAnthropicStreamToOpenAI(source, destination, "public/model", nil, false, nil)
-	if err != nil || code != "upstream_stream_empty" || !strings.Contains(destination.String(), "completed without any text or tool output") {
+	if err != nil || code != "" || strings.Contains(destination.String(), `"error"`) || !strings.Contains(destination.String(), "[DONE]") {
 		t.Fatalf("empty stream = %q, %v, %s", code, err, destination.String())
 	}
 }

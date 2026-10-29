@@ -210,7 +210,7 @@ Files use the **Default Anthropic resource provider** selected in System setting
 - Non-streaming usage is reconciled to actual upstream usage. Streaming without final usage retains the conservative reservation.
 - When every key is full and the earliest reset is within the configured wait ceiling, the request waits with cancellation support. Otherwise it returns OpenAI-style `429` and `Retry-After`.
 - Before response bytes begin, credential-specific failures can fail over across every other eligible key for up to 60 seconds: connection/pre-response timeout, `401/403`, `429`, `529`, and selected `5xx`. Deterministic payload `400` errors are not replayed across keys. Streaming is never retried after response bytes begin.
-- If an Anthropic-compatible upstream accepts `stream:true` but returns a normal JSON Message, Rotakey converts it into protocol-correct SSE before translating it to the OpenAI client. An empty or malformed HTTP `200` is reported as `502 upstream_stream_invalid` instead of a false success.
+- If an Anthropic-compatible upstream accepts `stream:true` but returns a normal JSON Message, Rotakey preserves the answer and converts it to SSE for Anthropic streaming clients. Provider HTTP success remains authoritative: missing usage, empty visible output, or an unfamiliar body never manufactures a 502 or a paid retry. Native response bodies are forwarded unchanged; recognized cross-protocol replies are translated with reasoning and tools preserved.
 - Upstream `401/403` quarantines a credential, `429` starts its `Retry-After` cooldown, and repeated transport/`5xx` failures open a short circuit.
 - Redis failure returns `503`; limits are never bypassed.
 

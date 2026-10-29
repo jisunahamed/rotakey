@@ -506,9 +506,6 @@ func translateResponsesStreamToChat(source io.Reader, destination io.Writer, ali
 					if in, out := extractUsage(response, "responses"); in > 0 || out > 0 {
 						inputTokens, outputTokens = in, out
 					}
-					if !sawContent {
-						emitError("upstream_stream_empty", "The upstream completed without any text or tool output.")
-					}
 					sawTerminal = true
 					finish(responsesStatusToOpenAIStop(response, nextToolIndex > 0))
 					return errorCode, nil

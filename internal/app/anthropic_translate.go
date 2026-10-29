@@ -1094,15 +1094,6 @@ func translateAnthropicStreamToOpenAI(source io.Reader, destination io.Writer, a
 					continue
 				case "message_stop":
 					sawStop = true
-					if contentParts == 0 && errorCode == "" {
-						errorCode = "upstream_stream_empty"
-						payload := map[string]any{"error": map[string]any{
-							"type": errorCode, "code": errorCode,
-							"message": "The upstream completed without any text or tool output.",
-						}}
-						encoded, _ := json.Marshal(payload)
-						writeRaw(destination, capture, append(append([]byte("data: "), encoded...), []byte("\n\n")...))
-					}
 					if includeUsage {
 						usageChunk := map[string]any{
 							"id": id, "object": "chat.completion.chunk", "created": created, "model": alias,
