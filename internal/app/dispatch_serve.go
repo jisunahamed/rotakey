@@ -949,6 +949,16 @@ func (s *Server) streamAttempt(
 		body, readErr := io.ReadAll(io.LimitReader(response.Body, s.cfg.MaxResponseBytes))
 		if readErr == nil && int64(len(body)) < s.cfg.MaxResponseBytes {
 			body, input, output := successfulUpstreamBody(req, plan, body)
+			if req.PublicMode == messageModeAnthropic {
+				if synthetic, err := anthropicJSONToSSE(body); err == nil {
+					cloned := new(http.Response)
+					*cloned = *response
+					cloned.Header = response.Header.Clone()
+					cloned.Header.Set("Content-Type", "text/event-stream")
+					cloned.Body = io.NopCloser(bytes.NewReader(synthetic))
+					return s.streamAttempt(w, r, req, candidate, plan, cloned, reserved, record, upstreamRequestID)
+				}
+			}
 			copyResponseHeaders(w, req.PublicMode, response.Header)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(response.StatusCode)

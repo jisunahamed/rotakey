@@ -94,6 +94,19 @@ func TestNativeAnthropicStreamUsageSurvivesPassThrough(t *testing.T) {
 	}
 }
 
+func TestStreamingClientReceivesJSONMessageAsCompleteSSE(t *testing.T) {
+	body := string(thinkingOnlyAnthropicBody())
+	upstream := upstreamAnswering(t, body)
+	server, candidate, plan := chatAttempt(t, upstream.URL)
+	server.db = unreachablePostgres(t)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/v1/messages", nil)
+	outcome := server.runAttempt(rec, req, dispatchRequest{Stream: true, PublicMode: messageModeAnthropic}, candidate, plan, upstream.Client(), context.Background(), reservation{}, true)
+	if !outcome.Done || rec.Code != 200 || rec.Header().Get("Content-Type") != "text/event-stream" || !strings.Contains(rec.Body.String(), "nineteen seconds") || !strings.Contains(rec.Body.String(), "message_stop") {
+		t.Fatalf("JSON message lost or rejected: %+v %s", outcome, rec.Body.String())
+	}
+}
+
 func TestSuccessAboveBufferLimitIsForwardedWithoutLosingBytes(t *testing.T) {
 	body := strings.Repeat("provider output ", 200)
 	for _, stream := range []bool{false, true} {
