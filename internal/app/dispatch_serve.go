@@ -408,7 +408,7 @@ func (s *Server) servePooled(
 			}()
 			return s.runAttempt(w, r, req, candidate, plan, client, attemptCtx, reserved, compatibilityRetriesRemaining > 0 && recovery.tests < 3)
 		}()
-		if timedOut {
+		if timedOut && !outcome.ResponseComplete {
 			if !outcome.Done {
 				outcome.Status = 504
 			}
@@ -417,12 +417,12 @@ func (s *Server) servePooled(
 			outcome.Record.Error = "timeout"
 			outcome.Record.ErrorMessage = outcome.ErrorMessage
 		}
-		if r.Context().Err() != nil {
+		if r.Context().Err() != nil && !outcome.ResponseComplete {
 			if !outcome.Done {
 				outcome.Status = 499
 			}
 			outcome.ErrorCode = "cancelled"
-			outcome.ErrorMessage = "Client cancelled the upstream call."
+			outcome.ErrorMessage = "Client disconnected or cancelled before the full response was delivered. Partial output may have been sent."
 			outcome.Done = true
 		}
 		if !outcome.Done && (outcome.Status == 429 || outcome.Record.Error == "rate_limit_exceeded") {
@@ -892,9 +892,9 @@ func (s *Server) runAttempt(
 		w.Header().Set("Content-Type", response.Header.Get("Content-Type"))
 	}
 	w.WriteHeader(response.StatusCode)
-	_, _ = w.Write(translatedBody)
+	written, writeErr := w.Write(translatedBody)
 	return attemptOutcome{
-		Done: true, Record: record, Status: response.StatusCode,
+		Done: true, ResponseComplete: writeErr == nil && written == len(translatedBody), Record: record, Status: response.StatusCode,
 		ResponseBody: translatedBody, InputTokens: inputTokens, OutputTokens: outputTokens,
 		UpstreamRequestID: upstreamRequestID,
 	}
@@ -1024,9 +1024,9 @@ func (s *Server) streamAttempt(
 			copyResponseHeaders(w, req.PublicMode, response.Header)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(response.StatusCode)
-			_, _ = w.Write(body)
+			written, writeErr := w.Write(body)
 			_ = s.limiter.AdjustTokens(r.Context(), reserved, input+output)
-			return attemptOutcome{Done: true, Record: record, Status: response.StatusCode, ResponseBody: body, InputTokens: input, OutputTokens: output, UpstreamRequestID: upstreamRequestID}
+			return attemptOutcome{Done: true, ResponseComplete: writeErr == nil && written == len(body), Record: record, Status: response.StatusCode, ResponseBody: body, InputTokens: input, OutputTokens: output, UpstreamRequestID: upstreamRequestID}
 		}
 		return s.relaySuccessfulBody(w, r, req, plan, response, io.MultiReader(bytes.NewReader(body), response.Body), reserved, record, upstreamRequestID)
 	}
@@ -1043,6 +1043,8 @@ func (s *Server) streamAttempt(
 
 	evidence := &streamEvidenceReader{source: source}
 	source = evidence
+	delivery := &streamCompletionWriter{ResponseWriter: w}
+	w = delivery
 	copyResponseHeaders(w, req.PublicMode, response.Header)
 	s.setCompatibilityHeaders(w, plan)
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -1103,7 +1105,8 @@ func (s *Server) streamAttempt(
 		record.Error = streamCode
 		record.ErrorMessage = "The upstream provider sent an error after streaming started."
 	}
-	if streamErr != nil && !errors.Is(streamErr, context.Canceled) {
+	responseComplete := !delivery.writeFailed && (streamErr == nil || delivery.terminalSent)
+	if streamErr != nil && !responseComplete && !errors.Is(streamErr, context.Canceled) {
 		record.Error = "stream_interrupted"
 		record.ErrorMessage = "The response stream ended unexpectedly after it started."
 		if writeStreamFallback {
@@ -1122,7 +1125,7 @@ func (s *Server) streamAttempt(
 		_ = s.limiter.AdjustTokens(r.Context(), reserved, actualInput+outputTokens)
 	}
 	outcome := attemptOutcome{
-		Done: true, Record: record, Status: response.StatusCode,
+		Done: true, ResponseComplete: responseComplete, Record: record, Status: response.StatusCode,
 		ErrorCode: record.Error, ErrorMessage: record.ErrorMessage,
 		InputTokens: actualInput, OutputTokens: outputTokens,
 		UpstreamRequestID: upstreamRequestID,

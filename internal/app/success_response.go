@@ -99,8 +99,12 @@ func relaySuccessfulStream(w http.ResponseWriter, source io.Reader, capture io.W
 	for {
 		n, err := source.Read(buffer)
 		if n > 0 {
-			if _, writeErr := w.Write(buffer[:n]); writeErr != nil {
+			written, writeErr := w.Write(buffer[:n])
+			if writeErr != nil {
 				return writeErr
+			}
+			if written != n {
+				return io.ErrShortWrite
 			}
 			if capture != nil {
 				_, _ = capture.Write(buffer[:n])
@@ -136,7 +140,7 @@ func (s *Server) relaySuccessfulBody(w http.ResponseWriter, r *http.Request, req
 		s.logger.Warn("provider success body relay interrupted", "request_id", req.RequestID, "error", err)
 	}
 	_ = s.limiter.AdjustTokens(r.Context(), reserved, 0)
-	outcome := attemptOutcome{Done: true, Record: record, Status: response.StatusCode, UpstreamRequestID: upstreamID}
+	outcome := attemptOutcome{Done: true, ResponseComplete: err == nil, Record: record, Status: response.StatusCode, UpstreamRequestID: upstreamID}
 	if capture != nil {
 		outcome.ResponseBody = append([]byte(nil), capture.Bytes()...)
 		outcome.Truncated = capture.truncated

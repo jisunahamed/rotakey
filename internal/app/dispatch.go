@@ -84,7 +84,10 @@ type upstreamPlan struct {
 // client response is already written and the request is finished; any other
 // outcome means nothing was written and the next candidate may be tried.
 type attemptOutcome struct {
-	Done              bool
+	Done bool
+	// ResponseComplete records successful delivery before accounting and lease
+	// cleanup. A later disconnect must not overwrite that completed response.
+	ResponseComplete  bool
 	Record            AttemptRecord
 	Status            int
 	ErrorCode         string
