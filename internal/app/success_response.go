@@ -141,6 +141,8 @@ func relaySuccessfulStream(w http.ResponseWriter, source io.Reader, capture io.W
 }
 
 func (s *Server) relaySuccessfulBody(w http.ResponseWriter, r *http.Request, req dispatchRequest, plan upstreamPlan, response *http.Response, source io.Reader, reserved reservation, record AttemptRecord, upstreamID string) attemptOutcome {
+	delivery := &responseByteWriter{ResponseWriter: w}
+	w = delivery
 	copyResponseHeaders(w, req.PublicMode, response.Header)
 	s.setCompatibilityHeaders(w, plan)
 	if kind := response.Header.Get("Content-Type"); kind != "" {
@@ -154,6 +156,7 @@ func (s *Server) relaySuccessfulBody(w http.ResponseWriter, r *http.Request, req
 		captureWriter = capture
 	}
 	err := relaySuccessfulStream(w, source, captureWriter)
+	record.ResponseBytes = delivery.bytesWritten
 	if err != nil {
 		s.logger.Warn("provider success body relay interrupted", "request_id", req.RequestID, "error", err)
 	}
@@ -164,4 +167,22 @@ func (s *Server) relaySuccessfulBody(w http.ResponseWriter, r *http.Request, req
 		outcome.Truncated = capture.truncated
 	}
 	return outcome
+}
+
+// Large/raw replies only need a byte counter, without SSE parsing or buffering.
+type responseByteWriter struct {
+	http.ResponseWriter
+	bytesWritten int64
+}
+
+func (w *responseByteWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	w.bytesWritten += int64(n)
+	return n, err
+}
+
+func (w *responseByteWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }

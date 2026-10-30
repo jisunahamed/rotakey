@@ -280,6 +280,7 @@ func (s *Server) servePooled(
 	recovery := s.newRepairSession(r.Context(), req, routes)
 	defer recovery.finish()
 	skipped := map[string]bool{}
+	repeatedFailures := map[string]int{}
 	repairCandidateKey := ""
 	waitingProviderID := ""
 	compatibilityRetriesRemaining := 2
@@ -413,6 +414,8 @@ func (s *Server) servePooled(
 			outcome.Record.FailurePhase = "upstream_body"
 			if outcome.Record.StatusCode == 0 {
 				outcome.Record.FailurePhase = "before_upstream_headers"
+			} else if outcome.Record.StatusCode >= 400 {
+				outcome.Record.FailurePhase = "upstream_rejection"
 			} else if req.Stream {
 				outcome.Record.FailurePhase = "stream"
 			}
@@ -449,7 +452,21 @@ func (s *Server) servePooled(
 		if !outcome.Done && !outcome.Compatibility && outcome.Status != http.StatusOK {
 			configuredFailover = skipFailedPrimary(candidates, candidate, skipped)
 		}
-		if !configuredFailover && recovery.handle(retryContext, &candidate, plan, &outcome, clients) {
+		repeatedFailure := false
+		if key := repeatedFailureKey(candidate, plan, outcome); key != "" {
+			repeatedFailures[key]++
+			repeatedFailure = repeatedFailures[key] >= 2
+		}
+		if repeatedFailure {
+			outcome.Record.Retryable = false
+			for _, other := range candidates {
+				if other.Route.Model.ID == candidate.Route.Model.ID {
+					skipped[other.key()] = true
+				}
+			}
+			decisions = append(decisions, RoutingDecision{CredentialID: candidate.Credential.ID, CredentialLabel: candidate.Credential.Label, Reason: "repeated_upstream_failure", Scope: "model", Limit: 2, Used: 2})
+		}
+		if !configuredFailover && !repeatedFailure && recovery.handle(retryContext, &candidate, plan, &outcome, clients) {
 			delete(skipped, candidate.key())
 			repairCandidateKey = candidate.key()
 			if credentialID := recovery.selectedCredentials[candidate.Route.Model.ID]; credentialID != "" {
@@ -920,6 +937,7 @@ func (s *Server) runAttempt(
 	}
 	w.WriteHeader(response.StatusCode)
 	written, writeErr := w.Write(translatedBody)
+	record.ResponseBytes = int64(written)
 	return attemptOutcome{
 		Done: true, ResponseComplete: writeErr == nil && written == len(translatedBody), Record: record, Status: response.StatusCode,
 		ResponseBody: translatedBody, InputTokens: inputTokens, OutputTokens: outputTokens,
@@ -1052,6 +1070,7 @@ func (s *Server) streamAttempt(
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(response.StatusCode)
 			written, writeErr := w.Write(body)
+			record.ResponseBytes = int64(written)
 			_ = s.limiter.AdjustTokens(r.Context(), reserved, input+output)
 			return attemptOutcome{Done: true, ResponseComplete: writeErr == nil && written == len(body), Record: record, Status: response.StatusCode, ResponseBody: body, InputTokens: input, OutputTokens: output, UpstreamRequestID: upstreamRequestID}
 		}
@@ -1137,8 +1156,18 @@ func (s *Server) streamAttempt(
 		if evidence.errorMessage != "" {
 			record.ErrorMessage = evidence.errorMessage
 		}
+		// The stream has already reached the caller, so never replay it. Apply
+		// provider-wide backpressure to later calls when its own event says busy.
+		if providerConcurrencyMessage(record.ErrorMessage) && s.redis != nil {
+			hold := parseRetryAfter(response.Header.Get("Retry-After"))
+			if hold <= 0 {
+				hold = 2 * time.Second
+			}
+			_ = holdProviderBackoff.Run(r.Context(), s.redis, []string{providerBackoffKey(candidate.Route.Provider.ID)}, min(hold, 24*time.Hour).Milliseconds()).Err()
+		}
 	}
 	responseComplete := !delivery.writeFailed && (streamErr == nil || delivery.terminalSent)
+	record.ResponseBytes = delivery.bytesWritten
 	if streamErr != nil && !responseComplete && !errors.Is(streamErr, context.Canceled) {
 		record.Error = "stream_interrupted"
 		record.ErrorMessage = "The response stream ended unexpectedly after it started."

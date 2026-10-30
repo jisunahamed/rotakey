@@ -197,6 +197,12 @@ func (rs *repairSession) handle(ctx context.Context, candidate *routeCandidate, 
 		incident.Status = "provider_configuration_required"
 		return false
 	}
+	if providerConcurrencyMessage(outcome.ErrorMessage) {
+		// Capacity is handled by admission/backoff. A paid diagnosis cannot
+		// create capacity, and a started stream must never be replayed.
+		incident.Status = "waiting_for_provider_capacity"
+		return false
+	}
 	if rs.enabled(route) {
 		rs.backgroundEvidence[key] = repairEvidence(plan, route, incident.Error, outcome.Status, nil, repairTools)
 	}

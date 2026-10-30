@@ -14,10 +14,12 @@ type streamCompletionWriter struct {
 	pending      bool
 	terminalSent bool
 	writeFailed  bool
+	bytesWritten int64
 }
 
 func (w *streamCompletionWriter) Write(p []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(p)
+	w.bytesWritten += int64(n)
 	if err != nil || n != len(p) {
 		w.writeFailed = true
 		return n, err

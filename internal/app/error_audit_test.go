@@ -196,3 +196,119 @@ func TestStreamErrorRetainsProviderReasonWithSecretRedacted(t *testing.T) {
 		t.Fatalf("lost reason, secret leaked, or response altered: %+v", out)
 	}
 }
+
+func TestIntegrationIdenticalServerFailuresStopAfterTwoKeys(t *testing.T) {
+	for _, recoverOnSecond := range []bool{false, true} {
+		t.Run(fmt.Sprint(recoverOnSecond), func(t *testing.T) {
+			var calls atomic.Int32
+			s, id, _, call := queueFixture(t, 0, func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) == 2 && recoverOnSecond {
+					fmt.Fprint(w, queueAnswer)
+					return
+				}
+				w.WriteHeader(500)
+				fmt.Fprint(w, `{"error":{"message":"Internal server error"}}`)
+			})
+			for i := 0; i < 9; i++ {
+				if _, err := s.db.Exec(context.Background(), `INSERT INTO credentials(id,provider_id,label,secret_cipher,secret_suffix) SELECT $1,provider_id,$1,secret_cipher,secret_suffix FROM credentials WHERE id=$2`, fmt.Sprintf("%s-extra-%d", id, i), id+"k"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rec := call(context.Background(), false)
+			if calls.Load() != 2 || (recoverOnSecond && rec.Code != 200) || (!recoverOnSecond && rec.Code != 500) {
+				t.Fatalf("wrong failure budget: HTTP %d calls=%d", rec.Code, calls.Load())
+			}
+			var attempts int
+			if err := s.db.QueryRow(context.Background(), `SELECT jsonb_array_length(attempts) FROM request_logs WHERE model_alias=$1`, id+"m").Scan(&attempts); err != nil || attempts != 2 {
+				t.Fatalf("attempt evidence missing: count=%d err=%v", attempts, err)
+			}
+		})
+	}
+}
+
+func TestRepeatedFailureBudgetScopesPayloadAndRoute(t *testing.T) {
+	candidate := routeCandidate{Route: routeRuntime{Model: ModelRoute{ID: "route"}}}
+	plan := upstreamPlan{Path: "/chat/completions", Encoded: []byte(`{"max_tokens":8}`)}
+	outcome := attemptOutcome{Status: 500, Record: AttemptRecord{ErrorMessage: "Internal server error"}}
+	key := repeatedFailureKey(candidate, plan, outcome)
+	plan.Encoded = []byte(`{"max_tokens":16}`)
+	if key == "" || repeatedFailureKey(candidate, plan, outcome) == key {
+		t.Fatal("a repaired payload shares the old failure budget")
+	}
+	plan.Encoded = []byte(`{"max_tokens":8}`)
+	candidate.Route.Model.ID = "backup-route"
+	if repeatedFailureKey(candidate, plan, outcome) == key {
+		t.Fatal("backup shares primary failure budget")
+	}
+	for _, status := range []int{200, 401, 403, 429} {
+		outcome.Status = status
+		if repeatedFailureKey(candidate, plan, outcome) != "" {
+			t.Fatalf("status %d incorrectly consumes 5xx budget", status)
+		}
+	}
+}
+
+func TestProviderCapacityDoesNotBuyDiagnosis(t *testing.T) {
+	rs := &repairSession{policy: RepairPolicy{Enabled: true}, incidents: map[string]*RepairIncident{}, backgroundEvidence: map[string][]byte{}}
+	candidate := routeCandidate{Route: routeRuntime{Model: ModelRoute{ID: "route"}}}
+	outcome := &attemptOutcome{Done: true, Status: 200, ErrorCode: "upstream_stream_error", ErrorMessage: "Concurrency limit exceeded for user, please retry later", Record: AttemptRecord{Error: "upstream_stream_error"}}
+	if rs.handle(context.Background(), &candidate, upstreamPlan{}, outcome, nil) || len(rs.backgroundEvidence) != 0 {
+		t.Fatal("capacity rejection bought a diagnosis or replay")
+	}
+	for _, incident := range rs.incidents {
+		if incident.Status != "waiting_for_provider_capacity" {
+			t.Fatal("capacity evidence not retained")
+		}
+	}
+}
+
+func TestIntegrationStreamCapacityBackoffPreservesResponse(t *testing.T) {
+	var calls atomic.Int32
+	body := "data: {\"error\":{\"message\":\"Concurrency limit exceeded for user, please retry later\"}}\n\n"
+	s, id, _, call := queueFixture(t, 1, func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Retry-After", "1")
+			fmt.Fprint(w, body)
+			return
+		}
+		fmt.Fprint(w, queueAnswer)
+	})
+	rec := call(context.Background(), true)
+	if rec.Code != 200 || rec.Body.String() != body || calls.Load() != 1 {
+		t.Fatalf("started provider response replayed or changed: HTTP %d calls=%d body=%s", rec.Code, calls.Load(), rec.Body.String())
+	}
+	if ttl := s.redis.PTTL(context.Background(), providerBackoffKey(id)).Val(); ttl <= 0 {
+		t.Fatal("stream capacity did not set provider backpressure")
+	}
+	var delivered int64
+	if err := s.db.QueryRow(context.Background(), `SELECT (attempts->0->>'response_bytes')::bigint FROM request_logs WHERE model_alias=$1`, id+"m").Scan(&delivered); err != nil || delivered != int64(len(body)) {
+		t.Fatalf("missing actual forwarded byte evidence: %d %v", delivered, err)
+	}
+	started := time.Now()
+	rec = call(context.Background(), false)
+	if rec.Code != 200 || calls.Load() != 2 || time.Since(started) < 500*time.Millisecond {
+		t.Fatalf("later call bypassed shared backoff: HTTP %d calls=%d duration=%v", rec.Code, calls.Load(), time.Since(started))
+	}
+}
+
+func TestIntegrationUserConcurrencyWaitsAcrossKeys(t *testing.T) {
+	var calls atomic.Int32
+	s, id, _, call := queueFixture(t, 0, func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(429)
+			fmt.Fprint(w, `{"error":{"message":"Concurrency limit exceeded for user, please retry later"}}`)
+			return
+		}
+		fmt.Fprint(w, queueAnswer)
+	})
+	if _, err := s.db.Exec(context.Background(), `INSERT INTO credentials(id,provider_id,label,secret_cipher,secret_suffix) SELECT $1,provider_id,$1,secret_cipher,secret_suffix FROM credentials WHERE id=$2`, id+"extra", id+"k"); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	rec := call(context.Background(), false)
+	if rec.Code != 200 || calls.Load() != 2 || time.Since(started) < 900*time.Millisecond {
+		t.Fatalf("sibling key bypassed user concurrency: HTTP %d calls=%d duration=%v", rec.Code, calls.Load(), time.Since(started))
+	}
+}
