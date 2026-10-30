@@ -1084,7 +1084,7 @@ func (s *Server) streamAttempt(
 		}
 	}
 
-	evidence := &streamEvidenceReader{source: source}
+	evidence := &streamEvidenceReader{source: source, secret: candidate.Credential.Secret}
 	source = evidence
 	var (
 		streamCode          string
@@ -1136,9 +1136,6 @@ func (s *Server) streamAttempt(
 		record.ErrorMessage = "The upstream provider sent an error after streaming started."
 		if evidence.errorMessage != "" {
 			record.ErrorMessage = evidence.errorMessage
-			if len(candidate.Credential.Secret) > 0 {
-				record.ErrorMessage = strings.ReplaceAll(record.ErrorMessage, string(candidate.Credential.Secret), "[redacted]")
-			}
 		}
 	}
 	responseComplete := !delivery.writeFailed && (streamErr == nil || delivery.terminalSent)

@@ -10,6 +10,7 @@ import (
 // Usage and mid-stream errors must reach accounting even when capture is off.
 type streamEvidenceReader struct {
 	source        io.Reader
+	secret        []byte
 	line          []byte
 	input, output int64
 	hasUsage      bool
@@ -45,13 +46,13 @@ func (r *streamEvidenceReader) observe(line []byte) {
 	}
 	if chunk["error"] != nil {
 		r.errorCode = "upstream_stream_error"
-		r.errorMessage = upstreamErrorMessage([]byte(strings.TrimSpace(strings.TrimPrefix(text, "data:"))), nil)
+		r.errorMessage = upstreamErrorMessage([]byte(strings.TrimSpace(strings.TrimPrefix(text, "data:"))), r.secret)
 	}
 	if response, ok := chunk["response"].(map[string]any); ok {
 		if response["error"] != nil {
 			r.errorCode = "upstream_stream_error"
 			body, _ := json.Marshal(response)
-			r.errorMessage = upstreamErrorMessage(body, nil)
+			r.errorMessage = upstreamErrorMessage(body, r.secret)
 		}
 		chunk = response
 	}
