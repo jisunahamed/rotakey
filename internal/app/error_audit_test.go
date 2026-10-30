@@ -312,3 +312,30 @@ func TestIntegrationUserConcurrencyWaitsAcrossKeys(t *testing.T) {
 		t.Fatalf("sibling key bypassed user concurrency: HTTP %d calls=%d duration=%v", rec.Code, calls.Load(), time.Since(started))
 	}
 }
+
+func TestAnthropicPingPreludeStillTranslatesToOpenAI(t *testing.T) {
+	s, candidate, plan := chatAttempt(t, "https://example.com")
+	plan.Format = "anthropic"
+	body := "data: {\"type\":\"ping\"}\n\n" +
+		"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"usage\":{\"input_tokens\":3}}}\n\n" +
+		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"actual answer\"}}\n\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n" +
+		"data: {\"type\":\"message_stop\"}\n\n"
+	response := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
+	rec := httptest.NewRecorder()
+	out := s.streamAttempt(rec, httptest.NewRequest("POST", "/v1/chat/completions", nil), dispatchRequest{Stream: true, PublicMode: messageModeChat}, candidate, plan, response, reservation{}, AttemptRecord{}, "")
+	if !strings.Contains(rec.Body.String(), `"content":"actual answer"`) || !strings.Contains(rec.Body.String(), "data: [DONE]\n\n") || strings.Contains(rec.Body.String(), `"type":"message_stop"`) || !out.ResponseComplete || out.ErrorCode != "" {
+		t.Fatalf("ping disabled protocol translation: body=%s complete=%v error=%s", rec.Body.String(), out.ResponseComplete, out.ErrorCode)
+	}
+}
+
+func TestAnthropicPingPreludeIsPreservedForAnthropicCaller(t *testing.T) {
+	s, candidate, plan := chatAttempt(t, "https://example.com")
+	body := "data: {\"type\":\"ping\"}\n\ndata: {\"type\":\"message_stop\"}\n\n"
+	response := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
+	rec := httptest.NewRecorder()
+	out := s.streamAttempt(rec, httptest.NewRequest("POST", "/v1/messages", nil), dispatchRequest{Stream: true, PublicMode: messageModeAnthropic}, candidate, plan, response, reservation{}, AttemptRecord{}, "")
+	if rec.Body.String() != body || !out.ResponseComplete {
+		t.Fatal("same-protocol ping bytes changed")
+	}
+}

@@ -89,7 +89,7 @@ func successfulStreamSource(source io.Reader, commentWriters ...io.Writer) (io.R
 			actual := ""
 			if json.Unmarshal(data, &envelope) == nil {
 				kind, _ := envelope["type"].(string)
-				if kind == "message_start" || kind == "content_block_delta" || kind == "content_block_start" || kind == "message_stop" {
+				if kind == "ping" || kind == "message_start" || kind == "message_delta" || kind == "content_block_delta" || kind == "content_block_start" || kind == "content_block_stop" || kind == "message_stop" {
 					actual = messageModeAnthropic
 				} else if strings.HasPrefix(kind, "response.") {
 					actual = messageModeResponses

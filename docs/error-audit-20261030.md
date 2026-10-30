@@ -67,3 +67,9 @@ The endpoint settings are confirmed as 280 seconds total, 280 seconds for header
 - New attempt metadata records `response_bytes` accepted by the downstream writer even without usage or body capture. HTTP 4xx/5xx rejection phases are explicitly `upstream_rejection`, rather than being labelled as an active stream merely because the client requested streaming.
 
 Follow-up verification covers ten-key identical 500s, a successful second attempt, payload/route budget isolation, shared user-concurrency waiting across keys, byte-for-byte forwarding of capacity SSE without replay, delivered-byte metadata and diagnosis suppression. The entire application suite and existing queue/fallback tests remain part of verification.
+
+### Stream-contract and release packaging follow-up
+
+An exact ID join also found three completed Rotakey OpenAI streams for `claude-opus-5` which Torve marked `upstream_unavailable` after receiving 3,420, 3,979 and 13,611 bytes. All three used an Anthropic upstream and had provider output usage. Their bodies were not captured, so the precise historical first/last event is unknown. A reproducible gateway defect was identified: an Anthropic `ping` as the first data event bypassed protocol translation, leaking an Anthropic stream to an OpenAI caller. Anthropic ping/delta/stop events are now recognized before choosing the translator. Regression tests verify a valid OpenAI terminal marker and preserved answer, and byte preservation for an Anthropic caller.
+
+The manual `3cbbe16` build accidentally embedded the tracked development UI placeholder. API health checks passed while the admin console was unavailable. The replacement release uses `scripts/build-release.ps1` to compile production frontend assets before building the gateway from an isolated committed checkout. Deployment verification must fetch `/admin/` and its JavaScript/CSS assets in addition to API readiness. The earlier API fixes remain included.
