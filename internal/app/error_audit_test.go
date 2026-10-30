@@ -89,6 +89,20 @@ func TestCancelledRequestsNeverStartRepairDiagnosis(t *testing.T) {
 	}
 }
 
+func TestProviderTemplateFailureDoesNotBuyRepairDiagnosis(t *testing.T) {
+	rs := &repairSession{policy: RepairPolicy{Enabled: true}, incidents: map[string]*RepairIncident{}, backgroundEvidence: map[string][]byte{}}
+	candidate := routeCandidate{Route: routeRuntime{Model: ModelRoute{ID: "model"}}}
+	outcome := &attemptOutcome{Status: 500, ErrorCode: "upstream_error", ErrorMessage: "Failed to apply prompt template", Record: AttemptRecord{Error: "upstream_error", ErrorMessage: "Failed to apply prompt template"}}
+	if rs.handle(context.Background(), &candidate, upstreamPlan{Path: "/chat/completions"}, outcome, nil) || len(rs.backgroundEvidence) != 0 || len(rs.incidents) != 1 {
+		t.Fatal("unrepairable provider configuration triggered diagnosis")
+	}
+	for _, incident := range rs.incidents {
+		if incident.Status != "provider_configuration_required" {
+			t.Fatalf("wrong diagnosis: %s", incident.Status)
+		}
+	}
+}
+
 func TestIntegrationTemplateFailureDoesNotRotateAllKeys(t *testing.T) {
 	var calls atomic.Int32
 	s, id, _, call := queueFixture(t, 0, func(w http.ResponseWriter, r *http.Request) {

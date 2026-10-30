@@ -191,6 +191,12 @@ func (rs *repairSession) handle(ctx context.Context, candidate *routeCandidate, 
 	if len(incident.Error) > 4000 {
 		incident.Error = incident.Error[:4000]
 	}
+	if credentialIndependentFailure(outcome.Status, outcome.ErrorMessage) {
+		// Provider launch flags/templates cannot be repaired with a paid model
+		// diagnosis or another key. Preserve evidence for the provider operator.
+		incident.Status = "provider_configuration_required"
+		return false
+	}
 	if rs.enabled(route) {
 		rs.backgroundEvidence[key] = repairEvidence(plan, route, incident.Error, outcome.Status, nil, repairTools)
 	}
