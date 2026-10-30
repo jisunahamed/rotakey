@@ -164,6 +164,10 @@ type routeRuntime struct {
 }
 
 type AttemptRecord struct {
+	CallerRequestID    string            `json:"caller_request_id,omitempty"`
+	Stream             bool              `json:"stream,omitempty"`
+	ResponseComplete   bool              `json:"response_complete,omitempty"`
+	FailurePhase       string            `json:"failure_phase,omitempty"`
 	RepairIncidentID   string            `json:"repair_incident_id,omitempty"`
 	RecoveryRetry      bool              `json:"recovery_retry,omitempty"`
 	CredentialID       string            `json:"credential_id"`

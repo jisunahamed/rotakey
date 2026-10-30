@@ -97,6 +97,9 @@ func (rs *repairSession) prepare(route routeRuntime, plan upstreamPlan) upstream
 }
 
 func (rs *repairSession) handle(ctx context.Context, candidate *routeCandidate, plan upstreamPlan, outcome *attemptOutcome, clients *clientCache) bool {
+	if outcome.ErrorCode == "cancelled" || ctx.Err() != nil {
+		return false
+	}
 	if !outcome.Done && outcome.InputTokens+outcome.OutputTokens > 0 && rs.server.db != nil {
 		rs.server.recordCredentialSpend(ctx, candidate.Credential.ID, requestSpendUSD(candidate.Route.Model, outcome.InputTokens, outcome.OutputTokens))
 	}
@@ -445,7 +448,7 @@ func (rs *repairSession) finish() {
 	// Completed streams and fast deterministic repairs can be diagnosed without
 	// delaying the caller. A bounded worker only proposes; future requests must
 	// still execute and verify the proposal under the then-current permission.
-	if rs.rounds == 0 && rs.policy.Enabled && rs.server.repairWorkers != nil {
+	if rs.ctx.Err() == nil && rs.rounds == 0 && rs.policy.Enabled && rs.server.repairWorkers != nil {
 		for key, evidence := range rs.backgroundEvidence {
 			incident := rs.incidents[key]
 			if incident == nil {

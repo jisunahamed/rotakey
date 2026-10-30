@@ -61,3 +61,22 @@ func (w *streamCompletionWriter) Flush() {
 }
 
 func (w *streamCompletionWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+type streamCommentWriter struct {
+	http.ResponseWriter
+	capture *limitedCapture
+}
+
+func (w *streamCommentWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	if w.capture != nil && n > 0 {
+		_, _ = w.capture.Write(p[:n])
+	}
+	return n, err
+}
+
+func (w *streamCommentWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}

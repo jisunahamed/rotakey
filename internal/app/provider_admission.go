@@ -15,6 +15,12 @@ import (
 const providerLeaseTTL = 60 * time.Second
 const admissionPoll = 250 * time.Millisecond
 
+var holdProviderBackoff = redis.NewScript(`
+local ttl=tonumber(ARGV[1])
+if redis.call('PTTL',KEYS[1])<ttl then redis.call('SET',KEYS[1],'busy','PX',ttl) end
+return 1
+`)
+
 // Queue and running leases use Redis time. FIFO admission and all key quota
 // increments execute in one script, so a waiter cannot consume RPM or a slot.
 var providerAdmitScript = redis.NewScript(`
@@ -30,7 +36,9 @@ redis.call('PEXPIRE',queue,ttl*2);redis.call('PEXPIRE',live,ttl*2);redis.call('P
 local rank=redis.call('ZRANK',queue,token)
 if rank>0 then return {-1,250,rank+1} end
 if cap>0 and redis.call('ZCARD',running)>=cap then return {-2,250,1} end
-if ARGV[4]~='' and redis.call('EXISTS',ARGV[4])==1 then return {-4,250,1} end
+for key in string.gmatch(ARGV[4],'[^\n]+') do
+  if redis.call('EXISTS',key)==1 then return {-4,250,1} end
+end
 local allKeys,allArgs=KEYS,ARGV
 local KEYS={};for i=5,#allKeys do table.insert(KEYS,allKeys[i]) end
 local ARGV={now};for i=5,#allArgs do table.insert(ARGV,allArgs[i]) end
@@ -111,8 +119,9 @@ func (s *Server) tryProviderAdmission(ctx context.Context, provider Provider, to
 	keys := providerAdmissionKeys(provider.ID)
 	cooldownKey := ""
 	if len(cooldownKeys) > 0 {
-		cooldownKey = cooldownKeys[0]
+		cooldownKey = strings.Join(cooldownKeys, "\n")
 	}
+	cooldownKey += "\n" + providerBackoffKey(provider.ID)
 	args := []any{token, provider.MaxConcurrentRequests, providerLeaseTTL.Milliseconds(), cooldownKey}
 	for _, c := range constraints {
 		if c.Cost > c.Capacity {

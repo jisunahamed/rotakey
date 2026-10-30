@@ -14,6 +14,7 @@ type streamEvidenceReader struct {
 	input, output int64
 	hasUsage      bool
 	errorCode     string
+	errorMessage  string
 }
 
 func (r *streamEvidenceReader) Read(p []byte) (int, error) {
@@ -44,10 +45,13 @@ func (r *streamEvidenceReader) observe(line []byte) {
 	}
 	if chunk["error"] != nil {
 		r.errorCode = "upstream_stream_error"
+		r.errorMessage = upstreamErrorMessage([]byte(strings.TrimSpace(strings.TrimPrefix(text, "data:"))), nil)
 	}
 	if response, ok := chunk["response"].(map[string]any); ok {
 		if response["error"] != nil {
 			r.errorCode = "upstream_stream_error"
+			body, _ := json.Marshal(response)
+			r.errorMessage = upstreamErrorMessage(body, nil)
 		}
 		chunk = response
 	}

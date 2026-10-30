@@ -63,12 +63,26 @@ func successfulUpstreamBody(req dispatchRequest, plan upstreamPlan, body []byte)
 
 // Inspect only the envelope, never demand text in a first chunk. Replay every
 // inspected byte so metadata, comments, errors and late tool/text deltas survive.
-func successfulStreamSource(source io.Reader) (io.Reader, string) {
+func successfulStreamSource(source io.Reader, commentWriters ...io.Writer) (io.Reader, string) {
 	reader := bufio.NewReaderSize(source, 64<<10)
 	prefix := bytes.Buffer{}
+	metadataOnly := true
 	for prefix.Len() < 64<<10 {
 		line, err := reader.ReadSlice('\n')
 		prefix.Write(line)
+		trimmed := bytes.TrimSpace(line)
+		metadataOnly = metadataOnly && (len(trimmed) == 0 || bytes.HasPrefix(trimmed, []byte(":")))
+		// Providers send keepalives while reasoning. Holding those comments until
+		// the first text delta makes the next gateway falsely time out a live call.
+		if metadataOnly && len(commentWriters) > 0 && commentWriters[0] != nil {
+			if _, writeErr := io.Copy(commentWriters[0], bytes.NewReader(prefix.Bytes())); writeErr != nil {
+				return &streamReadError{err: writeErr}, ""
+			}
+			if flusher, ok := commentWriters[0].(interface{ Flush() }); ok {
+				flusher.Flush()
+			}
+			prefix.Reset()
+		}
 		data := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
 		if bytes.HasPrefix(line, []byte("data:")) && len(data) > 0 {
 			var envelope map[string]any
@@ -91,6 +105,10 @@ func successfulStreamSource(source io.Reader) (io.Reader, string) {
 	}
 	return io.MultiReader(bytes.NewReader(prefix.Bytes()), reader), ""
 }
+
+type streamReadError struct{ err error }
+
+func (r *streamReadError) Read([]byte) (int, error) { return 0, r.err }
 
 // EOF is a valid end to a provider 2xx body even without a terminal marker.
 // Relay chunks as they arrive, without adding gateway error events.

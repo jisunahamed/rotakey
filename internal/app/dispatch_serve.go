@@ -408,6 +408,15 @@ func (s *Server) servePooled(
 			}()
 			return s.runAttempt(w, r, req, candidate, plan, client, attemptCtx, reserved, compatibilityRetriesRemaining > 0 && recovery.tests < 3)
 		}()
+		outcome.Record.ResponseComplete = outcome.ResponseComplete
+		if !outcome.ResponseComplete && (outcome.ErrorCode != "" || r.Context().Err() != nil || timedOut) {
+			outcome.Record.FailurePhase = "upstream_body"
+			if outcome.Record.StatusCode == 0 {
+				outcome.Record.FailurePhase = "before_upstream_headers"
+			} else if req.Stream {
+				outcome.Record.FailurePhase = "stream"
+			}
+		}
 		if timedOut && !outcome.ResponseComplete {
 			if !outcome.Done {
 				outcome.Status = 504
@@ -426,6 +435,11 @@ func (s *Server) servePooled(
 			outcome.Done = true
 		}
 		if !outcome.Done && (outcome.Status == 429 || outcome.Record.Error == "rate_limit_exceeded") {
+			// Capacity waits do not spend the failure retry budget, but outbound
+			// calls still belong in the audit trail. Bound metadata during long waits.
+			if len(attempts) < 128 {
+				attempts = append(attempts, outcome.Record)
+			}
 			waitingProviderID = candidate.Route.Provider.ID
 			delete(skipped, candidate.key())
 			attempt--
@@ -451,7 +465,7 @@ func (s *Server) servePooled(
 				}
 			}
 		}
-		if !outcome.Done && !outcome.Compatibility && (outcome.Status == 400 || outcome.Status == 422) && !outcome.Record.RecoveryRetry {
+		if !outcome.Done && !outcome.Compatibility && (outcome.Status == 400 || outcome.Status == 422 || credentialIndependentFailure(outcome.Status, outcome.ErrorMessage)) && !outcome.Record.RecoveryRetry {
 			for _, other := range candidates {
 				if other.Route.Model.ID == candidate.Route.Model.ID {
 					skipped[other.key()] = true
@@ -663,7 +677,7 @@ func (s *Server) runAttempt(
 	allowCompatibility bool,
 ) attemptOutcome {
 	credential := candidate.Credential
-	record := AttemptRecord{CredentialID: credential.ID, CredentialLabel: credential.Label}
+	record := AttemptRecord{CredentialID: credential.ID, CredentialLabel: credential.Label, CallerRequestID: boundedCallerRequestID(r.Header.Get("X-Request-ID")), Stream: req.Stream}
 	target := strings.TrimRight(candidate.Route.Provider.BaseURL, "/") + plan.Path
 	upstreamRequest, buildErr := http.NewRequestWithContext(retryContext, http.MethodPost, target, bytes.NewReader(plan.Encoded))
 	if buildErr != nil {
@@ -683,6 +697,12 @@ func (s *Server) runAttempt(
 		record.ErrorMessage = "The upstream connection failed before a response started."
 		record.Retryable = true
 		record.DurationMS = time.Since(attemptStarted).Milliseconds()
+		// A caller/probe disconnect is not evidence that this API key failed.
+		if r.Context().Err() != nil {
+			record.Error, record.Retryable = "client_cancelled", false
+			record.ErrorMessage = "Caller disconnected before upstream response headers arrived."
+			return attemptOutcome{Done: true, Status: 499, Record: record, ErrorCode: "cancelled", ErrorMessage: record.ErrorMessage}
+		}
 		s.markCredentialFailure(r.Context(), credential.ID, 0, 0)
 		return attemptOutcome{
 			Record:    record,
@@ -842,14 +862,21 @@ func (s *Server) runAttempt(
 			}
 		}
 		if response.StatusCode != http.StatusUnprocessableEntity {
-			s.markUpstreamFailure(r.Context(), credential.ID, response.StatusCode, response.Header, body)
+			if hold, busy := providerConcurrencyHold(response.StatusCode, response.Header, body); busy {
+				_ = holdProviderBackoff.Run(r.Context(), s.redis, []string{providerBackoffKey(candidate.Route.Provider.ID)}, hold.Milliseconds()).Err()
+				record.Error, record.ErrorMessage, record.Retryable = "rate_limit_exceeded", upstreamErrorMessage(body, credential.Secret), true
+				return attemptOutcome{Record: record, Status: response.StatusCode, ErrorCode: record.Error, ErrorMessage: record.ErrorMessage, UpstreamRequestID: upstreamRequestID}
+			}
+			if !credentialIndependentFailure(response.StatusCode, upstreamErrorMessage(body, credential.Secret)) {
+				s.markUpstreamFailure(r.Context(), credential.ID, response.StatusCode, response.Header, body)
+			}
 		}
 		if anthropicRetryableStatus(response.StatusCode) {
 			// Nothing has been written yet, so another provider may still serve
 			// this request. The caller decides whether budget remains.
 			record.Error = upstreamErrorCode(body)
 			record.ErrorMessage = upstreamErrorMessage(body, credential.Secret)
-			record.Retryable = true
+			record.Retryable = !credentialIndependentFailure(response.StatusCode, record.ErrorMessage)
 			return attemptOutcome{
 				Record: record, Status: response.StatusCode,
 				ErrorCode: record.Error, ErrorMessage: record.ErrorMessage,
@@ -1030,7 +1057,23 @@ func (s *Server) streamAttempt(
 		}
 		return s.relaySuccessfulBody(w, r, req, plan, response, io.MultiReader(bytes.NewReader(body), response.Body), reserved, record, upstreamRequestID)
 	}
-	source, actual := successfulStreamSource(source)
+	delivery := &streamCompletionWriter{ResponseWriter: w}
+	w = delivery
+	copyResponseHeaders(w, req.PublicMode, response.Header)
+	s.setCompatibilityHeaders(w, plan)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(response.StatusCode)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	var capture *limitedCapture
+	if candidate.Route.Model.CaptureBodies {
+		capture = &limitedCapture{limit: s.cfg.CaptureBytes}
+	}
+	commentWriter := &streamCommentWriter{ResponseWriter: w, capture: capture}
+	source, actual := successfulStreamSource(source, commentWriter)
 	if actual == messageModeAnthropic {
 		plan.Format = "anthropic"
 	} else if actual != "" {
@@ -1043,19 +1086,6 @@ func (s *Server) streamAttempt(
 
 	evidence := &streamEvidenceReader{source: source}
 	source = evidence
-	delivery := &streamCompletionWriter{ResponseWriter: w}
-	w = delivery
-	copyResponseHeaders(w, req.PublicMode, response.Header)
-	s.setCompatibilityHeaders(w, plan)
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(response.StatusCode)
-
-	var capture *limitedCapture
-	if candidate.Route.Model.CaptureBodies {
-		capture = &limitedCapture{limit: s.cfg.CaptureBytes}
-	}
 	var (
 		streamCode          string
 		streamErr           error
@@ -1104,6 +1134,12 @@ func (s *Server) streamAttempt(
 	if streamCode != "" {
 		record.Error = streamCode
 		record.ErrorMessage = "The upstream provider sent an error after streaming started."
+		if evidence.errorMessage != "" {
+			record.ErrorMessage = evidence.errorMessage
+			if len(candidate.Credential.Secret) > 0 {
+				record.ErrorMessage = strings.ReplaceAll(record.ErrorMessage, string(candidate.Credential.Secret), "[redacted]")
+			}
+		}
 	}
 	responseComplete := !delivery.writeFailed && (streamErr == nil || delivery.terminalSent)
 	if streamErr != nil && !responseComplete && !errors.Is(streamErr, context.Canceled) {
