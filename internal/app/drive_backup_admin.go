@@ -339,7 +339,7 @@ func (s *Server) handleDriveRun(w http.ResponseWriter, r *http.Request) {
 		driveAdminError(w, errors.New("queue failed"))
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 
 func enqueueDriveRun(ctx context.Context, tx pgx.Tx, cfg driveSettings, deleteSource bool) error {
