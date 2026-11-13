@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -83,7 +84,7 @@ func ReplaceDriveTask(ctx context.Context, cfg Config, runID, manifestPath strin
 	}
 	state.RunID = runID
 	if state.Done {
-		return nil
+		return purgeReplacedDriveFiles(ctx, client, settings.FolderID, runID)
 	}
 	save := func() error {
 		raw, e := json.Marshal(state)
@@ -235,5 +236,44 @@ func ReplaceDriveTask(ctx context.Context, cfg Config, runID, manifestPath strin
 		return err
 	}
 	fmt.Println("Replacement and verified body cleanup completed")
+	return purgeReplacedDriveFiles(ctx, client, settings.FolderID, runID)
+}
+
+// A lost upload acknowledgement can leave an original file without a receipt.
+// Remove only this run's named archives after the replacement is complete.
+func purgeReplacedDriveFiles(ctx context.Context, client *http.Client, folder, runID string) error {
+	if !driveID.MatchString(folder) || !driveID.MatchString(runID) {
+		return errors.New("invalid archive identity")
+	}
+	ids := []string{}
+	page := ""
+	for {
+		q := url.Values{"q": {"'" + folder + "' in parents and trashed=false and name contains '" + runID + "'"}, "fields": {"nextPageToken,files(id,name)"}, "pageSize": {"100"}, "supportsAllDrives": {"true"}, "includeItemsFromAllDrives": {"true"}}
+		if page != "" {
+			q.Set("pageToken", page)
+		}
+		var list struct {
+			Next  string `json:"nextPageToken"`
+			Files []struct{ ID, Name string }
+		}
+		if err := driveJSON(ctx, client, "GET", driveAPI+"/files?"+q.Encode(), nil, &list); err != nil {
+			return err
+		}
+		for _, f := range list.Files {
+			if len(f.Name) > len("rotakey-requests-") && f.Name[:len("rotakey-requests-")] == "rotakey-requests-" && driveID.MatchString(f.ID) {
+				ids = append(ids, f.ID)
+			}
+		}
+		page = list.Next
+		if page == "" {
+			break
+		}
+	}
+	for _, id := range ids {
+		if err := driveJSON(ctx, client, "DELETE", driveAPI+"/files/"+id+"?supportsAllDrives=true", nil, nil); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("Remaining original archive files removed: %d\n", len(ids))
 	return nil
 }
