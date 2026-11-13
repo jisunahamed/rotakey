@@ -79,11 +79,11 @@ func TestIntegrationDriveBackupSelectionAndVerifiedDeletion(t *testing.T) {
 		wantRows, wantBodies, wantUploaded, wantDeleted int
 	}{
 		{"upload-only", true, true, false, false, false, 2, 1, 2, 0},
-		{"all-with-cleanup", true, true, true, false, false, 0, 0, 2, 2},
+		{"all-with-cleanup", true, true, true, false, false, 2, 0, 2, 1},
 		{"body-only", true, false, true, false, false, 2, 0, 1, 1},
-		{"metadata-only", false, true, true, false, false, 1, 1, 2, 1},
+		{"metadata-only", false, true, true, false, false, 2, 1, 2, 0},
 		{"bad-remote-checksum", true, true, true, true, false, 2, 1, 2, 0},
-		{"source-changed", true, true, true, false, true, 1, 1, 2, 1},
+		{"source-changed", true, true, true, false, true, 2, 1, 2, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := repairIntegrationServer(t)

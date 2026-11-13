@@ -306,13 +306,13 @@ func readDriveFiles(ctx context.Context, owner *pgxpool.Conn, id string) ([]driv
 func cleanDriveRun(ctx context.Context, owner *pgxpool.Conn, run driveRun) error {
 	// When only one kind is selected, do not discard data left out of the
 	// backup. A metadata-only run may remove rows with no saved bodies.
-	modify := `DELETE FROM request_logs l USING batch WHERE l.id=batch.log_id AND ` + driveFingerprint + `=batch.fingerprint`
-	if !run.IncludeMetadata {
-		modify = `UPDATE request_logs l SET request_body_cipher=NULL,response_body_cipher=NULL,body_truncated=false
- FROM batch WHERE l.id=batch.log_id AND ` + driveFingerprint + `=batch.fingerprint`
-	} else if !run.IncludeBodies {
-		modify += ` AND l.request_body_cipher IS NULL AND l.response_body_cipher IS NULL`
+	// Keep the lightweight ledger for daily and lifetime usage meters.
+	if !run.IncludeBodies {
+		return nil
 	}
+	modify := `UPDATE request_logs l SET request_body_cipher=NULL,response_body_cipher=NULL
+ FROM batch WHERE l.id=batch.log_id AND ` + driveFingerprint + `=batch.fingerprint
+ AND (l.request_body_cipher IS NOT NULL OR l.response_body_cipher IS NOT NULL)`
 	last := ""
 	for ctx.Err() == nil {
 		var count int

@@ -212,8 +212,8 @@ export function DriveBackup({ notify }: { notify: Notify }) {
     </ul></div>}
     {showChoice && saved && <dialog ref={dialog} className="confirm-dialog drive-backup__dialog" aria-labelledby="drive-backup-choice" onCancel={(e) => { e.preventDefault(); if (!busy) void choose("cancel"); }}>
       <h2 id="drive-backup-choice">{saved.first_backup_pending ? "Back up existing requests?" : "Start a Google Drive backup?"}</h2>
-      <p>{selectedData(saved)} will be uploaded to <strong>{saved.folder_name}</strong> in the background. Choose whether to keep the uploaded data on the VPS.</p>
-      {saved.include_bodies !== saved.include_metadata && <p>{saved.include_bodies ? "Input and output are removed. Request metadata stays on the VPS." : "Only records without saved input or output are removed. Records with bodies stay on the VPS."}</p>}
+      <p>{selectedData(saved)} will be uploaded to <strong>{saved.folder_name}</strong> in the background. Choose whether to keep uploaded input/output on the VPS.</p>
+      <p>Request metadata and daily/lifetime usage meters are always kept. Only selected, verified input/output is cleaned up.</p>
       {saved.first_backup_pending && saved.scheduled && <p>Cancel skips this one-time backup. The saved daily schedule will still apply.</p>}
       <div className="drive-backup__actions">
         <Button variant="quiet" ref={cancelChoice} disabled={busy} onClick={() => void choose("cancel")}>Cancel</Button>
