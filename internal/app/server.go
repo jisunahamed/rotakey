@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
-	"os"
 	"path"
 	"runtime/debug"
 	"strings"
@@ -69,6 +68,7 @@ func NewServer(ctx context.Context, cfg Config, logger *slog.Logger) (*Server, e
 	}
 	server.handler = server.routes()
 	go server.retentionLoop(ctx)
+	go server.driveBackupLoop(ctx)
 	return server, nil
 }
 
@@ -121,6 +121,7 @@ func (s *Server) routes() http.Handler {
 
 	s.registerAdminRoutes(mux)
 	s.registerPortableRoutes(mux)
+	s.registerDriveBackupRoutes(mux)
 	mux.HandleFunc("GET /", s.serveWeb)
 	return s.requestIDMiddleware(s.securityHeaders(s.recoverMiddleware(mux)))
 }
@@ -153,7 +154,7 @@ func (s *Server) requestIDMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("X-Request-ID", requestID)
 		w.Header().Set("Request-Id", requestID)
 		r = r.WithContext(context.WithValue(r.Context(), requestIDContextKey{}, requestID))
-		inference := r.Method == http.MethodPost && (r.URL.Path == "/v1/messages" || r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/responses" || r.URL.Path == "/v1/embeddings" || r.URL.Path == "/api/admin/playground/run")
+		inference := r.Method == http.MethodPost && (r.URL.Path == "/v1/messages" || r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/responses" || r.URL.Path == "/v1/responses/compact" || r.URL.Path == "/v1/embeddings" || r.URL.Path == "/api/admin/playground/run")
 		if inference {
 			s.captureRequest(next).ServeHTTP(w, r)
 		} else {
@@ -290,8 +291,7 @@ func (s *Server) retentionLoop(ctx context.Context) {
 }
 
 func (s *Server) runRetention(ctx context.Context) {
-	// Archive mode only removes a log after the remote copy is verified.
-	if os.Getenv("REQUEST_ARCHIVE_ENABLED") == "true" {
+	if envBool("PRESERVE_REQUEST_LOGS", false) || envBool("REQUEST_ARCHIVE_ENABLED", false) {
 		return
 	}
 	settings, _, err := s.settings(ctx)
@@ -304,10 +304,15 @@ func (s *Server) runRetention(ctx context.Context) {
 		SET request_body_cipher = NULL, response_body_cipher = NULL
 		WHERE created_at < NOW() - ($1::text || ' days')::interval
 		  AND (request_body_cipher IS NOT NULL OR response_body_cipher IS NOT NULL)
+		  AND NOT (SELECT capture_all_requests FROM app_settings WHERE id=1)
+		  AND NOT (SELECT client_id<>'' FROM drive_backup_settings WHERE id=1)
 	`, settings.BodyRetentionDays)
 	_, _ = s.db.Exec(ctx, `
 		DELETE FROM request_logs
 		WHERE created_at < NOW() - ($1::text || ' days')::interval
+		  AND NOT (SELECT client_id<>'' FROM drive_backup_settings WHERE id=1)
+		  AND ((request_body_cipher IS NULL AND response_body_cipher IS NULL)
+		    OR NOT (SELECT capture_all_requests FROM app_settings WHERE id=1))
 	`, settings.MetadataRetentionDays)
 	_, _ = s.db.Exec(ctx, `DELETE FROM repair_incidents WHERE created_at < NOW() - ($1::text || ' days')::interval`, settings.MetadataRetentionDays)
 }

@@ -52,7 +52,7 @@ services:
       SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-12}
       OPENCODE_PROXY_URL: ${OPENCODE_PROXY_URL:-}
       OPENCODE_PROXY_KEY: ${OPENCODE_PROXY_KEY:-}
-      REQUEST_ARCHIVE_ENABLED: ${REQUEST_ARCHIVE_ENABLED:-false}
+      PRESERVE_REQUEST_LOGS: ${PRESERVE_REQUEST_LOGS:-false}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health/ready"]
       interval: 10s

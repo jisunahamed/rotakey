@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { RepairAgentSettings, RepairHistory, RepairMetrics } from "./RepairAgent";
+import { DriveBackup } from "./DriveBackup";
 import {
   Activity,
   AlertTriangle,
@@ -4170,14 +4171,15 @@ function SettingsPage({ notify }: { notify: (message: string, tone?: "success" |
             <Button variant="quiet" disabled={busy || wouldRetime.length === 0} onClick={() => commitSettings(true)}>{wouldRetime.length === 0 ? "All providers match" : `Replace on ${wouldRetime.length} provider${wouldRetime.length === 1 ? "" : "s"}`}</Button>
           </div>
         </div>
-        <label className="settings-row"><span><strong>Save all request data</strong><small>Save complete input, output and metadata for every model, including streamed replies and errors. Bodies are encrypted on this VPS. Archived records leave the VPS only after the Supabase copy is verified.</small></span><div><input type="checkbox" role="switch" checked={Boolean(settings.capture_all_requests)} onChange={(e) => setSettings({ ...settings, capture_all_requests: e.target.checked })} /><code>{settings.capture_all_requests ? "On" : "Off"}</code></div></label>
-        <label className="settings-row"><span><strong>Metadata retention</strong><small>Request IDs, routing attempts, status, latency and usage. With archival enabled, unarchived data is kept until transfer succeeds.</small></span><div><input type="number" min={1} max={3650} value={settings.metadata_retention_days} onChange={(e) => setSettings({ ...settings, metadata_retention_days: Number(e.target.value) })} /><code>days</code></div></label>
+        <label className="settings-row"><span><strong>Save all request data</strong><small>Capture input and output for every model, including streamed replies and errors. Bodies are encrypted on this VPS.</small></span><div><input type="checkbox" role="switch" checked={Boolean(settings.capture_all_requests)} onChange={(e) => setSettings({ ...settings, capture_all_requests: e.target.checked })} /><code>{settings.capture_all_requests ? "On" : "Off"}</code></div></label>
+        <label className="settings-row"><span><strong>Metadata retention</strong><small>Request IDs, routing attempts, status, latency and usage. Drive backup settings control cleanup when Drive is connected.</small></span><div><input type="number" min={1} max={3650} value={settings.metadata_retention_days} onChange={(e) => setSettings({ ...settings, metadata_retention_days: Number(e.target.value) })} /><code>days</code></div></label>
         <label className="settings-row"><span><strong>Captured body retention</strong><small>Only applies to model routes where encrypted body capture is enabled.</small></span><div><input type="number" min={1} max={365} value={settings.body_retention_days} onChange={(e) => setSettings({ ...settings, body_retention_days: Number(e.target.value) })} /><code>days</code></div></label>
       </section>
       <div className="page-actions console-actionbar">
         <span>{modeChanged ? "Saving a new routing mode renames existing model aliases." : "Changes apply to new requests without restarting the gateway."}</span>
         <Button disabled={busy} onClick={saveSettings}>{busy ? "Saving…" : "Save settings"}</Button>
       </div>
+      <DriveBackup notify={notify} />
       <RepairAgentSettings providers={providers} />
       <ConfigTransfer notify={notify} onImported={adoptImportedSettings} />
       <section className="security-baseline">
