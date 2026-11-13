@@ -1428,14 +1428,20 @@ func (s *Server) storeRequestLog(ctx context.Context, input logInput) {
 	routingDecisions, _ := json.Marshal(input.RoutingDecisions)
 	var requestCipher, responseCipher []byte
 	truncated := input.Truncated
+	global, _ := ctx.Value(globalCaptureKey{}).(*globalCapture)
+	if global != nil {
+		input.Capture = true
+		input.RequestBody, input.ResponseBody = global.request.Bytes(), global.response.Bytes()
+		truncated = false
+	}
 	if input.Capture {
 		requestBody := input.RequestBody
-		if int64(len(requestBody)) > s.cfg.CaptureBytes {
+		if global == nil && int64(len(requestBody)) > s.cfg.CaptureBytes {
 			requestBody = requestBody[:s.cfg.CaptureBytes]
 			truncated = true
 		}
 		responseBody := input.ResponseBody
-		if int64(len(responseBody)) > s.cfg.CaptureBytes {
+		if global == nil && int64(len(responseBody)) > s.cfg.CaptureBytes {
 			responseBody = responseBody[:s.cfg.CaptureBytes]
 			truncated = true
 		}
@@ -1474,6 +1480,9 @@ func (s *Server) storeRequestLog(ctx context.Context, input logInput) {
 		protocolOrDefault(input.PublicProtocol), protocolOrDefault(input.UpstreamProtocol), input.UpstreamRequestID, queueWait)
 	if err != nil {
 		s.logger.Warn("request log write failed", "request_id", input.RequestID, "error", err)
+	}
+	if global != nil && err == nil {
+		global.logged = true
 	}
 	// Balance is charged from the same place the log is written so every counted
 	// request is also a charged request. Only requests that actually consumed

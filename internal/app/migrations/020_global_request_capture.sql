@@ -1,0 +1,1 @@
+ALTER TABLE app_settings ADD COLUMN capture_all_requests BOOLEAN NOT NULL DEFAULT FALSE;

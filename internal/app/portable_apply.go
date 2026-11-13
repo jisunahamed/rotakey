@@ -56,11 +56,11 @@ func (s *Server) applyImportBundle(ctx context.Context, bundle ExportBundle) (Im
 	if _, err := tx.Exec(ctx, `
 		UPDATE app_settings SET metadata_retention_days=$1, body_retention_days=$2,
 		    max_wait_ms=$3, default_provider_timeout_seconds=$4,
-		    default_anthropic_provider_id=NULLIF($5,''), routing_mode=$6, updated_at=NOW()
+		    default_anthropic_provider_id=NULLIF($5,''), routing_mode=$6, capture_all_requests=COALESCE($7,capture_all_requests), updated_at=NOW()
 		WHERE id=1
 	`, bundle.Settings.MetadataRetentionDays, bundle.Settings.BodyRetentionDays,
 		bundle.Settings.MaxWaitMS, bundle.Settings.DefaultProviderTimeoutSecs,
-		defaultAnthropicID, bundle.RoutingMode); err != nil {
+		defaultAnthropicID, bundle.RoutingMode, bundle.Settings.CaptureAllRequests); err != nil {
 		return result, fmt.Errorf("settings could not be applied")
 	}
 	if err := tx.Commit(ctx); err != nil {

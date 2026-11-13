@@ -19,7 +19,8 @@ COPY --from=web-builder /src/web/dist /web-dist
 RUN rm -rf internal/app/webdist \
     && mkdir -p internal/app/webdist \
     && cp -R /web-dist/. internal/app/webdist/ \
-    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X github.com/jisunahamed/rotakey/internal/app.BuildCommit=${ROTAKEY_COMMIT} -X github.com/jisunahamed/rotakey/internal/app.BuildTime=${ROTAKEY_BUILD_TIME}" -o /out/rotakey ./cmd/gateway
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X github.com/jisunahamed/rotakey/internal/app.BuildCommit=${ROTAKEY_COMMIT} -X github.com/jisunahamed/rotakey/internal/app.BuildTime=${ROTAKEY_BUILD_TIME}" -o /out/rotakey ./cmd/gateway \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/rotakey-archive ./cmd/request-archive
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates tzdata \
@@ -27,6 +28,7 @@ RUN apk add --no-cache ca-certificates tzdata \
     && adduser -S -G rotakey -h /app rotakey
 WORKDIR /app
 COPY --from=go-builder /out/rotakey /usr/local/bin/rotakey
+COPY --from=go-builder /out/rotakey-archive /usr/local/bin/rotakey-archive
 USER rotakey
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/rotakey"]

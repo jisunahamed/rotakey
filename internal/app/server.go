@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"os"
 	"path"
 	"runtime/debug"
 	"strings"
@@ -151,7 +152,13 @@ func (s *Server) requestIDMiddleware(next http.Handler) http.Handler {
 		}
 		w.Header().Set("X-Request-ID", requestID)
 		w.Header().Set("Request-Id", requestID)
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestIDContextKey{}, requestID)))
+		r = r.WithContext(context.WithValue(r.Context(), requestIDContextKey{}, requestID))
+		inference := r.Method == http.MethodPost && (r.URL.Path == "/v1/messages" || r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/responses" || r.URL.Path == "/v1/embeddings" || r.URL.Path == "/api/admin/playground/run")
+		if inference {
+			s.captureRequest(next).ServeHTTP(w, r)
+		} else {
+			next.ServeHTTP(w, r)
+		}
 	})
 }
 
@@ -283,6 +290,10 @@ func (s *Server) retentionLoop(ctx context.Context) {
 }
 
 func (s *Server) runRetention(ctx context.Context) {
+	// Archive mode only removes a log after the remote copy is verified.
+	if os.Getenv("REQUEST_ARCHIVE_ENABLED") == "true" {
+		return
+	}
 	settings, _, err := s.settings(ctx)
 	if err != nil {
 		s.logger.Warn("retention settings unavailable", "error", err)

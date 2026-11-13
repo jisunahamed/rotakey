@@ -295,6 +295,10 @@ func validateProviderInput(input *providerInput) error {
 		input.APIFormat = "openai"
 	}
 	input.BaseURL = normalizeProviderCompatibilityURL(input.BaseURL, input.APIFormat)
+	if isOpenCodeZenURL(input.BaseURL) {
+		input.APIFormat = "openai"
+		input.AuthHeader, input.AuthScheme = "Authorization", "Bearer"
+	}
 	if input.APIFormat != "openai" && input.APIFormat != "anthropic" {
 		return fmt.Errorf("provider protocol must be openai or anthropic")
 	}
@@ -359,6 +363,10 @@ func normalizeProviderCompatibilityURL(rawURL, apiFormat string) string {
 	}
 	host := strings.ToLower(parsed.Hostname())
 	path := strings.TrimRight(parsed.Path, "/")
+	if isOpenCodeZenURL(rawURL) {
+		parsed.Path, parsed.RawPath = "/zen/v1", ""
+		return parsed.String()
+	}
 	if apiFormat == "openai" && host == "generativelanguage.googleapis.com" && path == "/v1beta" {
 		parsed.Path = "/v1beta/openai/"
 		parsed.RawPath = ""
@@ -1687,7 +1695,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 // a side effect of pressing Save.
 type settingsUpdateInput struct {
 	AppSettings
-	ApplyTimeoutToAllProviders bool `json:"apply_timeout_to_all_providers"`
+	CaptureAllRequests         *bool `json:"capture_all_requests"`
+	ApplyTimeoutToAllProviders bool  `json:"apply_timeout_to_all_providers"`
 }
 
 func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
@@ -1732,15 +1741,18 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback(r.Context()) }()
 	var previousMode string
-	if err := tx.QueryRow(r.Context(), `SELECT routing_mode FROM app_settings WHERE id=1 FOR UPDATE`).Scan(&previousMode); err != nil {
+	if err := tx.QueryRow(r.Context(), `SELECT routing_mode,capture_all_requests FROM app_settings WHERE id=1 FOR UPDATE`).Scan(&previousMode, &input.CaptureAllRequests); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "settings_unavailable", "Settings could not be updated.")
 		return
+	}
+	if body.CaptureAllRequests != nil {
+		input.CaptureAllRequests = *body.CaptureAllRequests
 	}
 	if _, err := tx.Exec(r.Context(), `
 		UPDATE app_settings SET metadata_retention_days=$1, body_retention_days=$2,
 		    max_wait_ms=$3, default_provider_timeout_seconds=$4,
-		    default_anthropic_provider_id=NULLIF($5,''), routing_mode=$6, updated_at=NOW() WHERE id=1
-	`, input.MetadataRetentionDays, input.BodyRetentionDays, input.MaxWaitMS, input.DefaultProviderTimeoutSecs, input.DefaultAnthropicProviderID, routingMode); err != nil {
+		    default_anthropic_provider_id=NULLIF($5,''), routing_mode=$6, capture_all_requests=$7, updated_at=NOW() WHERE id=1
+	`, input.MetadataRetentionDays, input.BodyRetentionDays, input.MaxWaitMS, input.DefaultProviderTimeoutSecs, input.DefaultAnthropicProviderID, routingMode, input.CaptureAllRequests); err != nil {
 		writeError(w, http.StatusInternalServerError, "settings_update_failed", "Settings could not be updated.")
 		return
 	}

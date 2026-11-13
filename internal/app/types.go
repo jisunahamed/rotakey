@@ -229,6 +229,7 @@ type RequestLog struct {
 }
 
 type AppSettings struct {
+	CaptureAllRequests         bool   `json:"capture_all_requests"`
 	GatewayKeyPrefix           string `json:"gateway_key_prefix"`
 	MetadataRetentionDays      int    `json:"metadata_retention_days"`
 	BodyRetentionDays          int    `json:"body_retention_days"`

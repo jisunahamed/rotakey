@@ -90,8 +90,16 @@ func upstreamClient(provider Provider) (*http.Client, error) {
 	if timeout <= 0 {
 		timeout = 120 * time.Second
 	}
+	var transport http.RoundTripper = safeTransport(provider.AllowPrivateNetwork)
+	if isOpenCodeZenURL(provider.BaseURL) {
+		var err error
+		transport, err = openCodeTransport(provider)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return &http.Client{
-		Transport: &admissionTransport{base: safeTransport(provider.AllowPrivateNetwork), provider: provider},
+		Transport: &admissionTransport{base: transport, provider: provider},
 		Timeout:   timeout,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse

@@ -36,6 +36,8 @@ try {
         $env:GOOS = 'linux'; $env:GOARCH = 'amd64'; $env:CGO_ENABLED = '0'
         go build -trimpath -ldflags "-s -w -X github.com/jisunahamed/rotakey/internal/app.BuildCommit=$taskCommit -X github.com/jisunahamed/rotakey/internal/app.BuildTime=$taskBuildTime" -o $taskOutput ./cmd/gateway
         if ($LASTEXITCODE -ne 0) { throw 'Gateway build failed.' }
+        go build -trimpath -ldflags "-s -w" -o ($taskOutput + '-archive') ./cmd/request-archive
+        if ($LASTEXITCODE -ne 0) { throw 'Request archive build failed.' }
     } finally {
         Pop-Location
         foreach ($taskName in $taskOldEnvironment.Keys) {

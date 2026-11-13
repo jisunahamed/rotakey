@@ -356,6 +356,7 @@ export type RequestLog = {
 export type RoutingMode = 'provider' | 'model';
 
 export type Settings = {
+  capture_all_requests?: boolean;
   gateway_key_prefix: string;
   metadata_retention_days: number;
   body_retention_days: number;

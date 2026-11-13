@@ -399,7 +399,7 @@ func (s *Server) settings(ctx context.Context) (AppSettings, []byte, error) {
 	err := s.db.QueryRow(ctx, `
 		SELECT gateway_key_prefix, metadata_retention_days, body_retention_days,
 		       max_wait_ms, default_provider_timeout_seconds,
-		       COALESCE(default_anthropic_provider_id, ''), routing_mode, gateway_key_hash
+		       COALESCE(default_anthropic_provider_id, ''), routing_mode, gateway_key_hash, capture_all_requests
 		FROM app_settings WHERE id = 1
 	`).Scan(
 		&settings.GatewayKeyPrefix,
@@ -410,6 +410,7 @@ func (s *Server) settings(ctx context.Context) (AppSettings, []byte, error) {
 		&settings.DefaultAnthropicProviderID,
 		&settings.RoutingMode,
 		&keyHash,
+		&settings.CaptureAllRequests,
 	)
 	return settings, keyHash, err
 }

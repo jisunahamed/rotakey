@@ -137,6 +137,9 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 		state.Removed, state.Replaced, state.RemovedItemFields = scope.Removed, scope.Replaced, scope.Items
 	}
 	format := route.Provider.APIFormat
+	if isOpenCodeZenURL(route.Provider.BaseURL) {
+		format = "openai"
+	}
 	if format == "" {
 		format = "openai"
 	}

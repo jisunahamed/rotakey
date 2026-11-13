@@ -1,0 +1,11 @@
+[Unit]
+Description=Archive Rotakey requests at midnight Bangladesh time
+
+[Timer]
+OnCalendar=*-*-* 00:00:00 Asia/Dhaka
+Persistent=true
+Unit=rotakey-archive.service
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

@@ -31,6 +31,7 @@ type ExportBundle struct {
 }
 
 type ExportSettings struct {
+	CaptureAllRequests           *bool  `json:"capture_all_requests,omitempty"`
 	MetadataRetentionDays        int    `json:"metadata_retention_days"`
 	BodyRetentionDays            int    `json:"body_retention_days"`
 	MaxWaitMS                    int    `json:"max_wait_ms"`
@@ -137,6 +138,7 @@ func (s *Server) buildExportBundle(ctx context.Context, withSecrets bool) (Expor
 		AppVersion: Version, IncludesSecrets: withSecrets,
 		RoutingMode: valueOr(settings.RoutingMode, routingModeProvider),
 		Settings: ExportSettings{
+			CaptureAllRequests:         &settings.CaptureAllRequests,
 			MetadataRetentionDays:      settings.MetadataRetentionDays,
 			BodyRetentionDays:          settings.BodyRetentionDays,
 			MaxWaitMS:                  settings.MaxWaitMS,
