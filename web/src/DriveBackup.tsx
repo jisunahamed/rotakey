@@ -187,19 +187,19 @@ export function DriveBackup({ notify }: { notify: Notify }) {
         {folders.map((f) => <option key={f.id} value={f.id}>{f.name}{f.id === "root" ? "" : ` · ${f.id.slice(-6)}`}</option>)}
       </select></label>
       {nextPage && <div><Button variant="quiet" disabled={loadingFolders} onClick={() => void loadFolders(activeSearch, nextPage)}>Load more folders</Button></div>}
-      <div><h3>3. Choose what to save</h3><p>Metadata includes model, time, status and usage, even for requests with no saved body.</p></div>
+      <div>{active && <InlineNotice>Backup is running. Changes apply to the next backup; account and folder stay locked until this run finishes.</InlineNotice>}<h3>3. Choose what to save</h3><p>Metadata includes model, time, status and usage, even for requests with no saved body.</p></div>
       <div className="drive-backup__actions">
-        <label><input type="checkbox" checked={draft.include_bodies} disabled={active || busy} onChange={(e) => setDraft({ ...draft, include_bodies: e.target.checked })} /> Input/output</label>
-        <label><input type="checkbox" checked={draft.include_metadata} disabled={active || busy} onChange={(e) => setDraft({ ...draft, include_metadata: e.target.checked })} /> Metadata</label>
+        <label><input type="checkbox" checked={draft.include_bodies} disabled={busy} onChange={(e) => setDraft({ ...draft, include_bodies: e.target.checked })} /> Input/output</label>
+        <label><input type="checkbox" checked={draft.include_metadata} disabled={busy} onChange={(e) => setDraft({ ...draft, include_metadata: e.target.checked })} /> Metadata</label>
       </div>
       <div><h3>4. Schedule daily backups</h3><p>{saved.next_run_at && !saved.first_backup_pending ? `Next backup: ${date.format(new Date(saved.next_run_at))} (Dhaka)` : "Run on demand or set a daily time (Dhaka)."}</p></div>
       <div className="drive-backup__actions">
-        <label><input type="checkbox" checked={draft.scheduled} disabled={active || busy} onChange={(e) => setDraft({ ...draft, scheduled: e.target.checked })} /> Daily backup</label>
-        <input type="time" aria-label="Daily backup time (Dhaka)" value={draft.daily_time} disabled={active || busy || !draft.scheduled} onChange={(e) => setDraft({ ...draft, daily_time: e.target.value })} />
-        <label><input type="checkbox" checked={draft.delete_after_upload} disabled={active || busy || !draft.scheduled} onChange={(e) => setDraft({ ...draft, delete_after_upload: e.target.checked })} /> Delete after verified upload</label>
+        <label><input type="checkbox" checked={draft.scheduled} disabled={busy} onChange={(e) => setDraft({ ...draft, scheduled: e.target.checked })} /> Daily backup</label>
+        <input type="time" aria-label="Daily backup time (Dhaka)" value={draft.daily_time} disabled={busy || !draft.scheduled} onChange={(e) => setDraft({ ...draft, daily_time: e.target.value })} />
+        <label><input type="checkbox" checked={draft.delete_after_upload} disabled={busy || !draft.scheduled} onChange={(e) => setDraft({ ...draft, delete_after_upload: e.target.checked })} /> Delete after verified upload</label>
       </div>
       <div className="drive-backup__actions">
-        <Button disabled={busy || active || !dirty || !draft.daily_time || !draft.folder_id || (!draft.include_bodies && !draft.include_metadata)} onClick={() => void save()}>Save backup settings</Button>
+        <Button disabled={busy || !dirty || !draft.daily_time || !draft.folder_id || (!draft.include_bodies && !draft.include_metadata)} onClick={() => void save()}>Save backup settings</Button>
         <Button variant="quiet" disabled={busy || active || Boolean(dirty) || !saved.folder_id} onClick={() => setShowChoice(true)}>{saved.first_backup_pending ? "Choose first backup" : "Back up now"}</Button>
       </div>
     </div>}

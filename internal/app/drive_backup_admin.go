@@ -140,6 +140,10 @@ func (s *Server) handleDriveStatus(w http.ResponseWriter, r *http.Request) {
 
 // Serialize settings changes and job creation on the same singleton row.
 func (s *Server) lockDriveSettings(ctx context.Context, expected int64) (pgx.Tx, error) {
+	return s.lockDriveSettingsUpdate(ctx, expected, false)
+}
+
+func (s *Server) lockDriveSettingsUpdate(ctx context.Context, expected int64, allowActive bool) (pgx.Tx, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -150,7 +154,7 @@ func (s *Server) lockDriveSettings(ctx context.Context, expected int64) (pgx.Tx,
 	if err == nil {
 		err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM drive_backup_runs WHERE state IN ('queued','running'))`).Scan(&active)
 	}
-	if err != nil || active || version != expected {
+	if err != nil || (active && !allowActive) || version != expected {
 		_ = tx.Rollback(context.WithoutCancel(ctx))
 		if err == nil {
 			err = errDriveConflict
@@ -285,7 +289,7 @@ func (s *Server) handleDriveSave(w http.ResponseWriter, r *http.Request) {
 		}
 		next = &value
 	}
-	tx, err := s.lockDriveSettings(ctx, in.Revision)
+	tx, err := s.lockDriveSettingsUpdate(ctx, in.Revision, cfg.FolderID == folder.ID)
 	if err != nil {
 		driveAdminError(w, err)
 		return
