@@ -241,7 +241,11 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 		plan.Path = "/chat/completions"
 	}
 
-	applyReasoningControl(payload, req.Public, route, plan.wireEndpoint())
+	reasoningEndpoint := plan.wireEndpoint()
+	if plan.Format == "anthropic" {
+		reasoningEndpoint = "messages"
+	}
+	applyReasoningControl(payload, req.Public, route, reasoningEndpoint)
 	plan.Removed = appendUniqueStrings(plan.Removed, stripTopLevelParameters(payload, route.Model.StripParameters)...)
 	plan.Removed = appendUniqueStrings(plan.Removed, stripTopLevelParameters(payload, s.learnedCompatibilityParameters(ctx, route.Model.ID))...)
 	plan.Removed = appendUniqueStrings(plan.Removed, stripTopLevelParameters(payload, state.Removed)...)
