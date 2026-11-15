@@ -1,0 +1,185 @@
+{
+  "checked_at": "2026-11-15T21:28:23.349631+00:00",
+  "models": [
+    {
+      "id": "deepseek-ai/deepseek-v4.1-flash",
+      "source_url": "https://build.nvidia.com/deepseek-ai/deepseek-v4.1-flash",
+      "context_window": 1048576,
+      "input_modalities": [
+        "Text",
+        "Image"
+      ],
+      "tools": true,
+      "reasoning": true,
+      "structured_output": null
+    },
+    {
+      "id": "google/diffusiongemma-26b-a4b-it",
+      "source_url": "https://build.nvidia.com/google/diffusiongemma-26b-a4b-it",
+      "context_window": 262144,
+      "input_modalities": [
+        "Text",
+        "Image",
+        "Video"
+      ],
+      "tools": true,
+      "reasoning": true,
+      "structured_output": false
+    },
+    {
+      "id": "google/gemma-4-31b-it",
+      "source_url": "https://build.nvidia.com/google/gemma-4-31b-it",
+      "context_window": 262144,
+      "input_modalities": [
+        "Text",
+        "Image",
+        "Video"
+      ],
+      "tools": true,
+      "reasoning": true,
+      "structured_output": false
+    },
+    {
+      "id": "meta/muse-glimmer-30b",
+      "source_url": "https://build.nvidia.com/meta/muse-glimmer-30b",
+      "context_window": 131072,
+      "input_modalities": [
+        "Text",
+        "Image"
+      ],
+      "tools": true,
+      "reasoning": true,
+      "structured_output": false
+    },
+    {
+      "id": "minimaxai/minimax-m3.1-flash",
+      "source_url": "https://build.nvidia.com/minimaxai/minimax-m3.1-flash",
+      "context_window": 262144,
+      "input_modalities": [
+        "Text",
+        "Image",
+        "Video"
+      ],
+      "tools": true,
+      "reasoning": true,
+      "structured_output": true
+    },
+    {
+      "id": "mistralai/mistral-large-4-1t-a52b",
+      "source_url": "https://build.nvidia.com/mistralai/mistral-large-4-1t-a52b",
+      "context_window": 262144,
+      "input_modalities": [
+        "Text",
+        "Image"
+      ],
+      "tools": true,
+      "reasoning": true,
+      "structured_output": true
+    },
+    {
+      "id": "nvidia/ising-calibration-1.5-31b",
+      "source_url": "https://build.nvidia.com/nvidia/ising-calibration-1.5-31b",
+      "context_window": 262144,
+      "input_modalities": [
+        "Image",
+        "Text"
+      ],
+      "tools": false,
+      "reasoning": false,
+      "structured_output": false
+    },
+    {
+      "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+      "source_url": "https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+      "context_window": 262144,
+      "input_modalities": [
+        "Video",
+        "Audio",
+        "Image",
+        "Text"
+      ],
+      "tools": true,
+      "reasoning": true,
+      "structured_output": false
+    },
+    {
+      "id": "nvidia/nemotron-3-ultra-550b-a55b",
+      "source_url": "https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b",
+      "context_window": 1048576,
+      "input_modalities": [
+        "Text"
+      ],
+      "tools": true,
+      "reasoning": true,
+      "structured_output": false
+    },
+    {
+      "id": "nvidia/nemotron-3.5-bolt-e4b",
+      "source_url": "https://build.nvidia.com/nvidia/nemotron-3.5-bolt-e4b",
+      "context_window": 65536,
+      "input_modalities": [
+        "Text"
+      ],
+      "tools": true,
+      "reasoning": true,
+      "structured_output": true
+    },
+    {
+      "id": "nvidia/nemotron-3.5-lightning-30b-a3b",
+      "source_url": "https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b",
+      "context_window": 1048576,
+      "input_modalities": [
+        "Text"
+      ],
+      "tools": true,
+      "reasoning": true,
+      "structured_output": true
+    },
+    {
+      "id": "openai/gpt-oss-20b",
+      "source_url": "https://build.nvidia.com/openai/gpt-oss-20b",
+      "context_window": 131072,
+      "input_modalities": [
+        "Text"
+      ],
+      "tools": true,
+      "reasoning": true,
+      "structured_output": true
+    },
+    {
+      "id": "poolside/laguna-xs-2.1",
+      "source_url": "https://build.nvidia.com/poolside/laguna-xs-2.1",
+      "context_window": 262144,
+      "input_modalities": [
+        "Text"
+      ],
+      "tools": true,
+      "reasoning": true,
+      "structured_output": false
+    },
+    {
+      "id": "stepfun-ai/step-5-preview",
+      "source_url": "https://build.nvidia.com/stepfun-ai/step-5-preview",
+      "context_window": 1048576,
+      "input_modalities": [
+        "Text",
+        "Image"
+      ],
+      "tools": true,
+      "reasoning": true,
+      "structured_output": false
+    },
+    {
+      "id": "z-ai/glm-5.3-flash",
+      "source_url": "https://build.nvidia.com/z-ai/glm-5-3-flash",
+      "context_window": 1048576,
+      "input_modalities": [
+        "Text",
+        "Image"
+      ],
+      "tools": true,
+      "reasoning": true,
+      "structured_output": true
+    }
+  ]
+}

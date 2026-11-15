@@ -21,6 +21,7 @@ import type { PlaygroundProtocol } from "../../lib/stream";
 export type RunProtocol = "auto" | PlaygroundProtocol;
 
 export type RunSettings = {
+  effort?: string;
   system: string;
   protocol: RunProtocol;
   maxTokens: number;
@@ -178,7 +179,8 @@ function reviveConversation(value: unknown): Conversation | null {
           : "auto",
       maxTokens: Number.isFinite(stored?.maxTokens) ? Number(stored?.maxTokens) : base.maxTokens,
       temperature: Number.isFinite(stored?.temperature) ? Number(stored?.temperature) : base.temperature,
-      stream: stored?.stream !== false
+      stream: stored?.stream !== false,
+      effort: typeof stored?.effort === "string" && ["low", "medium", "high", "xhigh", "max"].includes(stored.effort) ? stored.effort : ""
     },
     turns: Array.isArray(chat.turns)
       ? chat.turns.map(reviveTurn).filter((turn): turn is Turn => turn !== null)

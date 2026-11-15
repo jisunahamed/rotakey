@@ -15,6 +15,13 @@ func retainCatalogFacts(profile map[string]string, previous []byte) {
 	if value := facts["context_window"]; value != "" && profile["context_window"] == "" {
 		profile["context_window"] = value
 	}
+	if facts["capability_source"] == "nvidia_official_catalog" {
+		for _, key := range []string{"context_source", "reasoning_levels", "thinking_control"} {
+			if value := facts[key]; value != "" {
+				profile[key] = value
+			}
+		}
+	}
 	if facts["capability_source"] == "provider_catalog" {
 		for _, key := range []string{"images", "thinking", "tools", "streaming", "json_output", "web_search", "model_type", "capability_source"} {
 			if value := facts[key]; value != "" {

@@ -31,7 +31,8 @@ type playgroundMessage struct {
 }
 
 type playgroundInput struct {
-	Model string `json:"model"`
+	ReasoningEffort string `json:"reasoning_effort"`
+	Model           string `json:"model"`
 	// Prompt is the single-turn form. Messages is the conversation form. Exactly
 	// one of them arrives; Prompt is kept because it is the whole API that the
 	// console had before multi-turn, and callers still using it must keep working.
@@ -57,6 +58,11 @@ func (input playgroundInput) turns() []playgroundMessage {
 }
 
 func validatePlaygroundInput(input *playgroundInput) error {
+	switch input.ReasoningEffort {
+	case "", "low", "medium", "high", "xhigh", "max":
+	default:
+		return fmt.Errorf("reasoning effort is invalid")
+	}
 	input.Model = strings.TrimSpace(input.Model)
 	input.Prompt = strings.TrimSpace(input.Prompt)
 	input.System = strings.TrimSpace(input.System)
@@ -170,6 +176,16 @@ func playgroundPayload(input playgroundInput, protocol string) map[string]any {
 	}
 	if input.Temperature != nil {
 		payload["temperature"] = *input.Temperature
+	}
+	if input.ReasoningEffort != "" {
+		switch protocol {
+		case playgroundProtocolMessages:
+			payload["output_config"] = map[string]any{"effort": input.ReasoningEffort}
+		case playgroundProtocolResponses:
+			payload["reasoning"] = map[string]any{"effort": input.ReasoningEffort}
+		default:
+			payload["reasoning_effort"] = input.ReasoningEffort
+		}
 	}
 	return payload
 }

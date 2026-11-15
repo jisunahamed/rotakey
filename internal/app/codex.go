@@ -73,7 +73,7 @@ func (s *Server) handleCodexManifest(w http.ResponseWriter, r *http.Request) {
 		if parsed, err := strconv.Atoi(profile["context_window"]); err == nil && parsed > 0 {
 			contextWindow = parsed
 		}
-		reasoningLevels := []string{"low", "medium", "high"}
+		reasoningLevels := []string{}
 		if configured := strings.TrimSpace(profile["reasoning_levels"]); configured != "" {
 			reasoningLevels = strings.Split(configured, ",")
 			for index := range reasoningLevels {

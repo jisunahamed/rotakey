@@ -782,6 +782,12 @@ export function PlaygroundPage({
             step={1}
             onCommit={(value) => updateSettings({ maxTokens: value })}
           />
+          <Field label="Reasoning effort" hint="available levels come from the model catalog">
+            <select value={chat.settings.effort ?? ""} onChange={(event) => updateSettings({ effort: event.target.value })}>
+              <option value="">Provider default</option>
+              {(route?.capability_profile?.reasoning_levels ?? "").split(",").filter(Boolean).map((level) => <option key={level} value={level}>{level}</option>)}
+            </select>
+          </Field>
           <NumberField
             label="Temperature"
             hint="0 is repeatable, 2 is wild"

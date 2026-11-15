@@ -170,6 +170,7 @@ export async function runTurn({
     temperature: chat.settings.temperature
   };
   const system = chat.settings.system.trim();
+  if (chat.settings.effort) body.reasoning_effort = chat.settings.effort;
   if (system !== "") body.system = system;
 
   const startedAt = performance.now();

@@ -121,15 +121,17 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			// discovery made Claude Code conclude that this gateway had no models.
 			if isAnthropicRequest(r) {
 				discoveryID := anthropicDiscoveryModelID(alias)
-				data = append(data, map[string]any{
-					"id": discoveryID, "type": "model", "display_name": alias,
-					"created_at": created.UTC().Format(time.RFC3339),
-				})
+				info := map[string]any{"id": discoveryID, "type": "model", "display_name": alias, "created_at": created.UTC().Format(time.RFC3339)}
+				if route, err := s.loadRoute(r.Context(), alias); err == nil {
+					addAnthropicModelFacts(info, route.Model)
+				}
+				data = append(data, info)
 				continue
 			}
 			data = append(data, map[string]any{
 				"id": alias, "object": "model", "created": created.Unix(), "owned_by": "rotakey",
 				"context_window": metadata["context_window"], "capabilities": metadata["capabilities"],
+				"reasoning_levels": metadata["reasoning_levels"],
 			})
 		}
 	}
@@ -157,20 +159,24 @@ func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if isAnthropicRequest(r) {
-		writeJSON(w, http.StatusOK, map[string]any{
+		info := map[string]any{
 			"id": anthropicDiscoveryModelID(route.Model.PublicAlias), "type": "model", "display_name": route.Model.PublicAlias,
 			"created_at": route.Model.CreatedAt.UTC().Format(time.RFC3339),
-		})
+		}
+		addAnthropicModelFacts(info, route.Model)
+		writeJSON(w, http.StatusOK, info)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": route.Model.PublicAlias, "object": "model", "created": route.Model.CreatedAt.Unix(), "owned_by": "rotakey",
 		"context_window": publicModelMetadata(route.Model)["context_window"], "capabilities": publicModelMetadata(route.Model)["capabilities"],
+		"reasoning_levels": modelReasoningLevels(route.Model),
 	})
 }
 
 func publicModelMetadata(model ModelRoute) map[string]any {
 	metadata := map[string]any{"capabilities": []string{}}
+	metadata["reasoning_levels"] = modelReasoningLevels(model)
 	if value := model.CapabilityProfile["context_window"]; value != "" {
 		if window, err := strconv.Atoi(value); err == nil && window > 0 {
 			metadata["context_window"] = window

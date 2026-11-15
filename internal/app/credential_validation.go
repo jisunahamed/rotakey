@@ -878,6 +878,12 @@ func modelCapabilityProfile(provider Provider, input *modelInput, source string)
 	for key, value := range catalogCapabilityFacts(DiscoveredModel{Capabilities: input.Capabilities, ModelType: input.ModelType}) {
 		profile[key] = value
 	}
+	for key, value := range nvidiaFacts(provider, input.UpstreamModel) {
+		if key == "context_window" && profile[key] != "" {
+			continue
+		}
+		profile[key] = value
+	}
 	return profile
 }
 

@@ -67,6 +67,10 @@ func NewServer(ctx context.Context, cfg Config, logger *slog.Logger) (*Server, e
 		repairWorkers: make(chan struct{}, 4),
 	}
 	server.handler = server.routes()
+	if err := server.refreshNvidiaFacts(ctx); err != nil {
+		server.Close()
+		return nil, err
+	}
 	go server.retentionLoop(ctx)
 	go server.driveBackupLoop(ctx)
 	return server, nil
