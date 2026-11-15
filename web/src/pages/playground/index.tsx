@@ -264,6 +264,7 @@ export function PlaygroundPage({
         chat: target,
         turns: history,
         signal: controller.signal,
+        onThinking: (thinking) => updateChat(target.id, (current) => ({ ...current, turns: current.turns.map((turn) => turn.id === reply.id ? { ...turn, thinking } : turn) })),
         onText: (text) =>
           updateChat(target.id, (current) => ({
             ...current,
@@ -275,6 +276,7 @@ export function PlaygroundPage({
       const finished: Turn = {
         ...reply,
         text: outcome.text,
+        thinking: outcome.thinking,
         error: outcome.error || undefined,
         errorCode: outcome.errorCode || undefined,
         stopped: outcome.stopped || undefined,

@@ -62,6 +62,7 @@ export type Evidence = {
 };
 
 export type Turn = {
+  thinking?: string;
   id: string;
   role: "user" | "assistant";
   text: string;
@@ -150,6 +151,7 @@ function reviveTurn(value: unknown): Turn | null {
     id: typeof turn.id === "string" && turn.id !== "" ? turn.id : mintID("t"),
     role: turn.role,
     text: turn.text,
+    thinking: typeof turn.thinking === "string" ? turn.thinking : undefined,
     model: typeof turn.model === "string" ? turn.model : undefined,
     error: typeof turn.error === "string" ? turn.error : undefined,
     errorCode: typeof turn.errorCode === "string" ? turn.errorCode : undefined,

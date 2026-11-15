@@ -1190,7 +1190,11 @@ func translateOpenAIStreamToAnthropic(source io.Reader, destination io.Writer, a
 				}
 				choice, _ := choices[0].(map[string]any)
 				delta, _ := choice["delta"].(map[string]any)
-				if text, ok := delta["reasoning_content"].(string); ok && text != "" {
+				reasoning, _ := delta["reasoning_content"].(string)
+				if reasoning == "" {
+					reasoning, _ = delta["reasoning"].(string)
+				}
+				if text := reasoning; text != "" {
 					if reasoningIndex < 0 {
 						reasoningIndex = nextIndex
 						nextIndex++
@@ -1200,6 +1204,11 @@ func translateOpenAIStreamToAnthropic(source io.Reader, destination io.Writer, a
 					writeSSE(destination, capture, "content_block_delta", map[string]any{"type": "content_block_delta", "index": reasoningIndex, "delta": map[string]any{"type": "thinking_delta", "thinking": text}})
 				}
 				if text, ok := delta["content"].(string); ok && text != "" {
+					if reasoningIndex >= 0 && openBlocks[reasoningIndex] {
+						writeSSE(destination, capture, "content_block_stop", map[string]any{"type": "content_block_stop", "index": reasoningIndex})
+						openBlocks[reasoningIndex] = false
+						reasoningIndex = -1
+					}
 					if textIndex < 0 {
 						textIndex = nextIndex
 						nextIndex++
@@ -1213,6 +1222,11 @@ func translateOpenAIStreamToAnthropic(source io.Reader, destination io.Writer, a
 					})
 				}
 				if calls, ok := delta["tool_calls"].([]any); ok {
+					if len(calls) > 0 && reasoningIndex >= 0 && openBlocks[reasoningIndex] {
+						writeSSE(destination, capture, "content_block_stop", map[string]any{"type": "content_block_stop", "index": reasoningIndex})
+						openBlocks[reasoningIndex] = false
+						reasoningIndex = -1
+					}
 					for _, rawCall := range calls {
 						call, _ := rawCall.(map[string]any)
 						upstreamIndex := int(numberAsInt64(call["index"]))

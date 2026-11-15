@@ -148,10 +148,11 @@ function TurnView({
           <p className="pg-said">{turn.text}</p>
         ) : (
           <>
+            {turn.thinking && <details open={streaming || undefined}><summary>Thinking</summary><p className="pg-said">{turn.thinking}</p></details>}
             {turn.text !== "" && <Markdown text={turn.text} baseHeading={4} />}
             {streaming && (
               <p className="pg-writing pg-writing--live">
-                {turn.text === "" ? "Waiting for the first words." : "Still writing."}
+                {turn.text === "" ? (turn.thinking ? "Thinking…" : "Waiting for the first words.") : "Still writing."}
               </p>
             )}
             {!streaming && empty && !turn.stopped && (

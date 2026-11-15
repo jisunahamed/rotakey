@@ -27,6 +27,7 @@ export type PlaygroundProtocol = "chat" | "responses" | "messages";
 
 export type ReplyDelta =
   | { kind: "text"; text: string }
+  | { kind: "thinking"; text: string }
   | { kind: "usage"; input: number | null; output: number | null }
   | { kind: "error"; message: string; code: string };
 
@@ -159,6 +160,9 @@ function readChatFrame(frame: StreamFrame): ReplyDelta[] {
   const choices = payload.choices;
   if (Array.isArray(choices)) {
     for (const choice of choices) {
+      const delta = (choice as { delta?: Record<string, unknown> })?.delta;
+      const thinking = delta?.reasoning_content ?? delta?.reasoning;
+      if (typeof thinking === "string" && thinking !== "") deltas.push({ kind: "thinking", text: thinking });
       const text = (choice as { delta?: { content?: unknown } })?.delta?.content;
       if (typeof text === "string" && text !== "") {
         deltas.push({ kind: "text", text });
@@ -180,6 +184,9 @@ function readResponsesFrame(frame: StreamFrame): ReplyDelta[] {
   const failure = errorIn(payload);
   if (failure) return [failure];
   const type = typeof payload.type === "string" ? payload.type : frame.event;
+  if (type === "response.reasoning_summary_text.delta" || type === "response.reasoning_text.delta") {
+    return typeof payload.delta === "string" && payload.delta !== "" ? [{ kind: "thinking", text: payload.delta }] : [];
+  }
   if (type === "response.output_text.delta") {
     const text = payload.delta;
     return typeof text === "string" && text !== "" ? [{ kind: "text", text }] : [];
@@ -210,9 +217,15 @@ function readAnthropicFrame(frame: StreamFrame): ReplyDelta[] {
   if (failure) return [failure];
   const type = typeof payload.type === "string" ? payload.type : frame.event;
   if (type === "content_block_delta") {
-    const delta = payload.delta as { type?: unknown; text?: unknown } | undefined;
+    const delta = payload.delta as { type?: unknown; text?: unknown; thinking?: unknown } | undefined;
+    if (delta?.type === "thinking_delta" && typeof delta.thinking === "string" && delta.thinking !== "") return [{ kind: "thinking", text: delta.thinking }];
     const text = delta?.text;
     return typeof text === "string" && text !== "" ? [{ kind: "text", text }] : [];
+  }
+  if (type === "content_block_start") {
+    const block = payload.content_block as { type?: string; thinking?: unknown; text?: unknown } | undefined;
+    if (block?.type === "thinking" && typeof block.thinking === "string" && block.thinking !== "") return [{ kind: "thinking", text: block.thinking }];
+    if (block?.type === "text" && typeof block.text === "string" && block.text !== "") return [{ kind: "text", text: block.text }];
   }
   // Anthropic splits its usage across the first and last events: the input
   // count arrives before any text does, the output count only at the end.

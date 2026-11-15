@@ -20,6 +20,7 @@ import type { RequestLog } from "../../types";
 import type { Conversation, Evidence, Turn } from "./session";
 
 export type RunOutcome = {
+  thinking?: string;
   text: string;
   error: string;
   errorCode: string;
@@ -145,7 +146,8 @@ export async function runTurn({
   chat,
   turns,
   signal,
-  onText
+  onText,
+  onThinking
 }: {
   chat: Conversation;
   /** The conversation as it should be sent: every turn up to and including the
@@ -153,6 +155,7 @@ export async function runTurn({
   turns: Turn[];
   signal: AbortSignal;
   onText: (text: string) => void;
+  onThinking?: (text: string) => void;
 }): Promise<RunOutcome> {
   const evidence = emptyEvidence();
   // `decodeJSON` refuses unknown fields, so this object is exactly
@@ -195,6 +198,7 @@ export async function runTurn({
   evidence.streamed = chat.settings.stream;
 
   let text = "";
+  let thinking = "";
   let error = "";
   let errorCode = "";
   let stopped = false;
@@ -202,6 +206,11 @@ export async function runTurn({
   try {
     if (chat.settings.stream) {
       await readEventStream(response, evidence.protocol as PlaygroundProtocol, (delta) => {
+        if (delta.kind === "thinking") {
+          thinking += delta.text;
+          onThinking?.(thinking);
+          return;
+        }
         if (delta.kind === "text") {
           text += delta.text;
           onText(text);
@@ -246,5 +255,5 @@ export async function runTurn({
   if (evidence.requestID !== "" && !stopped) {
     Object.assign(evidence, await readEvidenceLog(evidence.requestID));
   }
-  return { text, error, errorCode, stopped, evidence };
+  return { text, thinking, error, errorCode, stopped, evidence };
 }
