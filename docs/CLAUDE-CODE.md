@@ -97,6 +97,37 @@ export ANTHROPIC_CUSTOM_MODEL_OPTION_NAME="Grok 4.3 via Rotakey"
 export ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION="Routed and limited by Rotakey"
 ```
 
+## Effort and context for a custom model
+
+Gateway discovery does not activate effort controls: Claude Code reads model IDs
+and display names from discovery, but ignores the gateway's nested capability
+objects. An unknown custom ID can therefore appear without an effort slider even
+when Rotakey preserves `output_config.effort` correctly.
+
+Generate a separate startup settings file using your existing gateway credentials:
+
+```powershell
+python scripts/claude-model-settings.py --base-url https://api.inmetech.cloud --model glm-5-3-flash --output output/claude-glm.json
+claude --settings output/claude-glm.json
+```
+
+The script reads `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY` from the environment.
+It writes no credentials and does not edit your user settings. It publishes each
+public alias once in an explicit picker, avoiding automatic extra `[1m]` rows,
+and declares the selected model's verified effort capabilities and context window.
+Regenerate the file and start a new session when changing the startup model:
+these client overrides are not per-row runtime capability declarations.
+
+GLM-5.3-Flash supports `low`, `high`, and `max`, per
+[NVIDIA's model-specific guide](https://docs.nvidia.com/nim/vision-language-models/latest/get-started/advanced/get-started-glm-5-3-flash.html#control-reasoning-effort).
+Claude's slider may also offer `medium`; use the verified levels. No `xhigh`
+support or ability to disable GLM thinking is declared. A context value in a
+startup file is client-wide, so do not switch to a smaller-window model in that
+session without regenerating the file.
+
+References: [Claude model capability overrides](https://code.claude.com/docs/en/model-config#customize-pinned-model-display-and-capabilities)
+and [gateway discovery behavior](https://code.claude.com/docs/en/llm-gateway-protocol#model-discovery).
+
 ## Map Claude Code's built-in model roles
 
 Claude Code may use separate model roles for normal work, complex planning, fast/background work, and subagents. Point each role to any suitable Rotakey public alias:

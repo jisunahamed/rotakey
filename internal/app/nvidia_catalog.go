@@ -55,6 +55,11 @@ func nvidiaFacts(provider Provider, model string) map[string]string {
 		switch model {
 		case "openai/gpt-oss-20b", "mistralai/mistral-large-4-1t-a52b":
 			facts["reasoning_levels"] = "low,medium,high"
+		case "z-ai/glm-5.3-flash":
+			// GLM always thinks; its documented effort budget is not a
+			// switch for disabling thinking, nor does it support medium/xhigh.
+			facts["reasoning_levels"] = "low,high,max"
+			facts["reasoning_source"] = "https://docs.nvidia.com/nim/vision-language-models/latest/get-started/advanced/get-started-glm-5-3-flash.html"
 		case "nvidia/nemotron-3-ultra-550b-a55b", "nvidia/nemotron-3.5-bolt-e4b", "nvidia/nemotron-3.5-lightning-30b-a3b", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning":
 			facts["thinking_control"] = "chat_template_kwargs.enable_thinking"
 		}
