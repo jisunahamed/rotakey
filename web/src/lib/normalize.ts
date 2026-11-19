@@ -19,6 +19,7 @@ export function normalizeProviders(providers: Provider[] | null | undefined): Pr
   return (providers ?? []).map((provider) => ({
     ...provider,
     api_format: provider.api_format ?? "openai",
+    inference_endpoint: provider.inference_endpoint ?? "auto",
     pinned: provider.pinned ?? false,
     anthropic_version: provider.anthropic_version ?? "2023-06-01",
     extra_headers: provider.extra_headers ?? {},

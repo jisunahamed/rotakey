@@ -66,7 +66,7 @@ func (rs *repairSession) prepare(route routeRuntime, plan upstreamPlan) upstream
 	if !rs.enabled(route) || rs.policy.Mode == "observe" {
 		return plan
 	}
-	if endpoint := rs.endpoints[route.Model.ID]; endpoint != "" {
+	if endpoint := rs.endpoints[route.Model.ID]; endpoint != "" && providerInferenceEndpoint(route.Provider) == "auto" {
 		state := dispatchState{PreferNativeResponses: map[string]bool{route.Model.ID: endpoint == "responses"}, NativeResponsesUnavailable: map[string]bool{route.Model.ID: endpoint == "chat"}}
 		if rebuilt, err := rs.server.buildPlan(rs.ctx, rs.request, route, state); err == nil {
 			plan = rebuilt
@@ -346,6 +346,9 @@ func (rs *repairSession) execute(ctx context.Context, candidate *routeCandidate,
 		}
 		return "rejected", "Credential is not available on this route"
 	case "switch_endpoint":
+		if providerInferenceEndpoint(candidate.Route.Provider) != "auto" {
+			return "rejected", "Provider endpoint policy is fixed by the administrator"
+		}
 		var endpoint string
 		_ = json.Unmarshal(p.Value, &endpoint)
 		if plan.Format == "anthropic" || plan.wireEndpoint() == endpoint {

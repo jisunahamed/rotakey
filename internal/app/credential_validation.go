@@ -370,6 +370,9 @@ func verifyProviderProtocol(ctx context.Context, client *http.Client, provider P
 		payload = map[string]any{"model": upstreamModelForProvider(provider, model), "input": "Rotakey capability check"}
 	} else if protocol == "anthropic" {
 		path = "/messages"
+	} else if providerInferenceEndpoint(provider) == "responses" {
+		path = "/responses"
+		payload = map[string]any{"model": upstreamModelForProvider(provider, model), "input": "Reply with one character.", "max_output_tokens": 16}
 	}
 	body, _ := json.Marshal(payload)
 	probeCtx, cancel := context.WithTimeout(ctx, modelProbeTimeout(provider))
@@ -429,6 +432,9 @@ func verifyProviderProtocol(ctx context.Context, client *http.Client, provider P
 }
 
 func detectProviderProtocol(payload map[string]any) string {
+	if payload["object"] == "response" {
+		return "openai"
+	}
 	if payload["type"] == "message" {
 		return "anthropic"
 	}
@@ -456,8 +462,13 @@ func looksLikeEmbeddingModel(model string) bool {
 }
 
 func providerFromInput(input providerInput) Provider {
+	endpoint := "auto"
+	if input.InferenceEndpoint != nil {
+		endpoint = *input.InferenceEndpoint
+	}
 	return Provider{
-		Name: input.Name, Slug: input.Slug, BaseURL: input.BaseURL,
+		InferenceEndpoint: endpoint,
+		Name:              input.Name, Slug: input.Slug, BaseURL: input.BaseURL,
 		AuthHeader: input.AuthHeader, AuthScheme: input.AuthScheme,
 		ExtraHeaders: input.ExtraHeaders, TimeoutSeconds: input.TimeoutSeconds,
 		Enabled: input.Enabled, AllowPrivateNetwork: input.AllowPrivateNetwork,
@@ -815,6 +826,7 @@ func mergeDiscoveredModels(results []credentialInspection) []DiscoveredModel {
 }
 
 func modelCapabilityProfile(provider Provider, input *modelInput, source string) map[string]string {
+	applyProviderInferenceEndpoint(provider, input)
 	if kind := audioModelType(input.UpstreamModel, input.ModelType); kind != "" {
 		input.SupportsChat, input.SupportsResponses, input.SupportsMessages, input.SupportsEmbeddings = false, false, false, false
 		profile := map[string]string{"model_type": kind, "verification": source, "upstream_protocol": "openai", "chat": "off", "responses": "off", "messages": "off", "embeddings": "off", "streaming": "off", "tools": "off", "thinking": "off"}
@@ -948,6 +960,7 @@ func (s *Server) probeProviderModel(ctx context.Context, providerID string, inpu
 }
 
 func probeProviderModelWithSecret(ctx context.Context, provider Provider, input *modelInput, secret []byte) (string, map[string]string, *time.Time, int, error) {
+	applyProviderInferenceEndpoint(provider, input)
 	ctx, release, admitErr := enterAuxiliaryAdmission(ctx, provider)
 	if admitErr != nil {
 		return "failed", nil, nil, 0, admitErr
@@ -1050,7 +1063,7 @@ func probeProviderModelWithSecret(ctx context.Context, provider Provider, input 
 // value and whether the check ran at all; the caller keeps the configured flag
 // when it did not.
 func probeNativeResponses(ctx context.Context, provider Provider, input *modelInput, secret []byte, probedPath string) (bool, bool) {
-	if provider.APIFormat == "anthropic" || !input.SupportsResponses || probedPath == "/responses" {
+	if provider.APIFormat == "anthropic" || providerInferenceEndpoint(provider) != "auto" || !input.SupportsResponses || probedPath == "/responses" {
 		return false, false
 	}
 	payload, _ := json.Marshal(map[string]any{

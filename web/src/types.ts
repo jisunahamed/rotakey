@@ -147,6 +147,7 @@ export type Provider = {
   enabled: boolean;
   pinned: boolean;
   allow_private_network: boolean;
+  inference_endpoint?: "auto" | "chat" | "responses";
   api_format: "openai" | "anthropic";
   anthropic_version: string;
   /** The credit every new key on this provider starts with. null or absent means

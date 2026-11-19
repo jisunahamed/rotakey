@@ -186,6 +186,14 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 		return plan, err
 	}
 
+	// Provider-wide policy takes precedence over saved per-model flags. Public
+	// protocol translation still happens below, including tools and reasoning.
+	switch providerInferenceEndpoint(route.Provider) {
+	case "responses":
+		route.Model.SupportsChat, route.Model.SupportsResponses = false, true
+	case "chat":
+		route.Model.SupportsChat, route.Model.SupportsResponses = true, false
+	}
 	switch {
 	case format == "anthropic" && req.PublicMode == messageModeAnthropic:
 		plan.Path = "/messages"
@@ -362,6 +370,9 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 // rejected Chat Completions by naming /responses counts as well: its own error
 // is better evidence than the route's unverified configuration.
 func servesNativeResponses(route routeRuntime, state dispatchState) bool {
+	if endpoint := providerInferenceEndpoint(route.Provider); endpoint != "auto" {
+		return endpoint == "responses"
+	}
 	if state.NativeResponsesUnavailable[route.Model.ID] {
 		return false
 	}
@@ -372,6 +383,9 @@ func servesNativeResponses(route routeRuntime, state dispatchState) bool {
 // this model. An observed 404 outranks the request, so a model in both maps is
 // planned as Chat Completions.
 func prefersNativeResponses(route routeRuntime, state dispatchState) bool {
+	if endpoint := providerInferenceEndpoint(route.Provider); endpoint != "auto" {
+		return endpoint == "responses"
+	}
 	return state.PreferNativeResponses[route.Model.ID] && !state.NativeResponsesUnavailable[route.Model.ID]
 }
 
@@ -406,6 +420,9 @@ func routeSupportsRequest(route routeRuntime, req dispatchRequest) bool {
 	}
 	if route.Provider.APIFormat == "anthropic" {
 		return route.Model.SupportsMessages || route.Model.SupportsChat || route.Model.SupportsResponses
+	}
+	if endpoint := providerInferenceEndpoint(route.Provider); endpoint == "chat" || endpoint == "responses" {
+		return !route.Model.SupportsEmbeddings
 	}
 	return route.Model.SupportsChat || route.Model.SupportsResponses
 }

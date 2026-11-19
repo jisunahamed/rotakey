@@ -761,7 +761,7 @@ func (s *Server) runAttempt(
 			// the request there, before any parameter is considered for removal:
 			// switching endpoint keeps the tools the caller asked for, while stripping
 			// the field the provider blamed would silently drop them.
-			switchEndpoint = plan.Path == "/chat/completions" && !plan.ResponsesUnavailable &&
+			switchEndpoint = providerInferenceEndpoint(candidate.Route.Provider) == "auto" && plan.Path == "/chat/completions" && !plan.ResponsesUnavailable &&
 				errorDemandsResponsesEndpoint(errorBody)
 			if !switchEndpoint {
 				if replacement, hasReplacement = unsupportedCompatibilityReplacement(errorBody, plan.Payload); !hasReplacement {
@@ -874,7 +874,7 @@ func (s *Server) runAttempt(
 		// what is wrong, not the key or the model. Retry the same candidate with
 		// the Chat translation instead of burning the pool on a path that cannot
 		// exist. The credential is left untouched because it never got to fail.
-		if response.StatusCode == http.StatusNotFound && plan.Path == "/responses" && allowCompatibility {
+		if response.StatusCode == http.StatusNotFound && plan.Path == "/responses" && allowCompatibility && providerInferenceEndpoint(candidate.Route.Provider) == "auto" {
 			record.Error = "responses_endpoint_missing"
 			record.ErrorMessage = "Provider has no Responses endpoint; retried as Chat Completions."
 			record.Retryable = true

@@ -1651,7 +1651,7 @@ function ProvidersPage({ notify }: { notify: (message: string, tone?: "success" 
               />
               <div className="inspector-header">
                 <div>
-                  <p className="eyebrow">{selected.api_format === "anthropic" ? "Anthropic-compatible upstream" : "OpenAI-compatible upstream"}</p>
+                  <p className="eyebrow">{selected.api_format === "anthropic" ? "Anthropic Messages upstream" : selected.inference_endpoint === "responses" ? "OpenAI Responses upstream" : selected.inference_endpoint === "chat" ? "OpenAI Chat Completions upstream" : "OpenAI-compatible upstream"}</p>
                   <h2>{selected.name}</h2>
                   <code>{selected.base_url}</code>
                   {selected.alternative_provider_id && <p>Alternative: {providers.find((item) => item.id === selected.alternative_provider_id)?.name || "Unavailable"} · only on failure or rate limit</p>}
@@ -2107,7 +2107,7 @@ function ProviderWizard({ providers, onClose, onComplete }: { providers: Provide
   const [error, setError] = useState("");
   const [provider, setProvider] = useState<ProviderDraft>({
     name: "", base_url: "", auth_header: "Authorization", auth_scheme: "Bearer",
-    api_format: "openai", anthropic_version: "2023-06-01",
+    api_format: "openai", anthropic_version: "2023-06-01", inference_endpoint: "auto",
     timeout_seconds: 120, max_concurrent_requests: 0, enabled: true, allow_private_network: false, extra_headers: {},
     default_key_balance: "", apply_balance_to_existing_keys: false,
     existing_key_limits: emptyPolicy(), apply_limits_to_existing_keys: false
@@ -2342,6 +2342,7 @@ type ProviderDraft = {
   max_concurrent_requests: number;
   name: string; base_url: string; auth_header: string; auth_scheme: string;
   api_format: "openai" | "anthropic"; anthropic_version: string;
+  inference_endpoint: "auto" | "chat" | "responses";
   timeout_seconds: number; enabled: boolean; allow_private_network: boolean; extra_headers: Record<string, string>;
   /** Held as text so a blank field stays distinguishable from a zero balance:
    * blank means "do not track", 0 means "nothing left". The API takes a number or
@@ -2375,6 +2376,7 @@ function providerDraftFrom(provider: Provider): ProviderDraft {
     name: provider.name, base_url: provider.base_url,
     auth_header: provider.auth_header, auth_scheme: provider.auth_scheme,
     api_format: provider.api_format ?? "openai", anthropic_version: provider.anthropic_version ?? "2023-06-01",
+    inference_endpoint: provider.inference_endpoint ?? "auto",
     timeout_seconds: provider.timeout_seconds, max_concurrent_requests: provider.max_concurrent_requests ?? 0, enabled: provider.enabled,
     allow_private_network: provider.allow_private_network, extra_headers: provider.extra_headers,
     default_key_balance: provider.default_key_balance_usd == null ? "" : String(provider.default_key_balance_usd),
@@ -2528,6 +2530,17 @@ function ProviderFields({ value, onChange, existingKeys }: { value: ProviderDraf
           anthropic_version: value.anthropic_version || "2023-06-01"
         });
       }}><option value="openai">OpenAI-compatible</option><option value="anthropic">Anthropic-compatible</option></select></label>
+      {value.api_format === "openai" && <label className="field"><span>Upstream text API <small>Applies to every text model on this provider, including model checks</small></span>
+        <select value={value.inference_endpoint} onChange={(event) => onChange({ ...value, inference_endpoint: event.target.value as ProviderDraft["inference_endpoint"] })}>
+          <option value="auto">Use model settings (automatic compatibility)</option>
+          <option value="chat">Chat Completions only - /v1/chat/completions</option>
+          <option value="responses">Responses API only - /v1/responses</option>
+        </select>
+      </label>}
+      {value.api_format === "openai" && value.inference_endpoint !== "auto" && <InlineNotice>
+        {value.inference_endpoint === "responses" ? "All text requests and model checks use the provider's Responses API." : "All text requests and model checks use the provider's Chat Completions API."}
+        {" "}Client requests are translated automatically. Per-model endpoint flags are overridden. Audio and embeddings keep their own endpoints.
+      </InlineNotice>}
       <label className="field"><span>Name <small>An internal identifier is generated automatically</small></span><input required placeholder="Groq production" value={value.name} onChange={(e) => onChange({ ...value, name: e.target.value })} /></label>
       <label className="field"><span>{value.api_format === "anthropic" ? "Anthropic-compatible" : "OpenAI-compatible"} base URL <small>Include the provider's compatibility prefix</small></span><input type="url" required placeholder={value.api_format === "anthropic" ? "https://api.anthropic.com/v1" : "https://api.provider.com/v1"} value={value.base_url} onChange={(e) => onChange({ ...value, base_url: e.target.value })} /></label>
       <button type="button" className="button button--quiet" onClick={() => onChange({ ...value, name: "OpenCode", base_url: "https://opencode.ai/zen/v1", api_format: "openai", auth_header: "Authorization", auth_scheme: "Bearer" })}>Use OpenCode free proxy</button>
