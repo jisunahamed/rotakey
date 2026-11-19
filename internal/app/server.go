@@ -83,7 +83,7 @@ func (s *Server) Close() {
 
 func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		inference := r.Method == http.MethodPost && (r.URL.Path == "/v1/messages" || r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/responses" || r.URL.Path == "/v1/responses/compact" || r.URL.Path == "/v1/embeddings" || r.URL.Path == "/api/admin/playground/run")
+		inference := r.Method == http.MethodPost && (r.URL.Path == "/v1/messages" || r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/responses" || r.URL.Path == "/v1/responses/compact" || r.URL.Path == "/v1/embeddings" || isAudioPath(r.URL.Path) || r.URL.Path == "/api/admin/playground/run")
 		if inference {
 			_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 		}
@@ -106,6 +106,9 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /v1/models/{id...}", s.requireGatewayKey(http.HandlerFunc(s.handleModel)))
 	mux.Handle("GET /v1/codex/manifest", s.requireGatewayKey(http.HandlerFunc(s.handleCodexManifest)))
 	mux.Handle("POST /v1/chat/completions", s.requireGatewayKey(http.HandlerFunc(s.handleChatCompletions)))
+	for _, endpoint := range []string{"transcriptions", "translations", "speech"} {
+		mux.Handle("POST /v1/audio/"+endpoint, s.requireGatewayKey(http.HandlerFunc(s.handleAudio)))
+	}
 	mux.Handle("POST /v1/embeddings", s.requireGatewayKey(http.HandlerFunc(s.handleEmbeddings)))
 	mux.Handle("POST /v1/responses", s.requireGatewayKey(http.HandlerFunc(s.handleResponses)))
 	mux.Handle("POST /v1/responses/compact", s.requireGatewayKey(http.HandlerFunc(s.handleResponsesCompact)))
@@ -158,7 +161,7 @@ func (s *Server) requestIDMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("X-Request-ID", requestID)
 		w.Header().Set("Request-Id", requestID)
 		r = r.WithContext(context.WithValue(r.Context(), requestIDContextKey{}, requestID))
-		inference := r.Method == http.MethodPost && (r.URL.Path == "/v1/messages" || r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/responses" || r.URL.Path == "/v1/responses/compact" || r.URL.Path == "/v1/embeddings" || r.URL.Path == "/api/admin/playground/run")
+		inference := r.Method == http.MethodPost && (r.URL.Path == "/v1/messages" || r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/responses" || r.URL.Path == "/v1/responses/compact" || r.URL.Path == "/v1/embeddings" || isAudioPath(r.URL.Path) || r.URL.Path == "/api/admin/playground/run")
 		if inference {
 			s.captureRequest(next).ServeHTTP(w, r)
 		} else {

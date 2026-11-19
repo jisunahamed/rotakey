@@ -48,7 +48,7 @@ func (s *Server) newRepairSession(ctx context.Context, req dispatchRequest, rout
 }
 
 func (rs *repairSession) enabled(route routeRuntime) bool {
-	return rs.policy.Enabled && (len(rs.policy.RouteIDs) == 0 || slices.Contains(rs.policy.RouteIDs, route.Model.ID))
+	return rs.request.PublicMode != messageModeAudio && rs.policy.Enabled && (len(rs.policy.RouteIDs) == 0 || slices.Contains(rs.policy.RouteIDs, route.Model.ID))
 }
 
 func (rs *repairSession) refreshPolicy(ctx context.Context) {
@@ -97,7 +97,7 @@ func (rs *repairSession) prepare(route routeRuntime, plan upstreamPlan) upstream
 }
 
 func (rs *repairSession) handle(ctx context.Context, candidate *routeCandidate, plan upstreamPlan, outcome *attemptOutcome, clients *clientCache) bool {
-	if outcome.ErrorCode == "cancelled" || ctx.Err() != nil {
+	if rs.request.PublicMode == messageModeAudio || outcome.ErrorCode == "cancelled" || ctx.Err() != nil {
 		return false
 	}
 	if !outcome.Done && outcome.InputTokens+outcome.OutputTokens > 0 && rs.server.db != nil {

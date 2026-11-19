@@ -703,6 +703,12 @@ func (s *Server) runAttempt(
 		return attemptOutcome{Record: record, ErrorCode: record.Error, ErrorMessage: record.ErrorMessage}
 	}
 	applyProviderHeaders(upstreamRequest, candidate.Route.Provider, credential.Secret)
+	if plan.ContentType != "" {
+		upstreamRequest.Header.Set("Content-Type", plan.ContentType)
+	}
+	if req.PublicMode == messageModeAudio {
+		allowCompatibility = false
+	}
 	if plan.Format == "anthropic" && req.PublicMode == messageModeAnthropic {
 		forwardAnthropicHeaders(upstreamRequest.Header, r.Header)
 	}

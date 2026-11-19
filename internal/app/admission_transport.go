@@ -23,7 +23,7 @@ type admissionTransport struct {
 func (t *admissionTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	s, _ := r.Context().Value(admissionServerKey{}).(*Server)
 	held, _ := r.Context().Value(admissionHeldKey{}).(bool)
-	inference := r.Method == http.MethodPost && (strings.HasSuffix(r.URL.Path, "/messages") || strings.HasSuffix(r.URL.Path, "/chat/completions") || strings.HasSuffix(r.URL.Path, "/responses") || strings.HasSuffix(r.URL.Path, "/embeddings"))
+	inference := r.Method == http.MethodPost && (strings.HasSuffix(r.URL.Path, "/messages") || strings.HasSuffix(r.URL.Path, "/chat/completions") || strings.HasSuffix(r.URL.Path, "/responses") || strings.HasSuffix(r.URL.Path, "/embeddings") || isAudioPath(r.URL.Path))
 	if s == nil || held || !inference || t.provider.ID == "" {
 		return t.base.RoundTrip(r)
 	}

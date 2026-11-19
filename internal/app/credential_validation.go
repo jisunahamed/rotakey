@@ -223,7 +223,7 @@ func inspectProviderSecretWithProtocol(ctx context.Context, provider Provider, s
 		seen[id] = true
 		result.Models = append(result.Models, DiscoveredModel{
 			ID: id, OwnedBy: valueOr(strings.TrimSpace(model.OwnedBy), strings.TrimSpace(model.DisplayName)), ContextWindow: model.ContextWindow,
-			Capabilities: model.Capabilities, ModelType: model.ModelType,
+			Capabilities: model.Capabilities, ModelType: valueOr(audioModelType(id, model.ModelType), model.ModelType),
 		})
 	}
 	sort.Slice(result.Models, func(i, j int) bool { return result.Models[i].ID < result.Models[j].ID })
@@ -815,6 +815,14 @@ func mergeDiscoveredModels(results []credentialInspection) []DiscoveredModel {
 }
 
 func modelCapabilityProfile(provider Provider, input *modelInput, source string) map[string]string {
+	if kind := audioModelType(input.UpstreamModel, input.ModelType); kind != "" {
+		input.SupportsChat, input.SupportsResponses, input.SupportsMessages, input.SupportsEmbeddings = false, false, false, false
+		profile := map[string]string{"model_type": kind, "verification": source, "upstream_protocol": "openai", "chat": "off", "responses": "off", "messages": "off", "embeddings": "off", "streaming": "off", "tools": "off", "thinking": "off"}
+		for _, endpoint := range audioModelEndpoints(input.UpstreamModel, kind) {
+			profile[endpoint] = "native"
+		}
+		return profile
+	}
 	profile := map[string]string{
 		"availability":      map[bool]string{true: "verified", false: "unknown"}[source == "probe"],
 		"verification":      source,
@@ -967,8 +975,14 @@ func probeProviderModelWithSecret(ctx context.Context, provider Provider, input 
 		payload = map[string]any{"model": upstreamModel, "input": "Reply with one character.", "max_output_tokens": 16}
 	}
 	body, _ := json.Marshal(payload)
+	contentType := "application/json"
+	audio := audioModelType(input.UpstreamModel, input.ModelType)
+	if audio != "" {
+		path, body, contentType = audioProbeRequest(upstreamModel, audio)
+	}
 	request, _ := http.NewRequestWithContext(probeContext, http.MethodPost, strings.TrimRight(provider.BaseURL, "/")+path, strings.NewReader(string(body)))
 	applyProviderHeaders(request, provider, secret)
+	request.Header.Set("Content-Type", contentType)
 	client, err := upstreamClient(provider)
 	if err != nil {
 		return "failed", nil, nil, 0, err
@@ -983,6 +997,13 @@ func probeProviderModelWithSecret(ctx context.Context, provider Provider, input 
 		return "failed", nil, nil, response.StatusCode, fmt.Errorf("model probe response could not be read")
 	}
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
+		if audio != "" {
+			if len(raw) == 0 {
+				return "failed", nil, nil, response.StatusCode, fmt.Errorf("audio probe returned an empty response")
+			}
+			now := time.Now().UTC()
+			return "probe_verified", modelCapabilityProfile(provider, input, "probe"), &now, response.StatusCode, nil
+		}
 		var decoded map[string]any
 		if json.Unmarshal(raw, &decoded) != nil {
 			return "failed", nil, nil, response.StatusCode, fmt.Errorf("model probe returned an invalid response")

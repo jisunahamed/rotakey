@@ -18,6 +18,7 @@ type Config struct {
 	BootstrapToken      string
 	PublicBaseURL       string
 	SessionCookieSecure bool
+	MaxAudioBytes       int64
 	MaxRequestBytes     int64
 	MaxMessageBytes     int64
 	MaxBatchBytes       int64
@@ -35,6 +36,7 @@ func LoadConfig() (Config, error) {
 		BootstrapToken:      os.Getenv("BOOTSTRAP_TOKEN"),
 		PublicBaseURL:       strings.TrimRight(os.Getenv("PUBLIC_BASE_URL"), "/"),
 		SessionCookieSecure: envBool("SESSION_COOKIE_SECURE", false),
+		MaxAudioBytes:       envInt64("MAX_AUDIO_BYTES", 26<<20),
 		MaxRequestBytes:     envInt64("MAX_REQUEST_BYTES", 8<<20),
 		MaxMessageBytes:     envInt64("MAX_MESSAGE_BYTES", 32<<20),
 		MaxBatchBytes:       envInt64("MAX_BATCH_BYTES", 256<<20),

@@ -120,6 +120,9 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			// into the caller's protocol. Hiding chat-only routes from Anthropic
 			// discovery made Claude Code conclude that this gateway had no models.
 			if isAnthropicRequest(r) {
+				if metadata["type"] == "audio_transcription" || metadata["type"] == "audio_speech" {
+					continue
+				}
 				discoveryID := anthropicDiscoveryModelID(alias)
 				info := map[string]any{"id": discoveryID, "type": "model", "display_name": alias, "created_at": created.UTC().Format(time.RFC3339)}
 				if route, err := s.loadRoute(r.Context(), alias); err == nil {
@@ -131,7 +134,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			data = append(data, map[string]any{
 				"id": alias, "object": "model", "created": created.Unix(), "owned_by": "rotakey",
 				"context_window": metadata["context_window"], "capabilities": metadata["capabilities"],
-				"reasoning_levels": metadata["reasoning_levels"],
+				"reasoning_levels": metadata["reasoning_levels"], "type": metadata["type"],
 			})
 		}
 	}
@@ -175,6 +178,9 @@ func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
 }
 
 func publicModelMetadata(model ModelRoute) map[string]any {
+	if endpoints := audioModelEndpoints(model.UpstreamModel, model.CapabilityProfile["model_type"]); len(endpoints) > 0 {
+		return map[string]any{"capabilities": endpoints, "type": audioModelType(model.UpstreamModel, model.CapabilityProfile["model_type"])}
+	}
 	metadata := map[string]any{"capabilities": []string{}}
 	metadata["reasoning_levels"] = modelReasoningLevels(model)
 	if value := model.CapabilityProfile["context_window"]; value != "" {

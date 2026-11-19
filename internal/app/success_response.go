@@ -14,6 +14,9 @@ import (
 // Unrecognized bodies are forwarded intact, including provider error envelopes
 // carried in HTTP 200, rather than being replaced with an empty model answer.
 func successfulUpstreamBody(req dispatchRequest, plan upstreamPlan, body []byte) ([]byte, int64, int64) {
+	if req.PublicMode == messageModeAudio {
+		return body, 0, 0
+	}
 	var envelope map[string]any
 	if json.Unmarshal(body, &envelope) != nil {
 		return body, 0, 0

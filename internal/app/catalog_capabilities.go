@@ -34,10 +34,13 @@ func retainCatalogFacts(profile map[string]string, previous []byte) {
 // Catalog declarations are evidence of upstream support, not inference probes.
 func catalogCapabilityFacts(model DiscoveredModel) map[string]string {
 	facts := map[string]string{}
+	if kind := audioModelType(model.ID, model.ModelType); kind != "" {
+		facts["model_type"] = kind
+	}
 	if model.ContextWindow > 0 {
 		facts["context_window"] = strconv.Itoa(model.ContextWindow)
 	}
-	if model.ModelType != "" {
+	if model.ModelType != "" && facts["model_type"] == "" {
 		facts["model_type"] = model.ModelType
 	}
 	if model.Capabilities == nil {

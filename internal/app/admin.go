@@ -683,7 +683,7 @@ func validateModelInput(input *modelInput) error {
 	if !aliasPattern.MatchString(input.PublicAlias) || input.UpstreamModel == "" || len(input.UpstreamModel) > 255 {
 		return fmt.Errorf("model alias or upstream model is invalid")
 	}
-	if !input.SupportsChat && !input.SupportsResponses && !input.SupportsMessages && !input.SupportsEmbeddings {
+	if !input.SupportsChat && !input.SupportsResponses && !input.SupportsMessages && !input.SupportsEmbeddings && audioModelType(input.UpstreamModel, input.ModelType) == "" {
 		return fmt.Errorf("at least one upstream endpoint must be supported")
 	}
 	if input.SupportsEmbeddings && (input.SupportsChat || input.SupportsResponses || input.SupportsMessages) {
@@ -784,9 +784,14 @@ func (s *Server) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "model_not_found", "Model was not found.")
 		return
 	}
+	var savedFacts map[string]string
+	_ = json.Unmarshal(capabilityProfile, &savedFacts)
+	if input.ModelType == "" && input.UpstreamModel == currentUpstream {
+		input.ModelType = savedFacts["model_type"]
+	}
 	if input.UpstreamModel != currentUpstream || input.SupportsChat != currentChat ||
 		input.SupportsResponses != currentResponses || input.SupportsMessages != currentMessages ||
-		input.SupportsEmbeddings != currentEmbeddings {
+		input.SupportsEmbeddings != currentEmbeddings || input.ModelType != savedFacts["model_type"] {
 		var profile map[string]string
 		var err error
 		capabilityStatus, profile, checkedAt, err = s.probeProviderModel(r.Context(), providerID, &input)
@@ -838,6 +843,9 @@ func (s *Server) handleProbeModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "model_not_found", "Model was not found.")
 		return
 	}
+	var previousFacts map[string]string
+	_ = json.Unmarshal(previousProfile, &previousFacts)
+	input.ModelType = previousFacts["model_type"]
 	status, profile, checkedAt, err := s.probeProviderModel(r.Context(), providerID, &input)
 	if err != nil {
 		if errors.Is(err, errModelProbeCredentialUnavailable) {

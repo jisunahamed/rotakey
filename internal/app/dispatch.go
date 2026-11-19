@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
 // dispatchRequest carries everything about a public request that stays constant
 // while the gateway fails over between candidates.
 type dispatchRequest struct {
+	ContentType   string
 	DeferFailures bool
 	RequestID     string
 	Started       time.Time
@@ -57,7 +59,8 @@ type dispatchState struct {
 
 // upstreamPlan is one candidate's translated view of the public request.
 type upstreamPlan struct {
-	Recovered bool
+	ContentType string
+	Recovered   bool
 	// Payload is the decoded body that produced Encoded. Compatibility repairs
 	// inspect it to decide which field an upstream rejected.
 	Payload       map[string]any
@@ -147,6 +150,26 @@ func (s *Server) buildPlan(ctx context.Context, req dispatchRequest, route route
 		Format:               format,
 		Replaced:             map[string]string{},
 		ResponsesUnavailable: state.NativeResponsesUnavailable[route.Model.ID],
+	}
+	if req.PublicMode == messageModeAudio {
+		if !audioRouteSupports(route, req.Endpoint) {
+			return upstreamPlan{}, fmt.Errorf("model does not support %s", req.Endpoint)
+		}
+		plan.Path = "/" + req.Endpoint
+		plan.Payload = cloneRequest(req.Public)
+		var err error
+		plan.Encoded, plan.ContentType, err = encodeAudioRequest(req, upstreamModelForProvider(route.Provider, route.Model.UpstreamModel))
+		if err != nil {
+			return upstreamPlan{}, err
+		}
+		// Audio bytes and duration are not text tokens. Reserve RPM and a provider
+		// slot without inventing a text-token charge for an audio upload.
+		if req.Endpoint == "audio/speech" {
+			text, _ := req.Public["input"].(string)
+			plan.InputEstimate = estimateInputTokens([]byte(text), route.Model.Tokenizer)
+			plan.TokenCost = plan.InputEstimate
+		}
+		return plan, nil
 	}
 	payload := cloneRequest(req.Public)
 	var err error
@@ -355,6 +378,9 @@ func prefersNativeResponses(route routeRuntime, state dispatchState) bool {
 // wireEndpoint names the upstream endpoint for compatibility learning, which is
 // keyed per endpoint shape rather than per public protocol.
 func (p upstreamPlan) wireEndpoint() string {
+	if isAudioPath(p.Path) {
+		return strings.TrimPrefix(p.Path, "/")
+	}
 	if p.Path == "/embeddings" {
 		return "embeddings"
 	}
@@ -369,6 +395,12 @@ func (p upstreamPlan) wireEndpoint() string {
 // cannot serve is one whose upstream publishes no usable endpoint at all. A
 // caller's choice of protocol is no longer a reason to refuse.
 func routeSupportsRequest(route routeRuntime, req dispatchRequest) bool {
+	if req.PublicMode == messageModeAudio {
+		return audioRouteSupports(route, req.Endpoint)
+	}
+	if audioModelType(route.Model.UpstreamModel, route.Model.CapabilityProfile["model_type"]) != "" {
+		return false
+	}
 	if req.PublicMode == messageModeEmbeddings {
 		return route.Provider.APIFormat != "anthropic" && route.Model.SupportsEmbeddings
 	}

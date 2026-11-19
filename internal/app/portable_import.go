@@ -139,7 +139,7 @@ func validateImportProviderChildren(provider *ExportProvider) error {
 	for index := range provider.Models {
 		model := &provider.Models[index]
 		input := modelInput{
-			PublicAlias: model.PublicAlias, UpstreamModel: model.UpstreamModel,
+			PublicAlias: model.PublicAlias, UpstreamModel: model.UpstreamModel, ModelType: model.CapabilityProfile["model_type"],
 			SupportsChat: model.SupportsChat, SupportsResponses: model.SupportsResponses,
 			SupportsMessages:        model.SupportsMessages,
 			SupportsEmbeddings:      model.SupportsEmbeddings,

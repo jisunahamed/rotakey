@@ -39,6 +39,7 @@ export type RouteDraft = Omit<
 export function routeDraftFrom(route: ModelRoute): RouteDraft {
   return {
     public_alias: route.public_alias,
+    type: route.capability_profile?.model_type,
     upstream_model: route.upstream_model,
     supports_chat: route.supports_chat,
     supports_responses: route.supports_responses,
@@ -74,6 +75,9 @@ function RouteFields({
   // and a reply limit of 0 is a route that answers with nothing.
   const [limit, setLimit] = useState(String(value.default_max_output_tokens));
   useEffect(() => setLimit(String(value.default_max_output_tokens)), [value.default_max_output_tokens]);
+  const audioType = value.type?.startsWith("audio_") ? value.type :
+    /^(whisper-large-v3(-turbo)?|whisper-1)$/.test(value.upstream_model) ? "audio_transcription" :
+    value.upstream_model.startsWith("canopylabs/orpheus-") ? "audio_speech" : "";
   const limitValue = Number(limit);
   const limitBad = limit.trim() === "" || !Number.isInteger(limitValue) || limitValue < 1;
 
@@ -173,6 +177,23 @@ function RouteFields({
         without costing them.
       </p>
 
+      <Field label="Model API" hint="audio models use dedicated audio endpoints">
+        <select value={audioType} onChange={(event) => onChange({
+          ...value, type: event.target.value || undefined,
+          supports_chat: event.target.value === "", supports_responses: false,
+          supports_messages: event.target.value === "", supports_embeddings: false
+        })}>
+          <option value="">Chat / Responses / Embeddings</option>
+          <option value="audio_transcription">Audio transcription / translation</option>
+          <option value="audio_speech">Text to speech</option>
+        </select>
+      </Field>
+      {audioType && <p className="mdl-form__note">
+        {audioType === "audio_speech"
+          ? "Send text and a voice to /v1/audio/speech. The response is the provider's audio file."
+          : "Upload a file or send an audio URL to /v1/audio/transcriptions. For English translation, use /v1/audio/translations with whisper-large-v3. Turbo supports transcription only."}
+      </p>}
+      {!audioType && <>
       <Toggle
         checked={value.supports_chat}
         onChange={(supports_chat) => onChange({ ...value, supports_chat, ...(supports_chat ? { supports_embeddings: false } : {}) })}
@@ -201,6 +222,8 @@ function RouteFields({
         label="The provider serves this model at Embeddings"
         description="Use this for vector models reached through /v1/embeddings. Enabling it turns off the text-generation endpoints for this route."
       />
+
+      </>}
 
       <Field label="Fields to remove before sending" hint="comma separated, this route only">
         <input
