@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -132,7 +133,8 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			data = append(data, map[string]any{
-				"id": alias, "object": "model", "created": created.Unix(), "owned_by": "rotakey",
+				"capabilities_url": "/v1/models/" + url.PathEscape(alias) + "/capabilities",
+				"id":               alias, "object": "model", "created": created.Unix(), "owned_by": "rotakey",
 				"context_window": metadata["context_window"], "capabilities": metadata["capabilities"],
 				"reasoning_levels": metadata["reasoning_levels"], "type": metadata["type"],
 			})
@@ -151,6 +153,10 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.PathValue("id"), "/capabilities") {
+		s.handleCapabilities(w, r)
+		return
+	}
 	requestedID := r.PathValue("id")
 	alias := requestedID
 	if isAnthropicRequest(r) {

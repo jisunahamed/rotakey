@@ -105,6 +105,7 @@ func (s *Server) routes() http.Handler {
 
 	mux.Handle("GET /v1/models", s.requireGatewayKey(http.HandlerFunc(s.handleModels)))
 	mux.Handle("GET /v1/models/{id...}", s.requireGatewayKey(http.HandlerFunc(s.handleModel)))
+	mux.Handle("GET /v1/requests/{id}/usage", s.requireGatewayKey(http.HandlerFunc(s.handleRequestUsage)))
 	mux.Handle("GET /v1/codex/manifest", s.requireGatewayKey(http.HandlerFunc(s.handleCodexManifest)))
 	mux.Handle("POST /v1/chat/completions", s.requireGatewayKey(http.HandlerFunc(s.handleChatCompletions)))
 	for _, endpoint := range []string{"transcriptions", "translations", "speech"} {
