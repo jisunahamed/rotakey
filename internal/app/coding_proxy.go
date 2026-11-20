@@ -197,6 +197,20 @@ func (s *Server) syncCodingProxy(ctx context.Context, current Provider, secret, 
 	}
 	if model != "" {
 		add(current, secret, model)
+	} else {
+		// A new key is not in credentials yet. Give its verification request
+		// the provider's saved model catalog before asking the proxy to load it.
+		var names []string
+		for _, group := range groups {
+			if group.BaseURL == current.BaseURL {
+				for _, item := range group.Models {
+					names = append(names, item["name"])
+				}
+			}
+		}
+		for _, name := range names {
+			add(current, secret, name)
+		}
 	}
 	ordered := make([]*codingProxyGroup, 0, len(groups))
 	for _, g := range groups {
