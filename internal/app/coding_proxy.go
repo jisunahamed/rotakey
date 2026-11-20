@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -141,7 +140,7 @@ type codingProxyGroup struct {
 	Keys    []map[string]string `json:"keys"`
 }
 
-// The config is local to the VPS, mode 0600, and atomically replaced. CLIProxyAPI
+// The config is local to the VPS, mode 0600, and serialized for hot reload. CLIProxyAPI
 // watches the mounted directory for changes. It never receives a pool it may
 // independently rotate: each prefix is a group containing exactly one key.
 func (s *Server) syncCodingProxy(ctx context.Context, current Provider, secret, model string) error {
@@ -216,12 +215,14 @@ func (s *Server) syncCodingProxy(ctx context.Context, current Provider, secret, 
 	encoded, _ := json.Marshal(config)
 	previous, _ := os.ReadFile(path)
 	if !bytes.Equal(encoded, previous) {
-		file, err := os.CreateTemp(filepath.Dir(path), "config-*.tmp")
+		// CLIProxyAPI watches the existing config inode. Replacing it with a
+		// rename leaves its watcher on the old file, so keep the inode and write
+		// the complete JSON in one operation. Its debounced loader retains the
+		// previous config on read errors; readiness below confirms activation.
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 		if err != nil {
 			return errors.New("coding proxy configuration is not writable")
 		}
-		name := file.Name()
-		defer os.Remove(name)
 		if _, err = file.Write(encoded); err == nil {
 			err = file.Sync()
 		}
@@ -229,9 +230,7 @@ func (s *Server) syncCodingProxy(ctx context.Context, current Provider, secret, 
 		if err != nil || closeErr != nil {
 			return errors.New("coding proxy configuration could not be saved")
 		}
-		if err = os.Rename(name, path); err != nil {
-			return errors.New("coding proxy configuration could not be activated")
-		}
+
 	}
 	// Wait for a hot reload before using a newly introduced key/model prefix.
 	wanted := codingProxyPrefix(current.BaseURL, secret) + "/" + model

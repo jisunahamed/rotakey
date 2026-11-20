@@ -22,8 +22,8 @@ Use `deploy/compose.coding-proxy.yml` with the regular Compose files. Set a
 private `CODING_PROXY_KEY` and an absolute `CODING_PROXY_CONFIG_DIR` accessible
 only to the app user (UID 100, GID 101). Initialize `config.yaml` in that directory
 with the proxy listener, private access key and an empty Codex API-key list.
-Mount the directory rather than one file because Rotakey replaces the
-configuration atomically. Never expose port 8317 publicly.
+Mount the private directory. Rotakey writes the complete configuration under a
+lock and waits for the proxy to acknowledge the selected key/model. Never expose port 8317 publicly.
 
 The app receives:
 
