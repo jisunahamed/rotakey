@@ -24,4 +24,4 @@ services:
       - ALL
     volumes:
       - ${CODING_PROXY_CONFIG_DIR:-./coding-proxy-config}:/CLIProxyAPI/config:ro
-    command: ["-config", "/CLIProxyAPI/config/config.yaml"]
+    command: ["/CLIProxyAPI/CLIProxyAPI", "-config", "/CLIProxyAPI/config/config.yaml"]
