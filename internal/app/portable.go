@@ -40,6 +40,7 @@ type ExportSettings struct {
 }
 
 type ExportProvider struct {
+	CodingProxyEnabled    *bool             `json:"coding_proxy_enabled,omitempty"`
 	InferenceEndpoint     *string           `json:"inference_endpoint,omitempty"`
 	MaxConcurrentRequests *int              `json:"max_concurrent_requests,omitempty"`
 	Name                  string            `json:"name"`
@@ -166,7 +167,7 @@ func exportProvider(provider Provider, aliasByModelID, secrets map[string]string
 		AuthHeader: provider.AuthHeader, AuthScheme: provider.AuthScheme,
 		ExtraHeaders: provider.ExtraHeaders, TimeoutSeconds: provider.TimeoutSeconds,
 		Enabled: provider.Enabled, Pinned: provider.Pinned, AllowPrivateNetwork: provider.AllowPrivateNetwork,
-		InferenceEndpoint:    &provider.InferenceEndpoint,
+		InferenceEndpoint: &provider.InferenceEndpoint, CodingProxyEnabled: &provider.CodingProxyEnabled,
 		APIFormat:            valueOr(provider.APIFormat, "openai"),
 		AnthropicVersion:     valueOr(provider.AnthropicVersion, "2023-06-01"),
 		DefaultKeyBalanceUSD: provider.DefaultKeyBalanceUSD,

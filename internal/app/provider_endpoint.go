@@ -7,6 +7,9 @@ func providerInferenceEndpoint(provider Provider) string {
 	if provider.APIFormat == "anthropic" {
 		return "messages"
 	}
+	if provider.CodingProxyEnabled {
+		return "responses"
+	}
 	switch provider.InferenceEndpoint {
 	case "chat", "responses":
 		return provider.InferenceEndpoint

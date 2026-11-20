@@ -245,6 +245,7 @@ func (s *Server) handleListProviders(w http.ResponseWriter, r *http.Request) {
 }
 
 type providerInput struct {
+	CodingProxyEnabled    *bool             `json:"coding_proxy_enabled"`
 	InferenceEndpoint     *string           `json:"inference_endpoint"`
 	MaxConcurrentRequests *int              `json:"max_concurrent_requests"`
 	Name                  string            `json:"name"`
@@ -304,6 +305,9 @@ func validateProviderInput(input *providerInput) error {
 	}
 	if input.APIFormat == "" {
 		input.APIFormat = "openai"
+	}
+	if input.CodingProxyEnabled != nil && *input.CodingProxyEnabled && input.APIFormat == "anthropic" {
+		return fmt.Errorf("coding proxy currently requires an OpenAI-compatible provider")
 	}
 	input.BaseURL = normalizeProviderCompatibilityURL(input.BaseURL, input.APIFormat)
 	if isOpenCodeZenURL(input.BaseURL) {
@@ -513,11 +517,11 @@ func (s *Server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 		INSERT INTO providers
 		    (id, name, slug, base_url, auth_header, auth_scheme, extra_headers,
 		     timeout_seconds, enabled, allow_private_network, api_format, anthropic_version,
-		     default_key_balance_usd, max_concurrent_requests, inference_endpoint)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,COALESCE($14,0),COALESCE($15,'auto'))
+		     default_key_balance_usd, max_concurrent_requests, inference_endpoint, coding_proxy_enabled)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,COALESCE($14,0),COALESCE($15,'auto'),COALESCE($16,false))
 	`, id, input.Name, input.Slug, input.BaseURL, input.AuthHeader, input.AuthScheme,
 		headers, input.TimeoutSeconds, input.Enabled, input.AllowPrivateNetwork,
-		input.APIFormat, input.AnthropicVersion, input.DefaultKeyBalanceUSD, input.MaxConcurrentRequests, input.InferenceEndpoint)
+		input.APIFormat, input.AnthropicVersion, input.DefaultKeyBalanceUSD, input.MaxConcurrentRequests, input.InferenceEndpoint, input.CodingProxyEnabled)
 	if err != nil {
 		writeError(w, http.StatusConflict, "provider_conflict", "Provider slug already exists or the provider is invalid.")
 		return
@@ -544,6 +548,9 @@ func (s *Server) handleUpdateProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	candidate := providerFromInput(input)
+	if input.CodingProxyEnabled == nil {
+		candidate.CodingProxyEnabled = current.CodingProxyEnabled
+	}
 	if input.InferenceEndpoint == nil {
 		candidate.InferenceEndpoint = current.InferenceEndpoint
 	}
@@ -581,11 +588,11 @@ func (s *Server) handleUpdateProvider(w http.ResponseWriter, r *http.Request) {
 		UPDATE providers SET name=$2, slug=$3, base_url=$4, auth_header=$5,
 		    auth_scheme=$6, extra_headers=$7, timeout_seconds=$8, enabled=$9,
 		    allow_private_network=$10, api_format=$11, anthropic_version=$12,
-		    default_key_balance_usd=$13, max_concurrent_requests=COALESCE($14,max_concurrent_requests), inference_endpoint=COALESCE($15,inference_endpoint), updated_at=NOW()
+		    default_key_balance_usd=$13, max_concurrent_requests=COALESCE($14,max_concurrent_requests), inference_endpoint=COALESCE($15,inference_endpoint), coding_proxy_enabled=COALESCE($16,coding_proxy_enabled), updated_at=NOW()
 		WHERE id=$1
 	`, r.PathValue("id"), input.Name, input.Slug, input.BaseURL, input.AuthHeader,
 		input.AuthScheme, headers, input.TimeoutSeconds, input.Enabled, input.AllowPrivateNetwork,
-		input.APIFormat, input.AnthropicVersion, input.DefaultKeyBalanceUSD, input.MaxConcurrentRequests, input.InferenceEndpoint)
+		input.APIFormat, input.AnthropicVersion, input.DefaultKeyBalanceUSD, input.MaxConcurrentRequests, input.InferenceEndpoint, input.CodingProxyEnabled)
 	if err != nil || tag.RowsAffected() == 0 {
 		writeError(w, http.StatusConflict, "provider_update_failed", "Provider could not be updated.")
 		return

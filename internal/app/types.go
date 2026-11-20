@@ -26,6 +26,7 @@ func (p RatePolicy) Valid() bool {
 }
 
 type Provider struct {
+	CodingProxyEnabled    bool              `json:"coding_proxy_enabled"`
 	InferenceEndpoint     string            `json:"inference_endpoint"`
 	MaxConcurrentRequests int               `json:"max_concurrent_requests"`
 	RunningRequests       int               `json:"running_requests"`

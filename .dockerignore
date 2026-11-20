@@ -11,3 +11,5 @@ coverage
 backups
 *.log
 *.tmp
+
+coding-proxy-config

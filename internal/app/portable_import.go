@@ -107,7 +107,7 @@ func validateImportBundle(bundle *ExportBundle) error {
 			AuthHeader: provider.AuthHeader, AuthScheme: provider.AuthScheme,
 			ExtraHeaders: provider.ExtraHeaders, TimeoutSeconds: provider.TimeoutSeconds,
 			Enabled: provider.Enabled, AllowPrivateNetwork: provider.AllowPrivateNetwork,
-			APIFormat: provider.APIFormat, AnthropicVersion: provider.AnthropicVersion, InferenceEndpoint: provider.InferenceEndpoint,
+			APIFormat: provider.APIFormat, AnthropicVersion: provider.AnthropicVersion, InferenceEndpoint: provider.InferenceEndpoint, CodingProxyEnabled: provider.CodingProxyEnabled,
 			DefaultKeyBalanceUSD: provider.DefaultKeyBalanceUSD,
 		}
 		if err := validateProviderInput(&input); err != nil {
@@ -121,6 +121,7 @@ func validateImportBundle(bundle *ExportBundle) error {
 		provider.TimeoutSeconds, provider.APIFormat = input.TimeoutSeconds, input.APIFormat
 		provider.AnthropicVersion = input.AnthropicVersion
 		provider.InferenceEndpoint = input.InferenceEndpoint
+		provider.CodingProxyEnabled = input.CodingProxyEnabled
 		if seenSlugs[provider.Slug] {
 			return fmt.Errorf("provider identifier %q appears twice in the bundle", provider.Slug)
 		}

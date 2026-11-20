@@ -1,0 +1,27 @@
+# Use with docker-compose.yml (and the VPS override, if applicable).
+# The shared directory contains private upstream keys. No proxy port is public.
+services:
+  app:
+    environment:
+      CODING_PROXY_URL: http://coding-proxy:8317
+      CODING_PROXY_KEY: ${CODING_PROXY_KEY:?Set a private coding proxy key}
+      CODING_PROXY_CONFIG_PATH: /coding-proxy/config.yaml
+    volumes:
+      - ${CODING_PROXY_CONFIG_DIR:-./coding-proxy-config}:/coding-proxy
+  coding-proxy:
+    image: eceasy/cli-proxy-api@sha256:ce02dd2ba9186024762d8b6525c068c5a5fab78435b8d82d9c03f7ce74feeb5b
+    restart: unless-stopped
+    user: "100:101"
+    stop_grace_period: 16m
+    mem_limit: 512m
+    cpus: 1.0
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - ${CODING_PROXY_CONFIG_DIR:-./coding-proxy-config}:/CLIProxyAPI/config:ro
+    command: ["-config", "/CLIProxyAPI/config/config.yaml"]

@@ -131,6 +131,7 @@ func scanProvider(row pgx.Row) (Provider, error) {
 		&provider.UpdatedAt,
 		&provider.MaxConcurrentRequests,
 		&provider.InferenceEndpoint,
+		&provider.CodingProxyEnabled,
 	)
 	if err != nil {
 		return Provider{}, err
@@ -145,7 +146,7 @@ const providerColumns = `
 	id, name, slug, base_url, auth_header, auth_scheme, extra_headers,
 	timeout_seconds, enabled, pinned, allow_private_network, api_format, anthropic_version,
 	default_key_balance_usd::float8, balance_spent_usd::float8,
-	created_at, updated_at, max_concurrent_requests, inference_endpoint
+	created_at, updated_at, max_concurrent_requests, inference_endpoint, coding_proxy_enabled
 `
 
 const routeColumns = `
@@ -158,7 +159,7 @@ const routeColumns = `
 		p.extra_headers, p.timeout_seconds, p.enabled, p.pinned, p.allow_private_network,
 		p.api_format, p.anthropic_version,
 		p.default_key_balance_usd::float8, p.balance_spent_usd::float8,
-		p.created_at, p.updated_at, p.max_concurrent_requests, p.inference_endpoint
+		p.created_at, p.updated_at, p.max_concurrent_requests, p.inference_endpoint, p.coding_proxy_enabled
 `
 
 // routeFilter keeps the eligibility rules identical between single-route and
@@ -231,6 +232,7 @@ func scanRoute(row pgx.Row) (routeRuntime, error) {
 		&route.Provider.UpdatedAt,
 		&route.Provider.MaxConcurrentRequests,
 		&route.Provider.InferenceEndpoint,
+		&route.Provider.CodingProxyEnabled,
 	)
 	if err != nil {
 		return routeRuntime{}, err

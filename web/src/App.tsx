@@ -2107,7 +2107,7 @@ function ProviderWizard({ providers, onClose, onComplete }: { providers: Provide
   const [error, setError] = useState("");
   const [provider, setProvider] = useState<ProviderDraft>({
     name: "", base_url: "", auth_header: "Authorization", auth_scheme: "Bearer",
-    api_format: "openai", anthropic_version: "2023-06-01", inference_endpoint: "auto",
+    api_format: "openai", anthropic_version: "2023-06-01", inference_endpoint: "auto", coding_proxy_enabled: false,
     timeout_seconds: 120, max_concurrent_requests: 0, enabled: true, allow_private_network: false, extra_headers: {},
     default_key_balance: "", apply_balance_to_existing_keys: false,
     existing_key_limits: emptyPolicy(), apply_limits_to_existing_keys: false
@@ -2342,6 +2342,7 @@ type ProviderDraft = {
   max_concurrent_requests: number;
   name: string; base_url: string; auth_header: string; auth_scheme: string;
   api_format: "openai" | "anthropic"; anthropic_version: string;
+  coding_proxy_enabled: boolean;
   inference_endpoint: "auto" | "chat" | "responses";
   timeout_seconds: number; enabled: boolean; allow_private_network: boolean; extra_headers: Record<string, string>;
   /** Held as text so a blank field stays distinguishable from a zero balance:
@@ -2377,6 +2378,7 @@ function providerDraftFrom(provider: Provider): ProviderDraft {
     auth_header: provider.auth_header, auth_scheme: provider.auth_scheme,
     api_format: provider.api_format ?? "openai", anthropic_version: provider.anthropic_version ?? "2023-06-01",
     inference_endpoint: provider.inference_endpoint ?? "auto",
+    coding_proxy_enabled: provider.coding_proxy_enabled ?? false,
     timeout_seconds: provider.timeout_seconds, max_concurrent_requests: provider.max_concurrent_requests ?? 0, enabled: provider.enabled,
     allow_private_network: provider.allow_private_network, extra_headers: provider.extra_headers,
     default_key_balance: provider.default_key_balance_usd == null ? "" : String(provider.default_key_balance_usd),
@@ -2530,14 +2532,18 @@ function ProviderFields({ value, onChange, existingKeys }: { value: ProviderDraf
           anthropic_version: value.anthropic_version || "2023-06-01"
         });
       }}><option value="openai">OpenAI-compatible</option><option value="anthropic">Anthropic-compatible</option></select></label>
-      {value.api_format === "openai" && <label className="field"><span>Upstream text API <small>Applies to every text model on this provider, including model checks</small></span>
+      {value.api_format === "openai" && <Toggle checked={value.coding_proxy_enabled} onChange={(coding_proxy_enabled) => onChange({ ...value, coding_proxy_enabled })}
+        label="Use coding proxy"
+        description="Send text requests through the server's coding compatibility proxy. Uses Responses API and keeps the key selected by Rotakey. Turn off to connect directly."
+      />}
+      {value.api_format === "openai" && !value.coding_proxy_enabled && <label className="field"><span>Upstream text API <small>Applies to every text model on this provider, including model checks</small></span>
         <select value={value.inference_endpoint} onChange={(event) => onChange({ ...value, inference_endpoint: event.target.value as ProviderDraft["inference_endpoint"] })}>
           <option value="auto">Use model settings (automatic compatibility)</option>
           <option value="chat">Chat Completions only - /v1/chat/completions</option>
           <option value="responses">Responses API only - /v1/responses</option>
         </select>
       </label>}
-      {value.api_format === "openai" && value.inference_endpoint !== "auto" && <InlineNotice>
+      {value.api_format === "openai" && !value.coding_proxy_enabled && value.inference_endpoint !== "auto" && <InlineNotice>
         {value.inference_endpoint === "responses" ? "All text requests and model checks use the provider's Responses API." : "All text requests and model checks use the provider's Chat Completions API."}
         {" "}Client requests are translated automatically. Per-model endpoint flags are overridden. Audio and embeddings keep their own endpoints.
       </InlineNotice>}

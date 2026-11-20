@@ -91,7 +91,13 @@ func upstreamClient(provider Provider) (*http.Client, error) {
 		timeout = 120 * time.Second
 	}
 	var transport http.RoundTripper = safeTransport(provider.AllowPrivateNetwork)
-	if isOpenCodeZenURL(provider.BaseURL) {
+	if provider.CodingProxyEnabled {
+		var err error
+		transport, err = newCodingProxyTransport(provider)
+		if err != nil {
+			return nil, err
+		}
+	} else if isOpenCodeZenURL(provider.BaseURL) {
 		var err error
 		transport, err = openCodeTransport(provider)
 		if err != nil {

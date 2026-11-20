@@ -1,0 +1,1 @@
+ALTER TABLE providers ADD COLUMN coding_proxy_enabled BOOLEAN NOT NULL DEFAULT FALSE;

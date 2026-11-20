@@ -23,6 +23,7 @@ import (
 var webFiles embed.FS
 
 type Server struct {
+	codingProxyMu  sync.Mutex
 	cfg            Config
 	db             *pgxpool.Pool
 	redis          *redis.Client

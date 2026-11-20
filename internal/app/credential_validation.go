@@ -462,13 +462,14 @@ func looksLikeEmbeddingModel(model string) bool {
 }
 
 func providerFromInput(input providerInput) Provider {
+	proxyEnabled := input.CodingProxyEnabled != nil && *input.CodingProxyEnabled
 	endpoint := "auto"
 	if input.InferenceEndpoint != nil {
 		endpoint = *input.InferenceEndpoint
 	}
 	return Provider{
-		InferenceEndpoint: endpoint,
-		Name:              input.Name, Slug: input.Slug, BaseURL: input.BaseURL,
+		InferenceEndpoint: endpoint, CodingProxyEnabled: proxyEnabled,
+		Name: input.Name, Slug: input.Slug, BaseURL: input.BaseURL,
 		AuthHeader: input.AuthHeader, AuthScheme: input.AuthScheme,
 		ExtraHeaders: input.ExtraHeaders, TimeoutSeconds: input.TimeoutSeconds,
 		Enabled: input.Enabled, AllowPrivateNetwork: input.AllowPrivateNetwork,

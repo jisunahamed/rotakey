@@ -17,3 +17,6 @@ coverage/
 *.log
 *.tmp
 .DS_Store
+
+# Private coding proxy configuration (contains upstream keys).
+coding-proxy-config/
